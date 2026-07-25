@@ -1,0 +1,44 @@
+name: telegram-bridge CI
+
+on:
+  push:
+    paths:
+      - "telegram-bridge/**"
+      - ".github/workflows/telegram-bridge-ci.yml"
+  pull_request:
+    paths:
+      - "telegram-bridge/**"
+      - ".github/workflows/telegram-bridge-ci.yml"
+
+defaults:
+  run:
+    working-directory: telegram-bridge
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install ruff bandit
+
+      - name: Lint (ruff)
+        run: ruff check app/ --line-length 110
+
+      - name: Security scan (bandit)
+        run: bandit -r app/ -q
+
+      - name: Test (pytest)
+        env:
+          BOT_TOKEN: "123456:ci-placeholder"
+          CHAT_ID: "-1000000000"
+          SECRET_KEY: "ci-placeholder-secret"
+          DATABASE_URL: "sqlite+aiosqlite:///./ci_signals.db"
+        run: pytest -v

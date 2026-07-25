@@ -1,6 +1,9 @@
 import enum
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON, Enum as SAEnum, Index
+
+from sqlalchemy import JSON, Column, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import Enum as SAEnum
+
 from app.database import Base
 
 

@@ -1,7 +1,6 @@
-from typing import Tuple, Optional, List
 
 
-def validate_signal(data: dict) -> Tuple[bool, Optional[List[str]]]:
+def validate_signal(data: dict) -> tuple[bool, list[str] | None]:
     """
     Business rules beyond what Pydantic already enforces (types, presence, gt=0 ranges):
       - Stop loss must be on the correct side of entry.
@@ -13,7 +12,7 @@ def validate_signal(data: dict) -> Tuple[bool, Optional[List[str]]]:
     sl = data["sl"]
     tp1 = data["tp1"]
     tp2 = data["tp2"]
-    errors: List[str] = []
+    errors: list[str] = []
 
     if direction == "BUY":
         if sl >= entry:

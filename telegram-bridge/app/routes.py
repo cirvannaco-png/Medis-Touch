@@ -1,23 +1,23 @@
+import asyncio
 import secrets
 import time
-import asyncio
-from typing import List, Optional, Literal
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.models import Signal, SignalStatus
-from app.database import get_session, check_db_connection
-from app.validator import validate_signal
+from app.config import APP_VERSION, settings
+from app.database import check_db_connection, get_session
 from app.formatter import format_signal_message
-from app.telegram import send_telegram_message, TelegramSendError, NonRetryableError
 from app.logger import logger
-from app.utils import measure_latency
+from app.models import Signal, SignalStatus
 from app.ratelimit import enforce_rate_limit
+from app.telegram import NonRetryableError, send_telegram_message
+from app.utils import measure_latency
+from app.validator import validate_signal
 
 router = APIRouter()
 
@@ -34,7 +34,7 @@ class SignalRequest(BaseModel):
     tp1: float = Field(..., gt=0)
     tp2: float = Field(..., gt=0)
     confidence: int = Field(..., ge=0, le=100)
-    reasons: List[str] = Field(..., min_length=1)
+    reasons: list[str] = Field(..., min_length=1)
     timeframe: str
 
     @field_validator("reasons")
@@ -56,15 +56,15 @@ class SignalRequest(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     version: str
-    database: Optional[str] = None
+    database: str | None = None
 
 
 class SignalResponse(BaseModel):
     status: str
     signal_id: str
     duplicate: bool = False
-    telegram_message_id: Optional[int] = None
-    details: Optional[str] = None
+    telegram_message_id: int | None = None
+    details: str | None = None
 
 
 # ---------- Auth Dependency ----------
@@ -80,7 +80,9 @@ async def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
 # ---------- Endpoints ----------
 @router.get("/", response_model=HealthResponse)
 async def health_check():
-    return {"status": "online", "version": "1.0.0", "database": "not checked"}
+    # Liveness probe: deliberately cheap, no DB round-trip. Use /health/db
+    # for a readiness check that verifies the database is reachable.
+    return {"status": "online", "version": APP_VERSION, "database": "not checked"}
 
 
 @router.get("/health/db", response_model=HealthResponse)
@@ -88,7 +90,7 @@ async def health_db():
     db_ok = await check_db_connection()
     return {
         "status": "online" if db_ok else "degraded",
-        "version": "1.0.0",
+        "version": APP_VERSION,
         "database": "connected" if db_ok else "disconnected"
     }
 
@@ -136,7 +138,7 @@ async def receive_signal(
         status_signal = SignalStatus.PERMANENTLY_FAILED
         error_msg = str(e)
     except Exception as e:
-        log.error(f"Sending failed after retries: {e}")
+        log.error(f"Sending failed after retries ({type(e).__name__}): {e}")
         msg_id = None
         status_signal = SignalStatus.FAILED
         error_msg = str(e)
@@ -188,6 +190,7 @@ async def receive_signal(
 async def retry_failed_signals(
     session: AsyncSession = Depends(get_session),
     _auth: bool = Depends(verify_api_key),
+    _rate: None = Depends(enforce_rate_limit),
 ):
     # Only FAILED (transient) signals are retried. PERMANENTLY_FAILED signals
     # (NonRetryableError - e.g. malformed chat_id, bot blocked) are excluded
@@ -227,7 +230,7 @@ async def retry_failed_signals(
             db_signal.status = SignalStatus.PERMANENTLY_FAILED
             db_signal.error_message = f"Retry failed permanently: {e}"
         except Exception as e:
-            log.error(f"Retry failed: {e}")
+            log.error(f"Retry failed ({type(e).__name__}): {e}")
             db_signal.error_message = f"Retry failed: {e}"
         await session.commit()
         await asyncio.sleep(0.5)

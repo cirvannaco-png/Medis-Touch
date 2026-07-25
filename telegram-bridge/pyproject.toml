@@ -14,3 +14,15 @@ dependencies = [
     "asyncpg==0.29.0",
     "aiosqlite==0.19.0",
 ]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+ignore = [
+    "B008",   # Depends(...) in defaults is FastAPI's standard idiom, not a bug
+    "BLE001", # blind `except Exception` used only as documented, last-resort
+              # boundaries (startup token check, retry loop, DB health probe)
+              # that must never crash the process - narrowing them risks
+              # missing an unanticipated failure mode.
+]

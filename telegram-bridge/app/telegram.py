@@ -1,28 +1,27 @@
-from typing import Optional
+
 import httpx
+from loguru import logger
 from tenacity import (
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
 )
-from loguru import logger
+
 from app.config import settings
 
 
 class TelegramSendError(Exception):
     """Transient error - safe to retry."""
-    pass
 
 
 class NonRetryableError(Exception):
     """Permanent error - do not retry."""
-    pass
 
 
 # Shared, connection-pooled client. Created on app startup, closed on shutdown.
 # Avoids a fresh TCP+TLS handshake to api.telegram.org on every signal.
-_client: Optional[httpx.AsyncClient] = None
+_client: httpx.AsyncClient | None = None
 
 
 async def init_http_client() -> None:
@@ -97,5 +96,10 @@ async def check_bot_token() -> bool:
             logger.error(f"Invalid bot token: {data}")
             return False
     except Exception as e:
-        logger.error(f"Could not verify bot token: {e}")
+        # Intentionally broad: this is a best-effort startup check that must
+        # never crash the process. Logging the exception type alongside the
+        # message makes it easy to tell "network unreachable" apart from an
+        # actual bug here without narrowing (and risking a missed case) the
+        # except clause itself.
+        logger.error(f"Could not verify bot token ({type(e).__name__}): {e}")
         return False

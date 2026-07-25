@@ -2,13 +2,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import Response, JSONResponse
+from starlette.responses import JSONResponse, Response
 
-from app.routes import router
+from app.config import APP_VERSION, settings
 from app.database import init_db
 from app.logger import logger
-from app.telegram import init_http_client, close_http_client, check_bot_token
-from app.config import settings
+from app.routes import router
+from app.telegram import check_bot_token, close_http_client, init_http_client
 
 
 class RequestBodyTooLarge(Exception):
@@ -75,7 +75,7 @@ def create_app() -> FastAPI:
         await close_http_client()
         logger.info("Shutdown complete.")
 
-    app = FastAPI(title="Medis Touch Telegram Bridge", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="Medis Touch Telegram Bridge", version=APP_VERSION, lifespan=lifespan)
 
     # CORS is only relevant for browser clients; the EA talks to this API
     # directly and isn't subject to it. Wildcard origins + credentials is an

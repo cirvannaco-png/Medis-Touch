@@ -1,8 +1,8 @@
 import asyncio
 import time
-from typing import Dict, Tuple
 
-from fastapi import Request, HTTPException
+from fastapi import HTTPException, Request
+
 from app.config import settings
 
 
@@ -21,7 +21,7 @@ class InMemoryRateLimiter:
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self.enabled = enabled
-        self._buckets: Dict[str, Tuple[int, float]] = {}
+        self._buckets: dict[str, tuple[int, float]] = {}
         self._lock = asyncio.Lock()
 
     async def allow(self, key: str) -> bool:

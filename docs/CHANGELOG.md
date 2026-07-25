@@ -67,5 +67,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## MALI Audit History
 
-Versioned audit reports are stored in [`mali-audit-reports/`](mali-audit-reports/).  
-Current score: **47 / 100** (see latest report for remediation plan).
+Versioned audit reports are stored in [`mali-audit-reports/`](mali-audit-reports/).
+
+> **Note:** As of this commit, `mali-audit-reports/` contains no report files
+> (only a `.gitkeep` placeholder). The `47/100` score previously cited here
+> belongs to the separate MedisTouch EA (MQL5) audit, not this telegram-bridge
+> service - it was carried over into this changelog by mistake. Add the actual
+> report file(s) for this repo before citing a score here again.
