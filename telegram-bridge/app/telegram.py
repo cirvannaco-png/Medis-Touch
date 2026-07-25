@@ -1,0 +1,101 @@
+from typing import Optional
+import httpx
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
+from loguru import logger
+from app.config import settings
+
+
+class TelegramSendError(Exception):
+    """Transient error - safe to retry."""
+    pass
+
+
+class NonRetryableError(Exception):
+    """Permanent error - do not retry."""
+    pass
+
+
+# Shared, connection-pooled client. Created on app startup, closed on shutdown.
+# Avoids a fresh TCP+TLS handshake to api.telegram.org on every signal.
+_client: Optional[httpx.AsyncClient] = None
+
+
+async def init_http_client() -> None:
+    global _client
+    _client = httpx.AsyncClient(timeout=settings.TELEGRAM_TIMEOUT_SECONDS)
+
+
+async def close_http_client() -> None:
+    global _client
+    if _client is not None:
+        await _client.aclose()
+        _client = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    if _client is None:
+        raise RuntimeError("HTTP client not initialized - call init_http_client() on startup")
+    return _client
+
+
+@retry(
+    stop=stop_after_attempt(settings.TELEGRAM_MAX_RETRIES),
+    wait=wait_exponential(multiplier=1, min=1, max=settings.TELEGRAM_RETRY_MAX_WAIT_SECONDS),
+    retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.RequestError, TelegramSendError)),
+    reraise=True,
+)
+async def send_telegram_message(text: str) -> int:
+    url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": settings.CHAT_ID,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+    client = _get_client()
+    try:
+        response = await client.post(url, json=payload)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise TelegramSendError(f"Rate limited: {e.response.text}") from e
+        elif e.response.status_code >= 500:
+            raise TelegramSendError(f"Server error: {e.response.text}") from e
+        else:
+            raise NonRetryableError(f"Permanent HTTP error: {e.response.status_code}") from e
+    except httpx.RequestError as e:
+        raise TelegramSendError(f"Request failed: {e}") from e
+
+    data = response.json()
+    if not data.get("ok"):
+        error_code = data.get("error_code")
+        if error_code in (429, 500, 502, 503, 504):
+            raise TelegramSendError(f"Telegram API error (code={error_code}): {data}")
+        else:
+            raise NonRetryableError(f"Telegram API error (code={error_code}): {data}")
+
+    message_id = data["result"]["message_id"]
+    logger.info(f"Telegram message sent, id={message_id}")
+    return message_id
+
+
+async def check_bot_token() -> bool:
+    """Check if the bot token is valid. Returns True if valid, False otherwise."""
+    url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/getMe"
+    client = _get_client()
+    try:
+        resp = await client.get(url, timeout=10.0)
+        data = resp.json()
+        if data.get("ok"):
+            logger.info(f"Bot token valid. Bot username: @{data['result']['username']}")
+            return True
+        else:
+            logger.error(f"Invalid bot token: {data}")
+            return False
+    except Exception as e:
+        logger.error(f"Could not verify bot token: {e}")
+        return False
