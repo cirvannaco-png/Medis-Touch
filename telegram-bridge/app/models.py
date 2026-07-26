@@ -34,6 +34,10 @@ class Signal(Base):
     timeframe = Column(String, nullable=False)
     received_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     telegram_message_id = Column(Integer, nullable=True)
-    status = Column(SAEnum(SignalStatus), nullable=False, default=SignalStatus.ACTIVE)
+    # Default to PENDING: the route inserts a PENDING row first to reserve
+    # the signal_id, then resolves it to ACTIVE/FAILED after the Telegram call.
+    # This Python-level default matches that intent; the migration's
+    # server_default is aligned to "pending" for the same reason.
+    status = Column(SAEnum(SignalStatus), nullable=False, default=SignalStatus.PENDING)
     error_message = Column(Text, nullable=True)
     latency_ms = Column(Integer, nullable=True)

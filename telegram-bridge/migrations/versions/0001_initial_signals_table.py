@@ -41,7 +41,7 @@ def upgrade() -> None:
         sa.Column("timeframe", sa.String(), nullable=False),
         sa.Column("received_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("telegram_message_id", sa.Integer(), nullable=True),
-        sa.Column("status", signal_status_enum, nullable=False, server_default="active"),
+        sa.Column("status", signal_status_enum, nullable=False, server_default="pending"),
         sa.Column("error_message", sa.Text(), nullable=True),
         sa.Column("latency_ms", sa.Integer(), nullable=True),
     )

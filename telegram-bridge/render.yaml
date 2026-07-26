@@ -30,3 +30,5 @@ services:
         value: "3"
       - key: TELEGRAM_RETRY_MAX_WAIT_SECONDS
         value: "4"
+      - key: PENDING_STALE_SECONDS
+        value: "120"
