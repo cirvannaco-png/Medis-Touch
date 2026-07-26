@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: medis-touch-telegram
+    env: docker
+    # Paths are relative to the repository root.
+    # dockerContext tells Render which directory to use as the Docker build
+    # context — COPY instructions in the Dockerfile are relative to this.
+    dockerfilePath: ./telegram-bridge/Dockerfile
+    dockerContext: ./telegram-bridge
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHAT_ID
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false   # provide your Postgres connection string
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: "5"
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
+      - key: MAX_REQUEST_BODY_SIZE
+        value: "10240"
+      - key: ALLOWED_ORIGINS
+        value: ""   # comma-separated, only needed for browser clients
+      - key: TELEGRAM_TIMEOUT_SECONDS
+        value: "8"
+      - key: TELEGRAM_MAX_RETRIES
+        value: "3"
+      - key: TELEGRAM_RETRY_MAX_WAIT_SECONDS
+        value: "4"
+      - key: PENDING_STALE_SECONDS
+        value: "120"
