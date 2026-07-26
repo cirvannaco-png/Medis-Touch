@@ -1,17 +1,19 @@
 FROM python:3.11-slim
 
+# Build context is the repository root (Render's default; dockerContext is
+# not supported in render.yaml). All COPY paths are relative to the repo root.
 WORKDIR /app
 
-COPY requirements.txt .
+COPY telegram-bridge/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Application code
-COPY app/ ./app/
+COPY telegram-bridge/app/ ./app/
 
 # Alembic migrations — needed to run `alembic upgrade head` at startup so
 # schema changes are applied before the server begins accepting traffic.
-COPY migrations/ ./migrations/
-COPY alembic.ini .
+COPY telegram-bridge/migrations/ ./migrations/
+COPY telegram-bridge/alembic.ini .
 
 EXPOSE 8000
 

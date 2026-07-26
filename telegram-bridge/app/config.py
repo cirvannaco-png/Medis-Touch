@@ -14,8 +14,21 @@ class Settings(BaseSettings):
     CHAT_ID: str
     SECRET_KEY: str
 
-    # Use PostgreSQL for production (Render); SQLite for local dev
+    # Use PostgreSQL for production (Render); SQLite for local dev.
+    # Render's fromDatabase injects a postgres:// or postgresql:// URL;
+    # the validator below normalises it to postgresql+asyncpg:// so
+    # SQLAlchemy's asyncpg driver works without any manual URL editing.
     DATABASE_URL: str = "postgresql+asyncpg://user:pass@localhost:5432/medis_touch"
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def _normalise_db_url(cls, v: str) -> str:
+        """Accept postgres:// or postgresql:// and rewrite to asyncpg dialect."""
+        if v.startswith("postgres://"):
+            return "postgresql+asyncpg://" + v[len("postgres://"):]
+        if v.startswith("postgresql://"):
+            return "postgresql+asyncpg://" + v[len("postgresql://"):]
+        return v
 
     LOG_LEVEL: str = "INFO"
 
