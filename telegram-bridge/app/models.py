@@ -8,6 +8,7 @@ from app.database import Base
 
 
 class SignalStatus(str, enum.Enum):
+    PENDING = "pending"                  # signal_id reserved, Telegram call not yet resolved
     ACTIVE = "active"
     FAILED = "failed"                    # transient failure, eligible for /retry-failed
     PERMANENTLY_FAILED = "permanently_failed"  # NonRetryableError - do not keep retrying

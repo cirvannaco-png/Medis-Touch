@@ -5,6 +5,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.2.0] — race-condition fix, packaging, migrations, docs honesty
+
+### Fixed
+- **Duplicate-send race closed.** `POST /signal` previously ran the
+  Telegram send *before* the DB insert that provides duplicate protection,
+  so two concurrent requests for the same `signal_id` could both pass the
+  pre-check and both call Telegram - only one row would survive the unique
+  constraint, but two messages could already be sent. Now the row is
+  inserted as `PENDING` first (reserving `signal_id` via the unique
+  constraint) and only the request that wins the insert proceeds to call
+  Telegram, so the external call happens at most once per `signal_id`.
+- `/retry-failed` now also reclaims signals stuck at `PENDING` for longer
+  than `PENDING_STALE_SECONDS` (default 120s) - closes the gap where a
+  process crash/restart between reserving `signal_id` and resolving the
+  Telegram send left a row with no path back to `ACTIVE`/`FAILED`.
+- Root `README.md` no longer claims the MQL5 EA source exists in
+  `mql5/Experts/MedisTouch/`. It doesn't yet. Added a `Status` section and
+  per-folder placeholder `README.md` files so the directory tree matches
+  reality instead of describing a future state as if it were current.
+
+### Fixed (security)
+- `fastapi` bumped `0.109.0` → `0.140.0` (pulls `starlette` `1.3.1`). The
+  previous pins carried 8 disclosed vulnerabilities (`PYSEC-2024-38` and
+  7 `starlette` CVEs) that `bandit`'s code-pattern scanning would never
+  have caught - only `pip-audit` (added in this release, see below)
+  surfaces known-CVE-in-a-pinned-version issues. Full test suite re-run
+  and green at the new pins.
+
+### Changed
+- `requirements.txt` no longer installs `pytest`/`pytest-asyncio` into the
+  production Docker image. Test/lint tooling moved to
+  `requirements-dev.txt` (and mirrored in `pyproject.toml`'s
+  `[project.optional-dependencies].dev`).
+- CI now installs `requirements-dev.txt` and runs `pip-audit` against
+  `requirements.txt` - bandit catches risky code patterns, not known CVEs
+  in pinned dependency versions, so this closes that gap.
+
+### Added
+- Alembic migrations (`migrations/`), with an initial revision (`0001`)
+  matching the schema `Base.metadata.create_all()` previously created
+  implicitly at startup. `init_db()` remains for local/test convenience
+  only; production schema changes now go through `alembic upgrade head`
+  instead of an implicit, un-versioned `create_all()`.
+
+---
+
 ## [1.1.0] — telegram-bridge rewrite
 
 ### Added

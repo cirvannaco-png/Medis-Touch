@@ -1,0 +1,8 @@
+# Test and lint tooling only. NOT installed in the production Docker image
+# (see Dockerfile - it installs requirements.txt only).
+-r requirements.txt
+pytest==9.0.3
+pytest-asyncio==1.4.0
+ruff==0.9.1
+bandit==1.8.0
+pip-audit==2.7.3

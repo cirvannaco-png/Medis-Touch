@@ -1,11 +1,11 @@
 [project]
 name = "medis-touch-telegram"
-version = "1.1.0"
+version = "1.2.0"
 description = "Medis Touch MT5 to Telegram bridge"
 requires-python = ">=3.10"
 dependencies = [
-    "fastapi==0.109.0",
-    "uvicorn[standard]==0.25.0",
+    "fastapi==0.140.0",
+    "uvicorn[standard]==0.34.0",
     "pydantic-settings==2.1.0",
     "httpx==0.26.0",
     "tenacity==8.2.3",
@@ -13,6 +13,16 @@ dependencies = [
     "sqlalchemy[asyncio]==2.0.25",
     "asyncpg==0.29.0",
     "aiosqlite==0.19.0",
+    "alembic==1.13.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.0.3",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.9.1",
+    "bandit==1.8.0",
+    "pip-audit==2.7.3",
 ]
 
 [tool.ruff]

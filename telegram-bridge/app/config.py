@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Single source of truth for the app version. Previously "1.0.0" was
 # hardcoded in three places (FastAPI app, and two HealthResponse literals
 # in routes.py) while pyproject.toml said "1.1.0" - they'd drifted.
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 
 class Settings(BaseSettings):
@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
     MAX_REQUEST_BODY_SIZE: int = 10 * 1024  # 10 KB
+
+    # If the process crashes/restarts between reserving a signal_id (PENDING)
+    # and resolving the Telegram send, the row is stuck at PENDING forever
+    # unless something reclaims it. /retry-failed treats PENDING rows older
+    # than this as eligible for retry, same as FAILED rows.
+    PENDING_STALE_SECONDS: int = 120
 
     # Comma-separated list of allowed origins. Empty = no browser origins allowed
     # (fine for EA->API traffic, which isn't subject to CORS at all).

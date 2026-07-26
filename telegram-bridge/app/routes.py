@@ -1,6 +1,7 @@
 import asyncio
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -115,18 +116,41 @@ async def receive_signal(
             detail={"signal_id": payload.signal_id, "errors": errors}
         )
 
-    # Duplicate check (best-effort pre-check; the real guarantee is the
-    # unique constraint + IntegrityError handling below, since two
-    # concurrent requests for the same signal_id can both pass this SELECT).
-    result = await session.execute(
-        select(Signal).where(Signal.signal_id == payload.signal_id)
+    # ---- Reserve signal_id BEFORE contacting Telegram ----
+    # Previously the duplicate check was a pre-check SELECT followed by an
+    # INSERT *after* the Telegram call: two concurrent requests for the same
+    # signal_id could both pass the SELECT and both call Telegram, producing
+    # two messages even though only one DB row would ultimately survive the
+    # unique-constraint race. That's a real duplicate-alert bug for a trading
+    # signal, not a cosmetic one.
+    #
+    # Fix: insert a PENDING placeholder row first and rely on the unique
+    # constraint on signal_id as the single source of truth. Only the
+    # request that wins this insert is allowed to proceed to the external
+    # call, so Telegram is contacted at most once per signal_id.
+    db_signal = Signal(
+        signal_id=payload.signal_id,
+        symbol=payload.symbol,
+        direction=payload.direction,
+        entry=payload.entry,
+        sl=payload.sl,
+        tp1=payload.tp1,
+        tp2=payload.tp2,
+        confidence=payload.confidence,
+        reasons=payload.reasons,
+        timeframe=payload.timeframe,
+        status=SignalStatus.PENDING,
     )
-    existing = result.scalar_one_or_none()
-    if existing:
-        log.info("Duplicate signal ignored (pre-check)")
+    session.add(db_signal)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        log.info("Duplicate signal ignored (reservation lost)")
         return SignalResponse(status="duplicate", signal_id=payload.signal_id, duplicate=True)
 
-    # Format and send
+    # From here on this request exclusively owns signal_id - safe to call
+    # Telegram exactly once.
     message_text = format_signal_message(payload.model_dump())
     try:
         msg_id = await send_telegram_message(message_text)
@@ -145,36 +169,11 @@ async def receive_signal(
 
     latency = measure_latency(start_time)
 
-    db_signal = Signal(
-        signal_id=payload.signal_id,
-        symbol=payload.symbol,
-        direction=payload.direction,
-        entry=payload.entry,
-        sl=payload.sl,
-        tp1=payload.tp1,
-        tp2=payload.tp2,
-        confidence=payload.confidence,
-        reasons=payload.reasons,
-        timeframe=payload.timeframe,
-        telegram_message_id=msg_id,
-        status=status_signal,
-        error_message=error_msg,
-        latency_ms=latency
-    )
-    session.add(db_signal)
-    try:
-        await session.commit()
-    except IntegrityError:
-        # Lost the race: another request inserted this signal_id first.
-        # The Telegram message we may have just sent is now an orphan
-        # (can't be un-sent) - log it clearly so it's visible in ops,
-        # then report to the caller as a duplicate rather than a 500.
-        await session.rollback()
-        log.warning(
-            "Duplicate signal_id lost insert race"
-            + (f" - Telegram message {msg_id} was already sent" if msg_id else "")
-        )
-        return SignalResponse(status="duplicate", signal_id=payload.signal_id, duplicate=True)
+    db_signal.telegram_message_id = msg_id
+    db_signal.status = status_signal
+    db_signal.error_message = error_msg
+    db_signal.latency_ms = latency
+    await session.commit()
 
     if status_signal in (SignalStatus.FAILED, SignalStatus.PERMANENTLY_FAILED):
         raise HTTPException(
@@ -192,11 +191,23 @@ async def retry_failed_signals(
     _auth: bool = Depends(verify_api_key),
     _rate: None = Depends(enforce_rate_limit),
 ):
-    # Only FAILED (transient) signals are retried. PERMANENTLY_FAILED signals
+    # FAILED (transient) signals are retried. PERMANENTLY_FAILED signals
     # (NonRetryableError - e.g. malformed chat_id, bot blocked) are excluded
     # on purpose, otherwise they'd be re-selected and re-fail forever.
+    #
+    # PENDING rows older than PENDING_STALE_SECONDS are also reclaimed: a
+    # process crash/restart between reserving signal_id and resolving the
+    # Telegram send leaves the row at PENDING with no other path back to
+    # ACTIVE/FAILED. A fresh PENDING row (still in-flight in another
+    # request right now) is excluded via the age cutoff.
+    stale_before = datetime.now(timezone.utc) - timedelta(seconds=settings.PENDING_STALE_SECONDS)
     result = await session.execute(
-        select(Signal).where(Signal.status == SignalStatus.FAILED).limit(5)
+        select(Signal)
+        .where(
+            (Signal.status == SignalStatus.FAILED)
+            | ((Signal.status == SignalStatus.PENDING) & (Signal.received_at < stale_before))
+        )
+        .limit(5)
     )
     failed_signals = result.scalars().all()
     if not failed_signals:

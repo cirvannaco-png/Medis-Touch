@@ -35,15 +35,25 @@ uvicorn app.main:app --reload
 
 See [`telegram-bridge/README.md`](telegram-bridge/README.md) for full environment variable reference and Render deployment instructions.
 
+## Status
+
+- **telegram-bridge**: implemented, tested, deployable (see below).
+- **mql5/**: directory structure is in place; the compiled EA is **not yet
+  committed here**. It currently lives outside this repo during active
+  development and will be added to `mql5/Experts/MedisTouch/` once it's
+  wired up to talk to this backend's `/signal` endpoint. Until that lands,
+  treat `mql5/` as a placeholder, not a working EA - see the `.gitkeep`
+  markers and per-folder `README.md` files for what belongs in each spot.
+
 ## Repository layout
 
 ```
 medis-touch/
-├── mql5/
+├── mql5/                      # placeholder - compiled EA not yet committed, see Status above
 │   ├── Experts/
-│   │   └── MedisTouch/        # EA source files (~30 .mq5/.ex5 files)
-│   ├── Include/               # Shared MQL5 headers
-│   └── Scripts/               # Test / debug scripts
+│   │   └── MedisTouch/        # destination for the compiled EA (.mq5/.ex5) once added
+│   ├── Include/               # shared MQL5 headers, once added
+│   └── Scripts/               # test / debug scripts, once added
 ├── telegram-bridge/
 │   ├── app/
 │   │   ├── main.py            # FastAPI app factory + ASGI middlewares

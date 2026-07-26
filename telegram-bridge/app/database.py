@@ -10,6 +10,13 @@ Base = declarative_base()
 
 
 async def init_db():
+    """
+    Dev/test convenience only: creates tables directly from the models if
+    they don't already exist (harmless no-op against a DB that's already
+    up to date). In production the schema is owned by Alembic migrations
+    (see migrations/) - this call does not replace `alembic upgrade head`
+    and won't apply schema changes to an existing table.
+    """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
