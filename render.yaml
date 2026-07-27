@@ -1,57 +1,56 @@
 version: "1"
 
-    databases:
-    - name: medis-touch-db
-      plan: free          # upgrade to starter/standard for production SLAs
-      databaseName: medis_touch
-      user: medis_touch
+databases:
+  - name: medis-touch-db
+    plan: free          # upgrade to starter/standard for production SLAs
+    databaseName: medis_touch
+    user: medis_touch
 
-    services:
-    - type: web
-      name: medis-touch-telegram
-      env: docker
-      dockerfilePath: ./telegram-bridge/Dockerfile
-      # dockerContext sets the Docker build context to the repository root so
-      # that COPY paths inside the Dockerfile (e.g. telegram-bridge/requirements.txt)
-      # resolve correctly. Without this, Render defaults to the Dockerfile's own
-      # directory and those paths fail.
-      dockerContext: .
-      plan: free          # upgrade to starter/standard for production SLAs
-      envVars:
-        - key: DATABASE_URL
-          # Render injects postgres:// -- config.py normalises it to
-          # postgresql+asyncpg:// automatically (see DATABASE_URL validator).
-          fromDatabase:
-            name: medis-touch-db
-            property: connectionString
+services:
+  - type: web
+    name: medis-touch-telegram
+    env: docker
+    dockerfilePath: ./telegram-bridge/Dockerfile
+    # dockerContext sets the Docker build context to the repository root so
+    # that COPY paths inside the Dockerfile (e.g. telegram-bridge/requirements.txt)
+    # resolve correctly. Without this, Render defaults to the Dockerfile's own
+    # directory and those paths fail.
+    dockerContext: .
+    plan: free          # upgrade to starter/standard for production SLAs
+    envVars:
+      - key: DATABASE_URL
+        # Render injects postgres:// -- config.py normalises it to
+        # postgresql+asyncpg:// automatically (see DATABASE_URL validator).
+        fromDatabase:
+          name: medis-touch-db
+          property: connectionString
 
-        # --- secrets: set these in the Render dashboard, not here ---
-        - key: BOT_TOKEN
-          sync: false
-        - key: CHAT_ID
-          sync: false
-        - key: SECRET_KEY
-          sync: false
+      # --- secrets: set these in the Render dashboard, not here ---
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHAT_ID
+        sync: false
+      - key: SECRET_KEY
+        sync: false
 
-        # --- tuneable at deploy time, safe to version-control ---
-        - key: LOG_LEVEL
-          value: "INFO"
-        - key: RATE_LIMIT_ENABLED
-          value: "true"
-        - key: RATE_LIMIT_MAX_REQUESTS
-          value: "5"
-        - key: RATE_LIMIT_WINDOW_SECONDS
-          value: "60"
-        - key: MAX_REQUEST_BODY_SIZE
-          value: "10240"
-        - key: ALLOWED_ORIGINS
-          value: ""
-        - key: TELEGRAM_TIMEOUT_SECONDS
-          value: "8"
-        - key: TELEGRAM_MAX_RETRIES
-          value: "3"
-        - key: TELEGRAM_RETRY_MAX_WAIT_SECONDS
-          value: "4"
-        - key: PENDING_STALE_SECONDS
-          value: "120"
-    
+      # --- tuneable at deploy time, safe to version-control ---
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: "5"
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
+      - key: MAX_REQUEST_BODY_SIZE
+        value: "10240"
+      - key: ALLOWED_ORIGINS
+        value: ""
+      - key: TELEGRAM_TIMEOUT_SECONDS
+        value: "8"
+      - key: TELEGRAM_MAX_RETRIES
+        value: "3"
+      - key: TELEGRAM_RETRY_MAX_WAIT_SECONDS
+        value: "4"
+      - key: PENDING_STALE_SECONDS
+        value: "120"
