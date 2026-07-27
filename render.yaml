@@ -10,7 +10,6 @@ version: "1"
     - type: web
       name: medis-touch-telegram
       env: docker
-      # dockerfilePath is relative to the repository root.
       dockerfilePath: ./telegram-bridge/Dockerfile
       # dockerContext sets the Docker build context to the repository root so
       # that COPY paths inside the Dockerfile (e.g. telegram-bridge/requirements.txt)
@@ -20,7 +19,7 @@ version: "1"
       plan: free          # upgrade to starter/standard for production SLAs
       envVars:
         - key: DATABASE_URL
-          # Render injects postgres:// — config.py normalises it to
+          # Render injects postgres:// -- config.py normalises it to
           # postgresql+asyncpg:// automatically (see DATABASE_URL validator).
           fromDatabase:
             name: medis-touch-db
