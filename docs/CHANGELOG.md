@@ -5,6 +5,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.3.0] — POST /trade, Render blueprint fixes, dependency refresh
+
+### Added
+- **`POST /trade`** and **`POST /trade/retry-failed`** — new trade lifecycle
+  event endpoint, distinct from `/signal`. A `Signal` is a pre-trade alert
+  with no guarantee an order was ever opened; a `TradeEvent` is reported by
+  the EA's `OrderManager`/`PositionManager` *after* it actually placed,
+  modified, or closed a real order. Backed by a new `trade_events` table
+  (migration `0002`) with its own idempotency key (`event_id`, not
+  `trade_id` — the same `trade_id` legitimately recurs across
+  `opened → partial_close → closed_tp1`). Same PENDING-row-reservation
+  pattern as `/signal` to prevent double-sends under concurrent
+  WebRequest retries from the EA. See `README.md` for the payload shape.
+- `validate_trade_event()` in `validator.py` — lighter than
+  `validate_signal()`: SL/TP are optional since close events legitimately
+  omit them once the position is flat.
+
+### Fixed
+- **Root cause of the recurring Render Blueprint deploy failure** identified
+  and documented in `render.yaml`/`Dockerfile`: the container's first
+  command (`alembic upgrade head`) imports `app.config`, which raises a
+  `pydantic.ValidationError` and exits non-zero if `BOT_TOKEN`/`CHAT_ID`/
+  `SECRET_KEY` aren't set — and Blueprint sync creates those slots
+  (`sync: false`) without populating them, so a fresh deploy could never
+  reach a healthy state without a manual dashboard step. Dockerfile `CMD`
+  now checks for this up front and fails with a readable message instead
+  of a raw traceback buried in `alembic`'s output.
+- Removed non-existent top-level `version:` key from `render.yaml` (not
+  part of Render's Blueprint schema — services/databases/envVarGroups/
+  projects/ungrouped/previews are the only root keys).
+- `env: docker` → `runtime: docker` (the `env` key for specifying the
+  runtime is deprecated in Render's current Blueprint spec; still accepted
+  today but shouldn't be relied on).
+- Removed a factually incorrect comment in `Dockerfile` claiming
+  `dockerContext` is "not supported in render.yaml" — it is a valid,
+  documented field, and it's exactly what `render.yaml` already relies on
+  to make the `COPY telegram-bridge/...` paths resolve.
+- Added explicit `healthCheckPath: /` to `render.yaml`.
+- `pydantic-settings` bumped `2.1.0` → `2.14.2` and `httpx` bumped
+  `0.26.0` → `0.28.1` — both were roughly two years stale relative to the
+  `fastapi==0.140.0` pin they shipped alongside, an accident waiting to
+  surface as a transitive resolver conflict on some future rebuild.
+  `asyncpg` bumped `0.29.0` → `0.31.0` for the same reason.
+
+### Docs
+- `README.md`: documented the free-tier Render Postgres 30-day hard expiry
+  — it is **not** an inactivity timer, so logging into the dashboard does
+  not delay or prevent it (only the free *web service*'s 15-minute
+  spin-down is activity-based, and pinging the dashboard doesn't touch
+  that either — only real traffic to the service does).
+- `README.md`: documented the required manual secrets step in the Render
+  deployment section, and added the `/trade` endpoint to the API table
+  and payload examples.
+
+---
+
 ## [1.2.0] — race-condition fix, packaging, migrations, docs honesty
 
 ### Fixed
