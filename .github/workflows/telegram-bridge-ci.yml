@@ -45,4 +45,5 @@ jobs:
           CHAT_ID: "-1000000000"
           SECRET_KEY: "ci-placeholder-secret"
           DATABASE_URL: "sqlite+aiosqlite:///./ci_signals.db"
+          RATE_LIMIT_ENABLED: "false"
         run: pytest -v
