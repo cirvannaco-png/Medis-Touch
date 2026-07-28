@@ -12,13 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import APP_VERSION, settings
 from app.database import check_db_connection, get_session
-from app.formatter import format_signal_message
+from app.formatter import format_signal_message, format_trade_message
 from app.logger import logger
-from app.models import Signal, SignalStatus
+from app.models import Signal, SignalStatus, TradeEvent, TradeEventStatus, TradeEventType
 from app.ratelimit import enforce_rate_limit
 from app.telegram import NonRetryableError, send_telegram_message
 from app.utils import measure_latency
-from app.validator import validate_signal
+from app.validator import validate_signal, validate_trade_event
 
 router = APIRouter()
 
@@ -52,6 +52,35 @@ class SignalRequest(BaseModel):
         if v not in VALID_TIMEFRAMES:
             raise ValueError(f"timeframe must be one of {sorted(VALID_TIMEFRAMES)}")
         return v
+
+
+class TradeEventRequest(BaseModel):
+    event_id: str = Field(..., min_length=1, max_length=150)
+    trade_id: str = Field(..., min_length=1, max_length=100)
+    signal_id: str | None = Field(default=None, max_length=100)
+    symbol: str = Field(..., min_length=1, max_length=20)
+    direction: Literal["BUY", "SELL"]
+    event: Literal[
+        "opened", "modified", "partial_close",
+        "closed_tp1", "closed_tp2", "closed_sl", "closed_manual",
+    ]
+    volume: float = Field(..., gt=0)
+    price: float = Field(..., gt=0)
+    sl: float | None = Field(default=None, gt=0)
+    tp1: float | None = Field(default=None, gt=0)
+    tp2: float | None = Field(default=None, gt=0)
+    profit: float | None = None
+    balance: float | None = Field(default=None, ge=0)
+    equity: float | None = Field(default=None, ge=0)
+    comment: str | None = Field(default=None, max_length=200)
+
+
+class TradeEventResponse(BaseModel):
+    status: str
+    event_id: str
+    trade_id: str
+    duplicate: bool = False
+    telegram_message_id: int | None = None
 
 
 class HealthResponse(BaseModel):
@@ -182,6 +211,166 @@ async def receive_signal(
         )
 
     return SignalResponse(status="sent", signal_id=payload.signal_id, telegram_message_id=msg_id)
+
+
+@router.post("/trade", response_model=TradeEventResponse)
+async def receive_trade_event(
+    request: Request,
+    payload: TradeEventRequest,
+    session: AsyncSession = Depends(get_session),
+    _auth: bool = Depends(verify_api_key),
+    _rate: None = Depends(enforce_rate_limit),
+):
+    """
+    Receives a trade lifecycle event from the EA's OrderManager/PositionManager
+    after it has actually placed, modified, or closed an order with the
+    broker - as distinct from POST /signal, which is a pre-trade alert with
+    no guarantee an order was ever opened. Same idempotency shape as
+    /signal: reserve a PENDING row keyed on the caller-supplied event_id
+    before contacting Telegram, so a WebRequest retry from the EA after a
+    dropped response can never produce a duplicate Telegram message.
+    """
+    start_time = time.time()
+    log = logger.bind(event_id=payload.event_id, trade_id=payload.trade_id)
+    log.info("Trade event received")
+
+    valid, errors = validate_trade_event(payload.model_dump())
+    if not valid:
+        raise HTTPException(
+            status_code=400,
+            detail={"event_id": payload.event_id, "errors": errors}
+        )
+
+    db_event = TradeEvent(
+        event_id=payload.event_id,
+        trade_id=payload.trade_id,
+        signal_id=payload.signal_id,
+        symbol=payload.symbol,
+        direction=payload.direction,
+        event=TradeEventType(payload.event),
+        volume=payload.volume,
+        price=payload.price,
+        sl=payload.sl,
+        tp1=payload.tp1,
+        tp2=payload.tp2,
+        profit=payload.profit,
+        balance=payload.balance,
+        equity=payload.equity,
+        comment=payload.comment,
+        status=TradeEventStatus.PENDING,
+    )
+    session.add(db_event)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        log.info("Duplicate trade event ignored (reservation lost)")
+        return TradeEventResponse(
+            status="duplicate", event_id=payload.event_id,
+            trade_id=payload.trade_id, duplicate=True,
+        )
+
+    message_text = format_trade_message(payload.model_dump())
+    try:
+        msg_id = await send_telegram_message(message_text)
+        status_event = TradeEventStatus.ACTIVE
+        error_msg = None
+    except NonRetryableError as e:
+        log.error(f"Non-retryable failure: {e}")
+        msg_id = None
+        status_event = TradeEventStatus.PERMANENTLY_FAILED
+        error_msg = str(e)
+    except Exception as e:
+        log.error(f"Sending failed after retries ({type(e).__name__}): {e}")
+        msg_id = None
+        status_event = TradeEventStatus.FAILED
+        error_msg = str(e)
+
+    latency = measure_latency(start_time)
+
+    db_event.telegram_message_id = msg_id
+    db_event.status = status_event
+    db_event.error_message = error_msg
+    db_event.latency_ms = latency
+    await session.commit()
+
+    if status_event in (TradeEventStatus.FAILED, TradeEventStatus.PERMANENTLY_FAILED):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Telegram sending failed. Trade event saved with status '{status_event.value}'."
+        )
+
+    return TradeEventResponse(
+        status="sent", event_id=payload.event_id,
+        trade_id=payload.trade_id, telegram_message_id=msg_id,
+    )
+
+
+# ---------- Retry Failed Trade Events Endpoint ----------
+@router.post("/trade/retry-failed")
+async def retry_failed_trade_events(
+    session: AsyncSession = Depends(get_session),
+    _auth: bool = Depends(verify_api_key),
+    _rate: None = Depends(enforce_rate_limit),
+):
+    """Mirrors /retry-failed but for the trade_events table - see that
+    endpoint's comments for why PENDING rows older than
+    PENDING_STALE_SECONDS are reclaimed alongside FAILED ones."""
+    stale_before = datetime.now(timezone.utc) - timedelta(seconds=settings.PENDING_STALE_SECONDS)
+    result = await session.execute(
+        select(TradeEvent)
+        .where(
+            (TradeEvent.status == TradeEventStatus.FAILED)
+            | ((TradeEvent.status == TradeEventStatus.PENDING) & (TradeEvent.received_at < stale_before))
+        )
+        .limit(5)
+    )
+    failed_events = result.scalars().all()
+    if not failed_events:
+        return {"message": "No failed trade events to retry."}
+
+    retried_count = 0
+    for db_event in failed_events:
+        event_dict = {
+            "event_id": db_event.event_id,
+            "trade_id": db_event.trade_id,
+            "signal_id": db_event.signal_id,
+            "symbol": db_event.symbol,
+            "direction": db_event.direction,
+            "event": db_event.event.value,
+            "volume": db_event.volume,
+            "price": db_event.price,
+            "sl": db_event.sl,
+            "tp1": db_event.tp1,
+            "tp2": db_event.tp2,
+            "profit": db_event.profit,
+            "balance": db_event.balance,
+            "equity": db_event.equity,
+            "comment": db_event.comment,
+        }
+        message_text = format_trade_message(event_dict)
+        log = logger.bind(event_id=db_event.event_id, trade_id=db_event.trade_id)
+        try:
+            msg_id = await send_telegram_message(message_text)
+            db_event.status = TradeEventStatus.ACTIVE
+            db_event.telegram_message_id = msg_id
+            db_event.error_message = None
+            log.info("Retried trade event successfully")
+            retried_count += 1
+        except NonRetryableError as e:
+            log.error(f"Permanent failure during retry: {e}")
+            db_event.status = TradeEventStatus.PERMANENTLY_FAILED
+            db_event.error_message = f"Retry failed permanently: {e}"
+        except Exception as e:
+            log.error(f"Retry failed ({type(e).__name__}): {e}")
+            db_event.error_message = f"Retry failed: {e}"
+        await session.commit()
+        await asyncio.sleep(0.5)
+
+    return {
+        "message": f"Processed {len(failed_events)} failed trade events. Retried {retried_count} successfully.",
+        "remaining_failed": len(failed_events) - retried_count
+    }
 
 
 # ---------- Retry Failed Signals Endpoint ----------
