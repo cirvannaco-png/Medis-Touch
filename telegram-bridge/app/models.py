@@ -15,6 +15,64 @@ class SignalStatus(str, enum.Enum):
     DUPLICATE = "duplicate"
 
 
+class TradeEventStatus(str, enum.Enum):
+    PENDING = "pending"                  # event_id reserved, Telegram call not yet resolved
+    ACTIVE = "active"
+    FAILED = "failed"                    # transient failure, eligible for retry
+    PERMANENTLY_FAILED = "permanently_failed"
+
+
+class TradeEventType(str, enum.Enum):
+    OPENED = "opened"
+    MODIFIED = "modified"
+    PARTIAL_CLOSE = "partial_close"
+    CLOSED_TP1 = "closed_tp1"
+    CLOSED_TP2 = "closed_tp2"
+    CLOSED_SL = "closed_sl"
+    CLOSED_MANUAL = "closed_manual"
+
+
+class TradeEvent(Base):
+    """
+    A single lifecycle event for a live trade the EA has actually placed
+    with the broker (open/modify/partial-close/close). Distinct from
+    Signal, which is a pre-trade alert - a Signal is "here's a setup",
+    a TradeEvent is "the EA's OrderManager/PositionManager did something
+    with a real order ticket". One signal_id can have zero, one, or many
+    TradeEvents (opened, then later closed_tp1, closed_manual, etc.).
+    """
+    __tablename__ = "trade_events"
+    __table_args__ = (
+        Index("ix_trade_events_status", "status"),
+        Index("ix_trade_events_trade_id", "trade_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Caller-supplied idempotency key, one per physical event (NOT per trade -
+    # the same trade_id legitimately recurs across opened -> closed_tp1 etc).
+    # Recommended convention: f"{trade_id}:{event}" or ticket+timestamp.
+    event_id = Column(String, unique=True, nullable=False, index=True)
+    trade_id = Column(String, nullable=False)          # broker ticket / position id
+    signal_id = Column(String, nullable=True, index=True)  # links back to originating Signal, if any
+    symbol = Column(String, nullable=False)
+    direction = Column(String, nullable=False)
+    event = Column(SAEnum(TradeEventType), nullable=False)
+    volume = Column(Float, nullable=False)
+    price = Column(Float, nullable=False)
+    sl = Column(Float, nullable=True)
+    tp1 = Column(Float, nullable=True)
+    tp2 = Column(Float, nullable=True)
+    profit = Column(Float, nullable=True)               # realized P/L, set on close events
+    balance = Column(Float, nullable=True)
+    equity = Column(Float, nullable=True)
+    comment = Column(String, nullable=True)
+    received_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    telegram_message_id = Column(Integer, nullable=True)
+    status = Column(SAEnum(TradeEventStatus), nullable=False, default=TradeEventStatus.PENDING)
+    error_message = Column(Text, nullable=True)
+    latency_ms = Column(Integer, nullable=True)
+
+
 class Signal(Base):
     __tablename__ = "signals"
     __table_args__ = (
