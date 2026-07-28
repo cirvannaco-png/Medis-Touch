@@ -32,6 +32,30 @@ class TradeEventType(str, enum.Enum):
     CLOSED_MANUAL = "closed_manual"
 
 
+# create_type=False on every SAEnum column: the enum type lifecycle (CREATE /
+# DROP TYPE) is owned exclusively by Alembic migrations (via explicit DO $$
+# blocks in each revision). Leaving create_type at its default of True means
+# Base.metadata carries enum descriptors that will attempt a second CREATE TYPE
+# whenever any DDL path processes the metadata -- including the migration
+# runner's target_metadata -- causing DuplicateObjectError (sqlalche.me f405)
+# on PostgreSQL. SQLite is unaffected (enums map to VARCHAR there).
+_signal_status_type = SAEnum(
+    SignalStatus,
+    name="signalstatus",
+    create_type=False,
+)
+_trade_event_status_type = SAEnum(
+    TradeEventStatus,
+    name="tradeeventstatus",
+    create_type=False,
+)
+_trade_event_type_type = SAEnum(
+    TradeEventType,
+    name="tradeeventtype",
+    create_type=False,
+)
+
+
 class TradeEvent(Base):
     """
     A single lifecycle event for a live trade the EA has actually placed
@@ -56,7 +80,7 @@ class TradeEvent(Base):
     signal_id = Column(String, nullable=True, index=True)  # links back to originating Signal, if any
     symbol = Column(String, nullable=False)
     direction = Column(String, nullable=False)
-    event = Column(SAEnum(TradeEventType), nullable=False)
+    event = Column(_trade_event_type_type, nullable=False)
     volume = Column(Float, nullable=False)
     price = Column(Float, nullable=False)
     sl = Column(Float, nullable=True)
@@ -68,7 +92,7 @@ class TradeEvent(Base):
     comment = Column(String, nullable=True)
     received_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     telegram_message_id = Column(Integer, nullable=True)
-    status = Column(SAEnum(TradeEventStatus), nullable=False, default=TradeEventStatus.PENDING)
+    status = Column(_trade_event_status_type, nullable=False, default=TradeEventStatus.PENDING)
     error_message = Column(Text, nullable=True)
     latency_ms = Column(Integer, nullable=True)
 
@@ -96,6 +120,6 @@ class Signal(Base):
     # the signal_id, then resolves it to ACTIVE/FAILED after the Telegram call.
     # This Python-level default matches that intent; the migration's
     # server_default is aligned to "pending" for the same reason.
-    status = Column(SAEnum(SignalStatus), nullable=False, default=SignalStatus.PENDING)
+    status = Column(_signal_status_type, nullable=False, default=SignalStatus.PENDING)
     error_message = Column(Text, nullable=True)
     latency_ms = Column(Integer, nullable=True)
