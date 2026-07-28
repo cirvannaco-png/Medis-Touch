@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Single source of truth for the app version. Previously "1.0.0" was
 # hardcoded in three places (FastAPI app, and two HealthResponse literals
 # in routes.py) while pyproject.toml said "1.1.0" - they'd drifted.
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 
 class Settings(BaseSettings):
