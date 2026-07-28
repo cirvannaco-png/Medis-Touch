@@ -27,6 +27,20 @@ VALID_BUY_SIGNAL = {
     "timeframe": "M15",
 }
 
+VALID_TRADE_OPENED = {
+    "event_id": "1000123:opened",
+    "trade_id": "1000123",
+    "signal_id": "test-signal-1",
+    "symbol": "EURUSD",
+    "direction": "BUY",
+    "event": "opened",
+    "volume": 0.10,
+    "price": 1.1002,
+    "sl": 1.0950,
+    "tp1": 1.1050,
+    "tp2": 1.1100,
+}
+
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
@@ -50,7 +64,7 @@ def client():
         from fastapi.testclient import TestClient
         from app.main import app
         from app.database import engine
-        from app.models import Signal
+        from app.models import Signal, TradeEvent
 
         with TestClient(app) as c:
             yield c
@@ -60,6 +74,7 @@ def client():
         async def _truncate():
             async with engine.begin() as conn:
                 await conn.run_sync(lambda sync_conn: sync_conn.execute(Signal.__table__.delete()))
+                await conn.run_sync(lambda sync_conn: sync_conn.execute(TradeEvent.__table__.delete()))
 
         asyncio.run(_truncate())
 
