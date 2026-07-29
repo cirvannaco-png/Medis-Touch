@@ -5,7 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response
 
 from app.config import APP_VERSION, settings
-from app.database import init_db
 from app.logger import logger
 from app.routes import router
 from app.telegram import check_bot_token, close_http_client, init_http_client
@@ -66,17 +65,6 @@ def create_app() -> FastAPI:
     async def lifespan(app: FastAPI):
         logger.info("Starting application...")
         await init_http_client()
-        # init_db() is dev/test convenience only (intended for SQLite, no
-        # Alembic step). In production, Alembic owns schema creation via
-        # `alembic upgrade head` in the Dockerfile CMD. Calling create_all()
-        # here on a PostgreSQL database races with the signalstatus enum type
-        # that Alembic just created seconds earlier: SQLAlchemy's checkfirst
-        # logic reads pg_catalog.pg_type inside the same transaction that
-        # holds the write lock, sees a stale snapshot, and still attempts
-        # CREATE TYPE -- raising DuplicateObjectError under asyncpg.
-        if "sqlite" in settings.DATABASE_URL:
-            await init_db()
-            logger.info("Database initialised via create_all (SQLite / dev mode).")
         token_valid = await check_bot_token()
         if not token_valid:
             logger.warning("Telegram bot token is invalid or could not be verified. Signals will fail.")
