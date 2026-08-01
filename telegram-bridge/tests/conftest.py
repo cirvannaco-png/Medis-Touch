@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 # Must be set before app.config.settings is constructed (module-level
@@ -42,6 +43,20 @@ VALID_TRADE_OPENED = {
 }
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _create_test_tables():
+    """
+    Create SQLite tables once for the entire test session.
+
+    init_db() was intentionally removed from the app lifespan (Alembic owns
+    DDL in production), but the test suite runs against SQLite with no
+    migration runner, so we call it explicitly here. SQLite maps all
+    PG_ENUM/Enum columns to VARCHAR — no Postgres dialect required.
+    """
+    from app.database import init_db
+    asyncio.run(init_db())
+
+
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
     """Each test gets a clean rate-limit bucket state (module-level singleton)."""
@@ -68,8 +83,6 @@ def client():
 
         with TestClient(app) as c:
             yield c
-
-        import asyncio
 
         async def _truncate():
             async with engine.begin() as conn:
