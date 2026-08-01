@@ -11,24 +11,28 @@ OrderManager/PositionManager actually placed with the broker. See the
 docstring on app.models.TradeEvent for the full rationale.
 
 Follows the same enum-creation pattern as 0001 (explicit DO $$ block,
-create_type=False on the SQLAlchemy Enum) for the same asyncpg
+create_type=False on the PostgreSQL-specific PG_ENUM) for the same asyncpg
 transaction-visibility reason documented there.
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
 
 revision = "0002"
 down_revision = "0001"
 branch_labels = None
 depends_on = None
 
-trade_event_status_enum = sa.Enum(
+# FIX: Use PG_ENUM (sqlalchemy.dialects.postgresql.ENUM) instead of
+# generic sa.Enum. The generic class silently discards create_type=False;
+# the PG-specific class stores and respects it. See 0001 for full rationale.
+trade_event_status_enum = PG_ENUM(
     "pending", "active", "failed", "permanently_failed",
     name="tradeeventstatus",
     create_type=False,
 )
 
-trade_event_type_enum = sa.Enum(
+trade_event_type_enum = PG_ENUM(
     "opened", "modified", "partial_close",
     "closed_tp1", "closed_tp2", "closed_sl", "closed_manual",
     name="tradeeventtype",

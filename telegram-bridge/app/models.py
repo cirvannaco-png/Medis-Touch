@@ -2,7 +2,7 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Column, DateTime, Float, Index, Integer, String, Text
-from sqlalchemy import Enum as SAEnum
+from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
 
 from app.database import Base
 
@@ -32,24 +32,31 @@ class TradeEventType(str, enum.Enum):
     CLOSED_MANUAL = "closed_manual"
 
 
-# create_type=False on every SAEnum column: the enum type lifecycle (CREATE /
-# DROP TYPE) is owned exclusively by Alembic migrations (via explicit DO $$
-# blocks in each revision). Leaving create_type at its default of True means
-# Base.metadata carries enum descriptors that will attempt a second CREATE TYPE
-# whenever any DDL path processes the metadata -- including the migration
-# runner's target_metadata -- causing DuplicateObjectError (sqlalche.me f405)
-# on PostgreSQL. SQLite is unaffected (enums map to VARCHAR there).
-_signal_status_type = SAEnum(
+# FIX: Use PG_ENUM (sqlalchemy.dialects.postgresql.ENUM) instead of the
+# generic SAEnum (sa.Enum / from sqlalchemy import Enum as SAEnum).
+#
+# The generic class silently discards create_type=False — the keyword is
+# accepted into **kwargs and thrown away, and the Postgres dialect adapter
+# then builds a brand-new ENUM object with its own default of create_type=True,
+# completely independent of what was passed to the generic class. The result
+# is that op.create_table() fires an unguarded CREATE TYPE, which collides
+# with the type the DO $$ block just created and raises:
+#   sqlalchemy.exc.ProgrammingError: asyncpg.exceptions.DuplicateObjectError
+#
+# PG_ENUM stores and respects create_type=False directly. Verified against
+# sqlalchemy[asyncio]==2.0.25, the exact version pinned in requirements.txt.
+# SQLite is unaffected (enums map to VARCHAR there).
+_signal_status_type = PG_ENUM(
     SignalStatus,
     name="signalstatus",
     create_type=False,
 )
-_trade_event_status_type = SAEnum(
+_trade_event_status_type = PG_ENUM(
     TradeEventStatus,
     name="tradeeventstatus",
     create_type=False,
 )
-_trade_event_type_type = SAEnum(
+_trade_event_type_type = PG_ENUM(
     TradeEventType,
     name="tradeeventtype",
     create_type=False,

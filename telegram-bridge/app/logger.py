@@ -25,10 +25,6 @@ logger.add(
     format=_format_record,
     colorize=True,
 )
-logger.add(
-    "medis_touch.log",
-    rotation="10 MB",
-    retention="7 days",
-    level="INFO",
-    format=_format_record,
-)
+# NOTE: File sink removed. Render's filesystem is ephemeral — the log file
+# is wiped on every restart, redeploy, or spin-down cycle, providing no
+# persistent value. stdout above is already captured as Render's log stream.

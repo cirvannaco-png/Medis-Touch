@@ -24,6 +24,12 @@ router = APIRouter()
 
 VALID_TIMEFRAMES = {"M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"}
 
+# Derive the allowed event values directly from the TradeEventType enum so
+# that routes.py and models.py can never silently drift apart. Adding a new
+# enum member automatically extends this Literal at import time.
+_TradeEventLiteralValues = tuple(e.value for e in TradeEventType)
+_TradeEventTypeLiteral = Literal[_TradeEventLiteralValues]  # type: ignore[valid-type]
+
 
 # ---------- Request/Response Schemas ----------
 class SignalRequest(BaseModel):
@@ -60,10 +66,8 @@ class TradeEventRequest(BaseModel):
     signal_id: str | None = Field(default=None, max_length=100)
     symbol: str = Field(..., min_length=1, max_length=20)
     direction: Literal["BUY", "SELL"]
-    event: Literal[
-        "opened", "modified", "partial_close",
-        "closed_tp1", "closed_tp2", "closed_sl", "closed_manual",
-    ]
+    # Derived from TradeEventType enum — single source of truth, no manual sync needed.
+    event: _TradeEventTypeLiteral
     volume: float = Field(..., gt=0)
     price: float = Field(..., gt=0)
     sl: float | None = Field(default=None, gt=0)

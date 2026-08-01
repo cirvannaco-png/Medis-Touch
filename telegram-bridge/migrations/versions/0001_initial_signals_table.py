@@ -11,6 +11,7 @@ which has no upgrade/rollback path once there's real data to protect.
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
 
 revision = "0001"
 down_revision = None
@@ -19,11 +20,15 @@ depends_on = None
 
 # create_type=False: we manage the enum lifecycle explicitly below so that
 # op.create_table() does NOT emit a second CREATE TYPE statement for the
-# status column. Without this, SQLAlchemy emits CREATE TYPE twice -- once
-# from our explicit call and once internally -- and the second attempt fails
-# even when checkfirst=True is used, because asyncpg surfaces the duplicate
-# inside the same transaction before the check can run.
-signal_status_enum = sa.Enum(
+# status column.
+#
+# FIX: Must use sqlalchemy.dialects.postgresql.ENUM (PG_ENUM), NOT the
+# generic sa.Enum. The generic class silently discards create_type=False —
+# the keyword is accepted into **kwargs and thrown away, and the Postgres
+# dialect adapter builds a fresh ENUM with create_type=True as its own
+# default. PG_ENUM stores and respects the flag directly (verified against
+# sqlalchemy[asyncio]==2.0.25, the exact pinned version in requirements.txt).
+signal_status_enum = PG_ENUM(
     "pending", "active", "failed", "permanently_failed", "duplicate",
     name="signalstatus",
     create_type=False,
