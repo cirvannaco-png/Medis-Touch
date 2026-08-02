@@ -52,7 +52,15 @@ def _create_test_tables():
     DDL in production), but the test suite runs against SQLite with no
     migration runner, so we call it explicitly here. SQLite maps all
     PG_ENUM/Enum columns to VARCHAR — no Postgres dialect required.
+
+    CRITICAL: app.models must be imported *before* init_db() runs. Base is a
+    bare declarative_base() defined in app.database; the Signal/TradeEvent
+    tables only register onto Base.metadata as a side effect of importing
+    app.models. Without this import, create_all() silently creates zero
+    tables and every DB-touching test fails with "no such table: signals" -
+    which is exactly what happens on a clean checkout today.
     """
+    import app.models  # noqa: F401 - registers Signal/TradeEvent on Base.metadata
     from app.database import init_db
     asyncio.run(init_db())
 
