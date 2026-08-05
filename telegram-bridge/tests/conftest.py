@@ -61,8 +61,19 @@ def _create_test_tables():
     which is exactly what happens on a clean checkout today.
     """
     import app.models  # noqa: F401 - registers Signal/TradeEvent on Base.metadata
-    from app.database import init_db
-    asyncio.run(init_db())
+    from app.database import engine, init_db
+
+    async def _setup():
+        await init_db()
+        # Dispose the pool immediately so the connections created in this
+        # event loop are not reused by subsequent asyncio.run() calls (which
+        # create new event loops).  aiosqlite connections are bound to the
+        # loop that created them; reusing a stale connection in a new loop
+        # causes SQLAlchemy to silently open an in-memory DB instead of the
+        # file, producing "no such table" errors in later teardowns.
+        await engine.dispose()
+
+    asyncio.run(_setup())
 
 
 @pytest.fixture(autouse=True)
@@ -93,6 +104,12 @@ def client():
             yield c
 
         async def _truncate():
+            # Evict any connections that were created in a previous event
+            # loop (e.g. from asyncio.run() seeding helpers in the test
+            # body).  Without this, aiosqlite may silently "connect" to an
+            # empty in-memory DB rather than the test file, causing
+            # "no such table: signals" on every DELETE in teardown.
+            await engine.dispose()
             async with engine.begin() as conn:
                 await conn.run_sync(lambda sync_conn: sync_conn.execute(Signal.__table__.delete()))
                 await conn.run_sync(lambda sync_conn: sync_conn.execute(TradeEvent.__table__.delete()))
