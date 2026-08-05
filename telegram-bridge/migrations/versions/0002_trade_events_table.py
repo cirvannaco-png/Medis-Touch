@@ -14,8 +14,8 @@ Follows the same enum-creation pattern as 0001 (explicit DO $$ block,
 create_type=False on the PostgreSQL-specific PG_ENUM) for the same asyncpg
 transaction-visibility reason documented there.
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
 
 revision = "0002"

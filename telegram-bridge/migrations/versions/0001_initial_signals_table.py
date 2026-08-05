@@ -9,8 +9,8 @@ Base.metadata.create_all() at app startup. From this point on, schema
 changes go through a new revision instead of relying on create_all(),
 which has no upgrade/rollback path once there's real data to protect.
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
 
 revision = "0001"

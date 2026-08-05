@@ -4,12 +4,11 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.config import settings
-from app.database import Base, engine
-
 # Import models so Base.metadata is populated with all tables before
 # autogenerate compares against it.
 from app import models  # noqa: F401
+from app.config import settings
+from app.database import Base, engine
 
 config = context.config
 
