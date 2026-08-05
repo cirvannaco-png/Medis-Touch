@@ -87,7 +87,7 @@ async def check_bot_token() -> bool:
     url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/getMe"
     client = _get_client()
     try:
-        resp = await client.get(url, timeout=10.0)
+        resp = await client.get(url, timeout=settings.TELEGRAM_TIMEOUT_SECONDS)
         data = resp.json()
         if data.get("ok"):
             logger.info(f"Bot token valid. Bot username: @{data['result']['username']}")

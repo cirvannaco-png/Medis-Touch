@@ -112,7 +112,6 @@ def format_signal_message(signal: dict) -> str:
     lines += [
         "",
         "Status",
-        "",
         "ACTIVE"
     ]
     return "\n".join(lines)
