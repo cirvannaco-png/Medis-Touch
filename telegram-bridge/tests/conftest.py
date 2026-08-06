@@ -86,6 +86,30 @@ def _reset_rate_limiter():
 
 
 @pytest.fixture()
+def forced_rate_limit():
+    """
+    Force the rate limiter on for tests that assert 429 behaviour.
+
+    The limiter singleton is built from settings at import time, and CI runs
+    pytest with RATE_LIMIT_ENABLED=false (so the rest of the suite is not
+    throttled). Tests that assert throttling must therefore configure the
+    limiter explicitly instead of relying on ambient env vars.
+    """
+    from app.ratelimit import rate_limiter
+
+    original = (rate_limiter.enabled, rate_limiter.max_requests, rate_limiter.window_seconds)
+    rate_limiter.enabled = True
+    rate_limiter.max_requests = 5
+    rate_limiter.window_seconds = 60
+    rate_limiter._buckets.clear()
+    try:
+        yield rate_limiter
+    finally:
+        rate_limiter.enabled, rate_limiter.max_requests, rate_limiter.window_seconds = original
+        rate_limiter._buckets.clear()
+
+
+@pytest.fixture()
 def client():
     """TestClient with Telegram sends mocked out - no real network calls.
 

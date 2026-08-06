@@ -59,8 +59,10 @@ def test_duplicate_signal_id_returns_duplicate_status(client, auth_headers):
     assert second.json()["duplicate"] is True
 
 
-def test_rate_limit_enforced_after_max_requests(client, auth_headers):
-    # RATE_LIMIT_MAX_REQUESTS=5 (set in conftest env). Send 7 distinct signals.
+def test_rate_limit_enforced_after_max_requests(client, auth_headers, forced_rate_limit):
+    # The limiter is force-enabled at max_requests=5 by the fixture, so this
+    # test does not depend on RATE_LIMIT_* env vars (CI sets
+    # RATE_LIMIT_ENABLED=false, which would otherwise make 429 unreachable).
     codes = []
     for i in range(7):
         payload = {**VALID_BUY_SIGNAL, "signal_id": f"sig-rl-{i}"}
