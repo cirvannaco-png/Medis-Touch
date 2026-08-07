@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response
 
+from app.bot import init_bot, shutdown_bot
 from app.config import APP_VERSION, settings
 from app.logger import logger
 from app.routes import router
@@ -68,7 +69,9 @@ def create_app() -> FastAPI:
         token_valid = await check_bot_token()
         if not token_valid:
             logger.warning("Telegram bot token is invalid or could not be verified. Signals will fail.")
+        await init_bot()
         yield
+        await shutdown_bot()
         await close_http_client()
         logger.info("Shutdown complete.")
 

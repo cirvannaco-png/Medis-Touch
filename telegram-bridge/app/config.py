@@ -66,5 +66,34 @@ class Settings(BaseSettings):
             return []
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
 
+    # ---- Inbound bot (commands: /start /signal /positions /risk ...) ----
+    # Telegram signs every webhook delivery with this token in the
+    # X-Telegram-Bot-Api-Secret-Token header (set via bot.set_webhook). The
+    # /telegram/webhook route rejects anything that doesn't match, so a
+    # third party who discovers the webhook URL can't inject fake /start,
+    # /positions, etc. into the bot. Required, same treatment as BOT_TOKEN.
+    WEBHOOK_SECRET_TOKEN: str
+
+    # Render injects this automatically for every web service (no manual
+    # setup needed) - e.g. "https://medis-touch-telegram.onrender.com".
+    # Only set WEBHOOK_URL by hand for local tunneling (ngrok) or if the
+    # service is fronted by a custom domain Render doesn't know about.
+    RENDER_EXTERNAL_URL: str = ""
+    WEBHOOK_URL: str = ""
+    WEBHOOK_PATH: str = "/telegram/webhook"
+
+    @property
+    def webhook_url(self) -> str:
+        base = (self.WEBHOOK_URL or self.RENDER_EXTERNAL_URL).rstrip("/")
+        return f"{base}{self.WEBHOOK_PATH}"
+
+    # Commands that touch trading data reply only inside CHAT_ID (the same
+    # destination signals/trade alerts are sent to). Anyone else who finds
+    # the bot and sends /positions gets silently ignored rather than a
+    # peek at live signals, open positions, or P/L.
+    @property
+    def authorized_chat_id(self) -> str:
+        return self.CHAT_ID
+
 
 settings = Settings()
