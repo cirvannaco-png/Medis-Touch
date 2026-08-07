@@ -1,3 +1,5 @@
+import re
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -73,6 +75,23 @@ class Settings(BaseSettings):
     # third party who discovers the webhook URL can't inject fake /start,
     # /positions, etc. into the bot. Required, same treatment as BOT_TOKEN.
     WEBHOOK_SECRET_TOKEN: str
+
+    @field_validator("WEBHOOK_SECRET_TOKEN")
+    @classmethod
+    def _validate_webhook_secret_token(cls, v: str) -> str:
+        """Telegram's setWebhook requires secret_token to match
+        ^[A-Za-z0-9_-]{1,256}$ - anything else (e.g. base64 output with
+        '+', '/', '=') is rejected with BadRequest at set_webhook() time,
+        which init_bot() swallows into a warning. Fail fast at startup
+        instead, with a message that says exactly what's wrong.
+        """
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", v):
+            raise ValueError(
+                "WEBHOOK_SECRET_TOKEN must match ^[A-Za-z0-9_-]{1,256}$ "
+                "(Telegram's requirement for secret_token). Regenerate with: "
+                "openssl rand -hex 32"
+            )
+        return v
 
     # Render injects this automatically for every web service (no manual
     # setup needed) - e.g. "https://medis-touch-telegram.onrender.com".
