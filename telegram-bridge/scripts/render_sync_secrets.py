@@ -86,7 +86,7 @@ def collect_secrets(env: dict[str, str]) -> dict[str, str]:
 
 def _request(method: str, path: str, api_key: str, body: object | None = None) -> object:
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(  # noqa: S310  # nosec B310 - fixed https host
+    req = urllib.request.Request(  # nosec B310 - fixed https host
         f"{RENDER_API}{path}",
         data=data,
         method=method,
@@ -97,7 +97,7 @@ def _request(method: str, path: str, api_key: str, body: object | None = None) -
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310  # nosec B310
+        with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
             raw = resp.read().decode() or "null"
     except urllib.error.HTTPError as exc:  # surface Render's message verbatim
         detail = exc.read().decode(errors="replace")
