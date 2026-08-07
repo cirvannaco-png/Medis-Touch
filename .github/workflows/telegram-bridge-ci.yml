@@ -9,6 +9,18 @@ on:
     paths:
       - "telegram-bridge/**"
       - ".github/workflows/telegram-bridge-ci.yml"
+  # Lets the suite be re-run from the Actions tab without an empty commit
+  # (useful after changing a repository secret or a Render setting).
+  workflow_dispatch:
+
+# A second push to the same branch supersedes the first; don't burn runners
+# finishing a run whose result nobody will look at.
+concurrency:
+  group: telegram-bridge-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 defaults:
   run:
@@ -23,21 +35,35 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            telegram-bridge/requirements.txt
+            telegram-bridge/requirements-dev.txt
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
       - name: Lint (ruff)
-        run: ruff check app/ migrations/
+        run: ruff check app/ migrations/ scripts/ tests/
 
       - name: Security scan (bandit)
-        run: bandit -r app/ -q
+        run: bandit -r app/ scripts/ -q
 
       - name: Dependency vulnerability scan (pip-audit)
         # Bandit scans code patterns, not known CVEs in pinned dependencies.
         # This catches the case where a pinned version has a disclosed
         # vulnerability even though the code itself is fine.
         run: pip-audit -r requirements.txt
+
+      - name: Validate Render secret automation (no API calls)
+        # Fails the build if scripts/render_sync_secrets.py can't produce a
+        # Telegram-compatible WEBHOOK_SECRET_TOKEN - the exact failure that
+        # previously only surfaced at Render startup.
+        env:
+          BOT_TOKEN: "123456:ci-placeholder"
+          CHAT_ID: "-1000000000"
+          SECRET_KEY: "ci-placeholder-secret"
+        run: python scripts/render_sync_secrets.py --dry-run
 
       - name: Test (pytest)
         env:
