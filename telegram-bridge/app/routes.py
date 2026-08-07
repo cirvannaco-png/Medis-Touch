@@ -110,9 +110,15 @@ async def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
 
 # ---------- Endpoints ----------
 @router.get("/", response_model=HealthResponse)
+@router.head("/")
 async def health_check():
     # Liveness probe: deliberately cheap, no DB round-trip. Use /health/db
     # for a readiness check that verifies the database is reachable.
+    # HEAD is registered alongside GET because Render's platform health
+    # check probes with HEAD / before a deploy is marked live - FastAPI
+    # doesn't add HEAD support to a GET route automatically, so without
+    # this it 405s on every deploy (harmless, but noisy in logs and a
+    # false-down for any external monitor that defaults to HEAD).
     return {"status": "online", "version": APP_VERSION, "database": "not checked"}
 
 
