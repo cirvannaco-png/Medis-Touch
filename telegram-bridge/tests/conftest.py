@@ -8,12 +8,14 @@ import os
 os.environ.setdefault("BOT_TOKEN", "123456:test-token")
 os.environ.setdefault("CHAT_ID", "-1000000000")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
+os.environ.setdefault("WEBHOOK_SECRET_TOKEN", "test-webhook-secret")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test_signals.db")
 os.environ.setdefault("RATE_LIMIT_MAX_REQUESTS", "5")
 os.environ.setdefault("RATE_LIMIT_WINDOW_SECONDS", "60")
 
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 VALID_BUY_SIGNAL = {
     "signal_id": "test-signal-1",
@@ -120,8 +122,9 @@ def client():
     """
     with patch("app.routes.send_telegram_message", new=AsyncMock(return_value=42)):
         from fastapi.testclient import TestClient
-        from app.main import app
+
         from app.database import engine
+        from app.main import app
         from app.models import Signal, TradeEvent
 
         with TestClient(app) as c:

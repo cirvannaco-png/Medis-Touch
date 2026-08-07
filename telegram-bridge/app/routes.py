@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import bot as bot_module
 from app.config import APP_VERSION, settings
 from app.database import check_db_connection, get_session
 from app.formatter import format_signal_message, format_trade_message
@@ -123,6 +124,37 @@ async def health_db():
         "version": APP_VERSION,
         "database": "connected" if db_ok else "disconnected"
     }
+
+
+@router.post("/telegram/webhook")
+async def telegram_webhook(
+    request: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+):
+    """
+    Telegram delivers inbound updates (users typing /start, /positions,
+    etc. to the bot) here. Telegram signs every delivery with the secret
+    token set via bot.set_webhook(secret_token=...) in app/bot.py; anything
+    that doesn't match is rejected before the payload is even parsed, so
+    this endpoint can't be used to inject fake commands from outside
+    Telegram.
+    """
+    if not secrets.compare_digest(
+        x_telegram_bot_api_secret_token or "", settings.WEBHOOK_SECRET_TOKEN
+    ):
+        logger.warning("Rejected Telegram webhook call with invalid secret token")
+        raise HTTPException(status_code=401, detail="Invalid secret token")
+
+    payload = await request.json()
+    try:
+        await bot_module.process_update(payload)
+    except Exception as e:
+        # Never let a malformed/unexpected update 500 back to Telegram -
+        # Telegram retries 5xx responses, which would hammer this endpoint
+        # for an update it will never be able to parse successfully.
+        logger.error(f"Failed to process Telegram update ({type(e).__name__}): {e}")
+
+    return {"ok": True}
 
 
 @router.post("/signal", response_model=SignalResponse)

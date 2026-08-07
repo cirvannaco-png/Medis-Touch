@@ -109,6 +109,7 @@ def test_event_id_reserved_before_telegram_is_called_once(client, auth_headers):
     PENDING row for this event_id must short-circuit to duplicate without
     calling Telegram again."""
     import asyncio
+
     from app.database import async_session
     from app.models import TradeEvent, TradeEventStatus, TradeEventType
 
@@ -145,6 +146,7 @@ def test_event_id_reserved_before_telegram_is_called_once(client, auth_headers):
 def test_trade_retry_failed_reclaims_stale_pending_rows(client, auth_headers):
     import asyncio
     from datetime import datetime, timedelta, timezone
+
     from app.database import async_session
     from app.models import TradeEvent, TradeEventStatus, TradeEventType
 
