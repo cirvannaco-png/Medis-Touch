@@ -13,7 +13,15 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     BOT_TOKEN: str
+
+    # Outbound destination: signals and trade alerts are broadcast here
+    # (typically the subscriber group or channel).
     CHAT_ID: str
+
+    # Inbound authorization: the only chat whose commands the bot obeys
+    # (typically your personal DM). Kept separate from CHAT_ID so members
+    # of the signal group can't run /positions, /risk, etc.
+    ADMIN_CHAT_ID: str
     SECRET_KEY: str
 
     # Use PostgreSQL for production (Render); SQLite for local dev.
@@ -106,13 +114,14 @@ class Settings(BaseSettings):
         base = (self.WEBHOOK_URL or self.RENDER_EXTERNAL_URL).rstrip("/")
         return f"{base}{self.WEBHOOK_PATH}"
 
-    # Commands that touch trading data reply only inside CHAT_ID (the same
-    # destination signals/trade alerts are sent to). Anyone else who finds
+    # Commands that touch trading data reply only inside ADMIN_CHAT_ID (your
+    # personal DM), independent of CHAT_ID, which is where outbound
+    # signals/trade alerts are broadcast (the group). Anyone else who finds
     # the bot and sends /positions gets silently ignored rather than a
     # peek at live signals, open positions, or P/L.
     @property
     def authorized_chat_id(self) -> str:
-        return self.CHAT_ID
+        return self.ADMIN_CHAT_ID
 
 
 settings = Settings()

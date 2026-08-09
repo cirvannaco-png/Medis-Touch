@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **`ADMIN_CHAT_ID` split out from `CHAT_ID`.** `CHAT_ID` is now purely the
+  outbound broadcast destination (the signal group), while the inbound bot
+  accepts commands (`/positions`, `/risk`, ...) only from `ADMIN_CHAT_ID` —
+  normally your personal DM. Previously anyone in the signal group could
+  query live positions and P/L. `ADMIN_CHAT_ID` is required at startup, the
+  same treatment as `BOT_TOKEN`; set it in Render (or `.env`) before
+  deploying, and add it as a repository secret for the Render sync workflow.
+
 ## [1.3.0] — POST /trade, Render blueprint fixes, dependency refresh
 
 ### Added

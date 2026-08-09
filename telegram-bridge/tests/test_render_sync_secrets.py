@@ -15,6 +15,7 @@ _SPEC.loader.exec_module(rss)
 BASE_ENV = {
     "BOT_TOKEN": "123456:abc",
     "CHAT_ID": "-1000000000",
+    "ADMIN_CHAT_ID": "777000777",
     "SECRET_KEY": "s3cret",
 }
 

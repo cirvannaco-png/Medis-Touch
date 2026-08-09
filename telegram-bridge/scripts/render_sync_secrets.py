@@ -3,7 +3,8 @@
 
 Why this exists
 ---------------
-`render.yaml` declares BOT_TOKEN / CHAT_ID / SECRET_KEY / WEBHOOK_SECRET_TOKEN
+`render.yaml` declares BOT_TOKEN / CHAT_ID / ADMIN_CHAT_ID / SECRET_KEY /
+WEBHOOK_SECRET_TOKEN
 with `sync: false`, which means Render never manages their values - somebody
 has to paste them into the dashboard by hand. That is exactly how the service
 ended up booting with a WEBHOOK_SECRET_TOKEN that Telegram rejected.
@@ -38,7 +39,7 @@ RENDER_API = "https://api.render.com/v1"
 TELEGRAM_SECRET_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{1,256}")
 
 # Secrets render.yaml marks `sync: false`. Optional ones are skipped when unset.
-REQUIRED_SECRETS = ("BOT_TOKEN", "CHAT_ID", "SECRET_KEY")
+REQUIRED_SECRETS = ("BOT_TOKEN", "CHAT_ID", "ADMIN_CHAT_ID", "SECRET_KEY")
 GENERATED_SECRETS = ("WEBHOOK_SECRET_TOKEN",)
 
 

@@ -55,7 +55,7 @@ Commands, registered with Telegram on startup via `setMyCommands`:
 | `/risk`        | Open position count, symbols exposed, total lot volume — *not* account equity or margin, which only exist inside the MT5 terminal |
 | `/performance` | Win rate and total P/L over closed trades in the last 30 days                |
 
-All commands are restricted to `CHAT_ID` — a message from any other chat is silently ignored.
+All commands are restricted to `ADMIN_CHAT_ID` — a message from any other chat, including the `CHAT_ID` signal group, is silently ignored.
 
 **How it's wired:** this runs in Telegram **webhook** mode, not long-polling. On startup, `app/bot.py`
 calls `setWebhook` pointing at `POST /telegram/webhook` on this same service, using
@@ -74,7 +74,8 @@ warning and the rest of the service starts normally — outbound signal/trade de
 | Variable                          | Required | Default  | Description                                                  |
 |-----------------------------------|----------|----------|--------------------------------------------------------------|
 | `BOT_TOKEN`                       | ✅       | —        | Telegram bot token from @BotFather                           |
-| `CHAT_ID`                         | ✅       | —        | Telegram chat/group ID to post signals into, and the only chat the inbound bot responds to |
+| `CHAT_ID`                         | ✅       | —        | Telegram chat/group ID to broadcast signals into |
+| `ADMIN_CHAT_ID`                   | ✅       | —        | The only chat the inbound bot accepts commands from (your DM) |
 | `SECRET_KEY`                      | ✅       | —        | Shared secret for EA authentication (`X-API-Key` header)     |
 | `WEBHOOK_SECRET_TOKEN`            | ✅       | —        | Shared secret Telegram must present on every inbound webhook call |
 | `DATABASE_URL`                    | ✅       | SQLite¹  | Async DB URL — use `postgresql+asyncpg://...` in production  |

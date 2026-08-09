@@ -7,6 +7,7 @@ import os
 # or the network in CI.
 os.environ.setdefault("BOT_TOKEN", "123456:test-token")
 os.environ.setdefault("CHAT_ID", "-1000000000")
+os.environ.setdefault("ADMIN_CHAT_ID", "777000777")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("WEBHOOK_SECRET_TOKEN", "test-webhook-secret")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test_signals.db")

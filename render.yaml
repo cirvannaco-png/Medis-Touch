@@ -1,6 +1,7 @@
 # ⚠️  READ BEFORE DEPLOYING ⚠️
 # After "Deploy Blueprint" finishes syncing, the web service will build but
-# will crash-loop on boot until you manually set BOT_TOKEN, CHAT_ID, and
+# will crash-loop on boot until you manually set BOT_TOKEN, CHAT_ID,
+# ADMIN_CHAT_ID, and
 # SECRET_KEY in the Render Dashboard (Service → Environment). These are
 # marked `sync: false` below on purpose (Render never stores secrets in
 # git), which means Blueprint sync creates the empty slots but does NOT
@@ -41,6 +42,8 @@ services:
       - key: BOT_TOKEN
         sync: false
       - key: CHAT_ID
+        sync: false
+      - key: ADMIN_CHAT_ID
         sync: false
       - key: SECRET_KEY
         sync: false

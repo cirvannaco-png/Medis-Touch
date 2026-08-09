@@ -48,10 +48,11 @@ COMMAND_LIST = [
 
 def _authorized_only(handler):
     """
-    Reject anything not coming from settings.CHAT_ID. This bot's CHAT_ID is
-    where live signals and trade fills are posted - the same restriction
-    is enforced here so a stranger who finds the bot's username can't pull
-    open positions or performance history out of it.
+    Reject anything not coming from settings.ADMIN_CHAT_ID (the admin DM).
+    CHAT_ID is only the broadcast destination for signals and trade fills;
+    it is deliberately not authorized here, so neither a stranger who finds
+    the bot's username nor a member of the signal group can pull open
+    positions or performance history out of it.
     """
 
     @wraps(handler)

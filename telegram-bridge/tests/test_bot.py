@@ -13,7 +13,8 @@ import os
 
 from tests.conftest import VALID_BUY_SIGNAL, VALID_TRADE_OPENED
 
-AUTHORIZED_CHAT_ID = int(os.environ["CHAT_ID"])
+AUTHORIZED_CHAT_ID = int(os.environ["ADMIN_CHAT_ID"])
+BROADCAST_CHAT_ID = int(os.environ["CHAT_ID"])
 
 
 def _update(text: str, chat_id: int = AUTHORIZED_CHAT_ID, update_id: int = 1):
@@ -50,9 +51,21 @@ def test_webhook_accepts_correct_secret_token(client):
     assert resp.json() == {"ok": True}
 
 
+def test_broadcast_chat_is_not_authorized_for_commands(client):
+    """The signal group (CHAT_ID) receives broadcasts but must not be able to
+    issue commands - only ADMIN_CHAT_ID is authorized."""
+    headers = {"X-Telegram-Bot-Api-Secret-Token": os.environ["WEBHOOK_SECRET_TOKEN"]}
+    resp = client.post(
+        "/telegram/webhook",
+        json=_update("/positions", chat_id=BROADCAST_CHAT_ID, update_id=3),
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+
 def test_start_replies_only_to_authorized_chat(client):
     """
-    An update from a chat_id other than settings.CHAT_ID must not produce a
+    An update from a chat_id other than settings.ADMIN_CHAT_ID must not produce a
     reply. We can't easily intercept the outbound sendMessage call (that's
     inside python-telegram-bot, not app.telegram), but we can assert the
     webhook itself still returns 200 (accepted, not an error) even though
@@ -130,7 +143,7 @@ def test_positions_handler_reflects_open_trade(client, auth_headers):
 
 def test_unauthorized_chat_gets_no_reply():
     """The _authorized_only decorator must short-circuit before touching
-    the DB or replying, for any chat_id other than settings.CHAT_ID."""
+    the DB or replying, for any chat_id other than settings.ADMIN_CHAT_ID."""
     import asyncio
 
     from app.bot_handlers import start as start_handler

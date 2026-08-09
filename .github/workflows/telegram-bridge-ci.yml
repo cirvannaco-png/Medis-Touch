@@ -62,6 +62,7 @@ jobs:
         env:
           BOT_TOKEN: "123456:ci-placeholder"
           CHAT_ID: "-1000000000"
+          ADMIN_CHAT_ID: "777000777"
           SECRET_KEY: "ci-placeholder-secret"
         run: python scripts/render_sync_secrets.py --dry-run
 
@@ -69,6 +70,7 @@ jobs:
         env:
           BOT_TOKEN: "123456:ci-placeholder"
           CHAT_ID: "-1000000000"
+          ADMIN_CHAT_ID: "777000777"
           SECRET_KEY: "ci-placeholder-secret"
           WEBHOOK_SECRET_TOKEN: "ci-placeholder-webhook-secret"
           DATABASE_URL: "sqlite+aiosqlite:///./ci_signals.db"

@@ -20,7 +20,7 @@ EXPOSE 8000
 
 # 0. Fail fast with a readable message if required secrets aren't set,
 #    instead of a raw pydantic ValidationError traceback from inside
-#    `alembic upgrade head`. On Render, BOT_TOKEN/CHAT_ID/SECRET_KEY are
+#    `alembic upgrade head`. On Render, BOT_TOKEN/CHAT_ID/ADMIN_CHAT_ID/SECRET_KEY are
 #    `sync: false` in render.yaml, meaning Blueprint sync creates the slots
 #    but does NOT populate them — you must set them by hand in the
 #    Dashboard (Service → Environment) before the first successful deploy.
@@ -29,4 +29,4 @@ EXPOSE 8000
 #    cleanly on container shutdown.
 # PORT is injected by Render (and most container platforms); fall back to
 # 8000 for local `docker run` without -e PORT.
-CMD ["sh", "-c", "python -c 'from app.config import settings' || { echo 'FATAL: missing required env vars (BOT_TOKEN / CHAT_ID / SECRET_KEY). Set them in Render Dashboard -> Service -> Environment, then redeploy.' >&2; exit 1; }; alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "python -c 'from app.config import settings' || { echo 'FATAL: missing required env vars (BOT_TOKEN / CHAT_ID / ADMIN_CHAT_ID / SECRET_KEY). Set them in Render Dashboard -> Service -> Environment, then redeploy.' >&2; exit 1; }; alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
