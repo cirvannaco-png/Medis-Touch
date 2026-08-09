@@ -1,0 +1,37 @@
+name: EA validate (MQL5)
+
+# MetaEditor is Windows-only, so this is a structural check, not a compile:
+# every #include must resolve, no header may be empty or have unbalanced
+# include guards, and no compiled .ex5/.ex4 may be committed.
+on:
+  push:
+    paths:
+      - "EA/**"
+      - "tools/validate_mql5.py"
+      - ".github/workflows/ea-validate.yml"
+  pull_request:
+    paths:
+      - "EA/**"
+      - "tools/validate_mql5.py"
+      - ".github/workflows/ea-validate.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ea-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate MQL5 include tree
+        run: python tools/validate_mql5.py EA

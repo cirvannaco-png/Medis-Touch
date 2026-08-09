@@ -6,9 +6,11 @@ Medis Touch is an MT5 Expert Advisor (EA) suite with a production-ready Telegram
 
 | Directory | What it is |
 |-----------|------------|
-| [`mql5/`](mql5/) | MQL5 Expert Advisor source — Experts, Include headers, and Scripts |
+| [`EA/`](EA/) | MQL5 source for MedisTouch v2.8 — Expert Advisor, indicator, and the `includes/` engine tree |
+| [`mql5/`](mql5/) | Legacy placeholder tree mirroring the MT5 terminal layout (Experts / Include / Scripts) |
 | [`telegram-bridge/`](telegram-bridge/) | FastAPI service: receives signals from the EA and posts them to Telegram |
 | [`docs/`](docs/) | Changelog and MALI audit history |
+
 
 ## How the pieces talk to each other
 
@@ -38,22 +40,33 @@ See [`telegram-bridge/README.md`](telegram-bridge/README.md) for full environmen
 ## Status
 
 - **telegram-bridge**: implemented, tested, deployable (see below).
-- **mql5/**: directory structure is in place; the compiled EA is **not yet
-  committed here**. It currently lives outside this repo during active
-  development and will be added to `mql5/Experts/MedisTouch/` once it's
-  wired up to talk to this backend's `/signal` endpoint. Until that lands,
-  treat `mql5/` as a placeholder, not a working EA - see the `.gitkeep`
-  markers and per-folder `README.md` files for what belongs in each spot.
+- **EA/**: MedisTouch **v2.8** source is committed here — the EA
+  (`MedisTouch_v2.8.mq5`), the visuals-only indicator
+  (`MedisTouch_Indicator_v2.8.mq5`) and the full `includes/` engine tree.
+  Compiled `.ex5` output is git-ignored; build it in MetaEditor. CI runs a
+  structural check on every push (see `EA/README.md`).
+- **mql5/**: legacy placeholder tree kept for the terminal-style folder
+  layout (`Experts/`, `Include/`, `Scripts/`). Nothing new should be added
+  there — `EA/` is the source of truth.
 
 ## Repository layout
 
 ```
 medis-touch/
-├── mql5/                      # placeholder - compiled EA not yet committed, see Status above
+├── EA/                        # MQL5 source (v2.8) — the source of truth
+│   ├── MedisTouch_v2.8.mq5           # Expert Advisor: decision routing + execution + publishing
+│   ├── MedisTouch_Indicator_v2.8.mq5 # chart indicator: visuals/dashboard only
+│   └── includes/              # engine tree (Core, Analysis, Structure, SmartMoney,
+│                              # Trading, Decision, Execution, Recovery, Portfolio,
+│                              # Signals, Monitoring, UI) + v2.8 facade headers
+├── tools/
+│   └── validate_mql5.py       # CI: resolves every #include, rejects empty headers/binaries
+├── mql5/                      # legacy placeholder tree, see Status above
 │   ├── Experts/
-│   │   └── MedisTouch/        # destination for the compiled EA (.mq5/.ex5) once added
-│   ├── Include/               # shared MQL5 headers, once added
-│   └── Scripts/               # test / debug scripts, once added
+│   │   └── MedisTouch/
+│   ├── Include/
+│   └── Scripts/
+
 ├── telegram-bridge/
 │   ├── app/
 │   │   ├── main.py            # FastAPI app factory + ASGI middlewares

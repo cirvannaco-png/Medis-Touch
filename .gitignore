@@ -1,0 +1,39 @@
+# Compiled MQL5/MQL4 binaries — never commit build output.
+# MetaEditor writes these next to the source; they are machine- and
+# build-specific and would make every compile a diff.
+*.ex5
+*.ex4
+
+# MetaTrader local artefacts
+*.log
+*.tmp
+MQL5/Logs/
+Files/*.csv
+
+# Python / backend
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local databases produced by the backend during dev/CI
+*.db
+*.sqlite3
+signals.db
+ci_signals.db
+
+# Secrets — real values live in Render env vars / GitHub Actions secrets.
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

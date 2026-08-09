@@ -7,6 +7,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **`EA/` — MedisTouch v2.8 MQL5 source is now in the repository.**
+  `EA/MedisTouch_v2.8.mq5` (Expert Advisor), `EA/MedisTouch_Indicator_v2.8.mq5`
+  (visuals-only chart indicator, since MQL5 forbids trading calls from an
+  indicator context) and the full engine under `EA/includes/`. Three facade
+  headers expose the v2.8 additions at stable include paths:
+  `includes/InducementEngine.mqh`, `includes/HTF_OrderBlock.mqh`,
+  `includes/VolatilityRegime.mqh`.
+- **`Decision/` layer completed.** The tree referenced
+  `Decision/DecisionEngine.mqh` and `Decision/TradeDecision.mqh` which did not
+  exist, and `Decision/DecisionStore.mqh` was committed empty — the EA could
+  not compile at all. Now implemented:
+  - `TradeDecision.mqh` — `TradeDecisionRecord`, `ExecutionRecord` and
+    `ENUM_TRADE_POLICY` (`IGNORE`/`SIGNAL_ONLY`/`EXECUTE_ONLY`/`EXECUTE_AND_SIGNAL`),
+    shared by the router, order manager, publisher and store so all four act on
+    one immutable record.
+  - `DecisionEngine.mqh` — policy router: confidence thresholds per channel,
+    an execution-only spread gate (a wide spread ruins the fill, it does not
+    invalidate the analysis, so subscribers still get the signal),
+    `reduce_risk` below `InpFullRiskConfidence`, and monotonic decision IDs
+    with `SeedNextId()` so a restarted terminal never reissues an ID already
+    baked into a broker order comment.
+  - `DecisionStore.mqh` — append-only CSV persistence in `MQL5/Files`
+    (`MedisTouch_Decisions_<SYMBOL>.csv`, `MedisTouch_Executions_<SYMBOL>.csv`)
+    with an in-memory mirror, idempotent saves, and a flush+close per write so
+    a decision is durable before the order that follows it can fill. This is
+    the half of the state `RecoveryEngine` cannot get from the broker.
+- **Root `.gitignore`** covering compiled MQL5 output (`*.ex5`, `*.ex4`),
+  Python/pytest/ruff caches, local SQLite files and `.env` (with
+  `.env.example` kept).
+- **`ea-validate` CI workflow** (`tools/validate_mql5.py`). MetaEditor is
+  Windows-only, so CI does a structural check instead of a compile: every
+  `#include` must resolve (case-sensitively), no header may be empty, include
+  guards must balance, and no compiled binary may be committed.
+
 ### Changed
 - **`ADMIN_CHAT_ID` split out from `CHAT_ID`.** `CHAT_ID` is now purely the
   outbound broadcast destination (the signal group), while the inbound bot
@@ -15,6 +50,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   query live positions and P/L. `ADMIN_CHAT_ID` is required at startup, the
   same treatment as `BOT_TOKEN`; set it in Render (or `.env`) before
   deploying, and add it as a repository secret for the Render sync workflow.
+  The `ADMIN_CHAT_ID` repository secret is configured, so
+  `.github/workflows/render-secrets.yml` can push it to Render; the value is
+  never committed.
+
 
 ## [1.3.0] — POST /trade, Render blueprint fixes, dependency refresh
 

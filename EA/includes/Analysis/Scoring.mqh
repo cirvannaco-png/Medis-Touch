@@ -1,0 +1,582 @@
+//+------------------------------------------------------------------+
+//|                                                Analysis/Scoring.mqh |
+//+------------------------------------------------------------------+
+#ifndef SCORING_MQH
+#define SCORING_MQH
+
+#include "../Core/Config.mqh"
+#include "../Core/CandleData.mqh"
+#include "TFContext.mqh"
+#include "../SmartMoney/Inducement.mqh"
+#include "../SmartMoney/PremiumDiscount.mqh"
+#include "../SmartMoney/MarketPhase.mqh"
+#include "../SmartMoney/OrderBlock.mqh"
+#include "VolatilityRegime.mqh"
+#include "../Core/SessionFilter.mqh"
+
+// v2.1 SCORING MODEL — replaces the old flat weighted sum with the
+// point table from the inducement-engine spec:
+//   Strong Impulse             +15  \
+//   Internal Structure Formed  +10   |  from CInducement.Validate() —
+//   Internal Liquidity Sweep   +25   |  see SmartMoney/Inducement.mqh
+//   BOS after Sweep            +20  /
+//   Fresh FVG                  +15
+//   HTF Alignment               +15
+//   -------------------------------
+//   Total                      100
+//
+// GATING, not just scoring: if the liquidity sweep (and its confirming
+// minor BOS) never happens, confidence is 0 and CTradeDecision's existing
+// "confidence < threshold" check blocks the setup outright — per your
+// instruction, this removes false entries rather than just down-weighting
+// them. Two further gates are available and OFF/ON as noted:
+//   - Premium/Discount filter: ON by default. Buys must be in the lower
+//     half (discount) of the impulse range, sells in the upper half.
+//   - Market Phase (Distribution-only) filter: OFF by default, because
+//     the phase read is the least rigorously defined of the additions
+//     (see MarketPhase.mqh's caveat) — enable via RequireDistribution
+//     if you want to test it.
+//
+// The legacy Trend/BOS/Liquidity/FVG/SR sub-scores are KEPT and still
+// computed (TrendScore, FVGScore feed the point table above; BOSChoCHScore,
+// LiquidityScore, SRScore now feed EvaluateReasons() only, as informational
+// "why" flags on the dashboard) — they are deliberately NOT re-added into
+// CalculateConfidence's sum, since the Inducement engine's sweepScore/
+// bosScore already covers that evidence on the entry timeframe and adding
+// both would double-count the same signal under two names.
+//
+// v2.8 additions (see ConfigureHtfOrderBlock/ConfigureVolatilityRegime/
+// ConfigureSessionFilter below): HTF Order Block confluence and the
+// low-volatility-regime block follow the same OFF-by-default,
+// unvalidated-until-backtested discipline as the v2.6 gates. The session
+// filter is the one exception — it defaults ON, because "trade every
+// session with equal weight" was never a validated assumption in the
+// first place; it was just what happens when nothing gates on session at
+// all. See Core/SessionFilter.mqh.
+class CScoringEngine
+  {
+private:
+   CTFContext*       m_trendCtx;
+   CTFContext*       m_bosCtx;
+   CTFContext*       m_liqCtx;
+   CTFContext*       m_fvgCtx;
+   CTFContext*       m_srCtx;
+   CCandleData*      m_priceRef;   // chart-TF candles, used only for "current price"
+
+   CInducement       m_inducement;
+   bool              m_requirePremiumDiscount;
+   bool              m_requireDistribution;
+   CMarketPhase      m_phase;
+
+   // v2.6: Volume + Fibonacci — see ConfigureVolumeFibonacci() below for
+   // why both default OFF.
+   bool              m_requireVolumeConfirmation;
+   double            m_rvolThreshold;
+   bool              m_requireFibonacciZone;
+   double            m_fibZoneMinPct;
+   double            m_fibZoneMaxPct;
+   bool              m_requireValueAreaLocation;
+
+   // --- v2.8 additions -------------------------------------------------
+   CTFContext*       m_htfObCtx;             // separate, genuinely-higher timeframe context (e.g. H4/D1)
+   bool              m_requireHtfOB;         // OFF by default — see class-level discipline note
+   double            m_obDistATRMax;         // how far price may sit from an OB's midpoint and still count
+   CVolatilityRegime m_volRegime;
+   bool              m_blockLowVolRegime;    // OFF by default
+   CSessionFilter    m_sessionFilter;        // ON by default (see Init()) — direct fix for
+                                              // "trading time is across all sessions"
+
+   double            OBScore(bool forBuy);
+
+   double            TrendScore(bool forBuy);
+   double            BOSChoCHScore(bool forBuy);
+   double            LiquidityScore(bool forBuy);
+   double            FVGScore(bool forBuy);
+   double            SRScore(bool forBuy);
+   double            VolumeScore(bool forBuy);
+   double            FibonacciScore(bool forBuy);
+   double            ValueAreaScore(bool forBuy);
+   double            PipSize();
+   double            CurrentPrice();
+
+public:
+                     CScoringEngine();
+   void              Init(CTFContext* trendCtx, CTFContext* bosCtx, CTFContext* liqCtx,
+                          CTFContext* fvgCtx, CTFContext* srCtx, CCandleData* priceRef);
+   void              ConfigureInducement(int lookbackBars, double impulseATRMult, double impulseBodyRatio,
+                                         double equalTolATR, int maxLegExtend,
+                                         bool requirePremiumDiscount, bool requireDistribution,
+                                         int phaseRangeLookback, double phaseCompressionATRMult);
+   // v2.6 addition. Volume and Fibonacci are FILTERS on top of the existing
+   // Inducement-based confidence model, not additional signal generators:
+   // when a gate is enabled and fails, CalculateConfidence returns 0 (same
+   // as the premium/discount and phase gates above), exactly like the
+   // spec's "trade is valid only if every mandatory filter passes." When a
+   // gate passes (or is disabled), a small capped bonus (5 pts each) is
+   // added for ranking, so a stronger volume/fib read can break a tie
+   // between two otherwise-equal setups without being able to manufacture
+   // a passing score on its own.
+   //
+   // Both gates default OFF. The spec's own "Backtesting Requirements"
+   // section says a module should only be combined in after it's shown,
+   // independently and out-of-sample, to improve results — and this
+   // codebase currently has no MQL5 compile/backtest environment (Android/
+   // Termux can't run MetaEditor's Strategy Tester; see project notes).
+   // Shipping these gates pre-enabled would be exactly the un-validated
+   // assumption that discipline exists to prevent. Flip both to true once
+   // you've run the comparison on a Windows VPS/terminal.
+   void              ConfigureVolumeFibonacci(bool requireVolumeConfirmation, double rvolThreshold,
+                                              bool requireFibonacciZone, double fibZoneMinPct, double fibZoneMaxPct);
+   // v2.6 addition. Same gating discipline as ConfigureVolumeFibonacci():
+   // requires m_srCtx (the chart-TF context, same one SRScore() uses) to
+   // have a valid volume profile. Defaults OFF — this engine is brand new
+   // and hasn't been backtested at all yet, so it gets the same
+   // "unvalidated until proven" treatment.
+   void              ConfigureValueArea(bool requireValueAreaLocation);
+   // v2.8 addition. htfObCtx MUST be a genuinely higher timeframe than
+   // fvgCtx/bosCtx (e.g. entry on M15/H1, this on H4/D1) — passing the
+   // same context defeats the point of "higher timeframe" confluence.
+   // Defaults OFF for the same "unvalidated until proven" reason as
+   // ConfigureVolumeFibonacci(): it's a brand-new engine, never backtested.
+   void              ConfigureHtfOrderBlock(CTFContext* htfObCtx, bool requireHtfOB, double distATRMax = 2.0);
+   // v2.8 addition. Blocks entries when the ATR-percentile regime reads
+   // LOW (thin, choppy — see VolatilityRegime.mqh). Defaults OFF, same
+   // discipline as above; the regime read itself is always populated in
+   // EvaluateReasons() for diagnostics regardless of this flag.
+   void              ConfigureVolatilityRegime(bool blockLowVolRegime, int lookback = 100,
+                                                double lowPct = 0.25, double highPct = 0.75);
+   // v2.8 addition. ON by default — this is the direct fix for "EA trades
+   // every session uniformly": by default allows London, New York, and
+   // the London/NY overlap; blocks Tokyo-only and dead hours. Pass
+   // enabled=false to restore pre-v2.8 all-sessions behavior.
+   void              ConfigureSessionFilter(bool enabled, bool allowTokyo = false, bool allowLondon = true,
+                                            bool allowNewYork = true, bool allowOverlap = true);
+   double            CalculateConfidence(bool forBuy);
+   void              EvaluateReasons(bool forBuy, SetupReasons &out);
+   InducementResult  GetInducement(bool forBuy) { return m_inducement.Validate(forBuy); }
+   ENUM_MARKET_PHASE GetPhase() { return m_phase.Detect(); }
+  };
+//+------------------------------------------------------------------+
+CScoringEngine::CScoringEngine() : m_trendCtx(NULL), m_bosCtx(NULL), m_liqCtx(NULL),
+                                    m_fvgCtx(NULL), m_srCtx(NULL), m_priceRef(NULL),
+                                    m_requirePremiumDiscount(true), m_requireDistribution(false),
+                                    m_requireVolumeConfirmation(false), m_rvolThreshold(1.5),
+                                    m_requireFibonacciZone(false), m_fibZoneMinPct(50.0), m_fibZoneMaxPct(61.8),
+                                    m_requireValueAreaLocation(false),
+                                    m_htfObCtx(NULL), m_requireHtfOB(false), m_obDistATRMax(2.0),
+                                    m_blockLowVolRegime(false)
+  {
+   // Session filter defaults to ON — see ConfigureSessionFilter()'s
+   // comment. Unlike the other v2.8 gates this isn't a new, unbacktested
+   // signal; it's a liquidity-hours restriction, and trading 24h flat
+   // (including the Tokyo-only dead zone) is itself the unvalidated
+   // assumption per the audit that flagged it.
+   m_sessionFilter.Configure(true, false, true, true, true);
+  }
+void CScoringEngine::Init(CTFContext* trendCtx, CTFContext* bosCtx, CTFContext* liqCtx,
+                          CTFContext* fvgCtx, CTFContext* srCtx, CCandleData* priceRef)
+  {
+   m_trendCtx = trendCtx;
+   m_bosCtx = bosCtx;
+   m_liqCtx = liqCtx;
+   m_fvgCtx = fvgCtx;
+   m_srCtx = srCtx;
+   m_priceRef = priceRef;
+   if(m_fvgCtx != NULL)
+     {
+      m_inducement.Init(&m_fvgCtx.candles);
+      if(m_liqCtx != NULL)
+         m_phase.Init(&m_fvgCtx.candles, &m_liqCtx.liquidity);
+     }
+   if(m_bosCtx != NULL)
+      m_volRegime.Init(&m_bosCtx.candles); // defaults: 100-bar lookback, 25th/75th pct bands
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::ConfigureInducement(int lookbackBars, double impulseATRMult, double impulseBodyRatio,
+                                         double equalTolATR, int maxLegExtend,
+                                         bool requirePremiumDiscount, bool requireDistribution,
+                                         int phaseRangeLookback, double phaseCompressionATRMult)
+  {
+   if(m_fvgCtx != NULL)
+     {
+      m_inducement.Init(&m_fvgCtx.candles, lookbackBars, impulseATRMult, impulseBodyRatio, equalTolATR, maxLegExtend);
+      if(m_liqCtx != NULL)
+         m_phase.Init(&m_fvgCtx.candles, &m_liqCtx.liquidity, phaseRangeLookback, phaseCompressionATRMult);
+     }
+   m_requirePremiumDiscount = requirePremiumDiscount;
+   m_requireDistribution = requireDistribution;
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::ConfigureVolumeFibonacci(bool requireVolumeConfirmation, double rvolThreshold,
+                                              bool requireFibonacciZone, double fibZoneMinPct, double fibZoneMaxPct)
+  {
+   m_requireVolumeConfirmation = requireVolumeConfirmation;
+   m_rvolThreshold = (rvolThreshold > 0) ? rvolThreshold : 1.5;
+   m_requireFibonacciZone = requireFibonacciZone;
+   m_fibZoneMinPct = fibZoneMinPct;
+   m_fibZoneMaxPct = fibZoneMaxPct;
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::ConfigureValueArea(bool requireValueAreaLocation)
+  {
+   m_requireValueAreaLocation = requireValueAreaLocation;
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::ConfigureHtfOrderBlock(CTFContext* htfObCtx, bool requireHtfOB, double distATRMax)
+  {
+   m_htfObCtx = htfObCtx;
+   m_requireHtfOB = requireHtfOB;
+   m_obDistATRMax = (distATRMax > 0) ? distATRMax : 2.0;
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::ConfigureVolatilityRegime(bool blockLowVolRegime, int lookback, double lowPct, double highPct)
+  {
+   m_blockLowVolRegime = blockLowVolRegime;
+   if(m_bosCtx != NULL)
+      m_volRegime.Init(&m_bosCtx.candles, lookback, lowPct, highPct);
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::ConfigureSessionFilter(bool enabled, bool allowTokyo, bool allowLondon,
+                                            bool allowNewYork, bool allowOverlap)
+  {
+   m_sessionFilter.Configure(enabled, allowTokyo, allowLondon, allowNewYork, allowOverlap);
+  }
+//+------------------------------------------------------------------+
+double CScoringEngine::CurrentPrice()
+  {
+   if(m_priceRef == NULL || m_priceRef.Total() == 0) return 0.0;
+   return m_priceRef.GetCandle(0).close;
+  }
+//+------------------------------------------------------------------+
+double CScoringEngine::TrendScore(bool forBuy)
+  {
+   if(m_trendCtx == NULL) return 0.0;
+   ENUM_TREND_STATE t = m_trendCtx.trend.GetCurrentTrend();
+   if(forBuy)
+     {
+      if(t == TREND_BULL_STRONG) return 1.0;
+      if(t == TREND_BULL) return 0.6;
+      return 0.0;
+     }
+   else
+     {
+      if(t == TREND_BEAR_STRONG) return 1.0;
+      if(t == TREND_BEAR) return 0.6;
+      return 0.0;
+     }
+  }
+//+------------------------------------------------------------------+
+double CScoringEngine::BOSChoCHScore(bool forBuy)
+  {
+   if(m_bosCtx == NULL) return 0.0;
+   const int recencyBars = 20;
+   double score = 0.0;
+
+   if(m_bosCtx.bos.Count() > 0)
+     {
+      BOSEvent recent = m_bosCtx.bos.GetBOS(0);
+      if(recent.is_bullish == forBuy && recent.bar_index <= recencyBars)
+         score += 0.6 * recent.strength;
+     }
+   if(m_bosCtx.choch.Count() > 0)
+     {
+      CHOCHPoint c0 = m_bosCtx.choch.Get(0);
+      if(c0.bullish == forBuy && c0.bar_index <= recencyBars)
+         score += 0.4;
+      else if(m_bosCtx.choch.Count() > 1)
+        {
+         CHOCHPoint c1 = m_bosCtx.choch.Get(1);
+         if(c1.bullish == forBuy && c1.bar_index <= recencyBars)
+            score += 0.4;
+        }
+     }
+   return MathMin(score, 1.0);
+  }
+//+------------------------------------------------------------------+
+double CScoringEngine::LiquidityScore(bool forBuy)
+  {
+   if(m_liqCtx == NULL || m_liqCtx.liquidity.EventCount() == 0) return 0.0;
+   const int recencyBars = 10;
+   LiquidityEvent ev = m_liqCtx.liquidity.GetEvent(0);
+   if(ev.bar_index > recencyBars) return 0.0;
+   bool supportsBuy = (ev.type == LIQ_SELL_SIDE);
+   if(forBuy == supportsBuy) return ev.strength;
+   return 0.0;
+  }
+//+------------------------------------------------------------------+
+double CScoringEngine::FVGScore(bool forBuy)
+  {
+   if(m_fvgCtx == NULL || m_fvgCtx.candles.Total() == 0) return 0.0;
+   double price = CurrentPrice();
+   double atr = m_fvgCtx.candles.GetATR(0);
+   if(price <= 0 || atr <= 0) return 0.0;
+   ENUM_FVG_DIR wantDir = forBuy ? FVG_BULL : FVG_BEAR;
+
+   for(int i = 0; i < m_fvgCtx.fvg.Count(); i++)
+     {
+      FVGZone z = m_fvgCtx.fvg.GetZone(i);
+      if(z.dir != wantDir) continue;
+      if(z.state != FVG_FRESH && z.state != FVG_TESTED) continue;
+      double mid = (z.top + z.bottom) / 2.0;
+      double distATR = MathAbs(price - mid) / atr;
+      if(distATR > 3.0) continue;
+      double base = (z.state == FVG_FRESH) ? 1.0 : 0.6;
+      double proximity = MathMax(0.0, 1.0 - distATR / 3.0);
+      return base * (0.5 + 0.5 * proximity);
+     }
+   return 0.0;
+  }
+//+------------------------------------------------------------------+
+double CScoringEngine::SRScore(bool forBuy)
+  {
+   if(m_srCtx == NULL || m_srCtx.candles.Total() == 0) return 0.0;
+   double price = CurrentPrice();
+   double atr = m_srCtx.candles.GetATR(0);
+   if(price <= 0 || atr <= 0) return 0.0;
+
+   for(int i = 0; i < m_srCtx.sr.Count(); i++)
+     {
+      SRZone z = m_srCtx.sr.GetZone(i);
+      bool isSupport = (z.type == SR_MAJOR_SUPPORT || z.type == SR_MINOR_SUPPORT);
+      bool isResistance = (z.type == SR_MAJOR_RESISTANCE || z.type == SR_MINOR_RESISTANCE);
+      if(forBuy && !isSupport) continue;
+      if(!forBuy && !isResistance) continue;
+      double mid = (z.top + z.bottom) / 2.0;
+      double distATR = MathAbs(price - mid) / atr;
+      if(distATR > 1.5) continue;
+      return MathMin((double)z.touches / 3.0, 1.0);
+     }
+   return 0.0;
+  }
+//+------------------------------------------------------------------+
+// RVOL of the current bar on the BOS/structure timeframe — that's where
+// swings and breakouts are actually confirmed, so it's the natural home
+// for both the volume gate and the swing-anchored Fibonacci leg (see
+// SmartMoney/VolumeEngine.mqh, SmartMoney/FibonacciEngine.mqh).
+double CScoringEngine::VolumeScore(bool forBuy)
+  {
+   if(m_bosCtx == NULL) return 0.0;
+   return m_bosCtx.volume.Score(0, m_rvolThreshold);
+  }
+//+------------------------------------------------------------------+
+double CScoringEngine::FibonacciScore(bool forBuy)
+  {
+   if(m_bosCtx == NULL) return 0.0;
+   double price = CurrentPrice();
+   if(price <= 0) return 0.0;
+   return m_bosCtx.fibonacci.Score(forBuy, price, m_fibZoneMinPct, m_fibZoneMaxPct);
+  }
+//+------------------------------------------------------------------+
+// Value Area is chart-TF, same as SRScore() — it's "where is price
+// relative to fair value on the resolution you're actually looking at."
+double CScoringEngine::ValueAreaScore(bool forBuy)
+  {
+   if(m_srCtx == NULL) return 0.0;
+   double price = CurrentPrice();
+   if(price <= 0) return 0.0;
+   return m_srCtx.valueArea.Score(forBuy, price);
+  }
+//+------------------------------------------------------------------+
+// v2.8. Distance-scored the same way SRScore() rewards proximity: full
+// credit at the OB midpoint, decaying to 0 at m_obDistATRMax. Uses the
+// HTF context's OWN atr (m_htfObCtx.candles), not the entry-TF ATR — a
+// "2 ATR" distance means something different on H4 than on M15, and
+// mixing them would silently change what "near confluence" means.
+double CScoringEngine::OBScore(bool forBuy)
+  {
+   if(m_htfObCtx == NULL) return 0.0;
+   double price = CurrentPrice();
+   if(price <= 0) return 0.0;
+   double atr = m_htfObCtx.candles.GetATR(0);
+   if(atr <= 0) return 0.0;
+
+   OrderBlockZone z;
+   ENUM_FVG_DIR dir = forBuy ? FVG_BULL : FVG_BEAR;
+   if(!m_htfObCtx.orderBlock.NearestZone(dir, price, atr, m_obDistATRMax, z)) return 0.0;
+
+   double mid = (z.top + z.bottom) / 2.0;
+   double distATR = MathAbs(price - mid) / atr;
+   double proximity = MathMax(0.0, 1.0 - distATR / m_obDistATRMax);
+   double stateMult = (z.state == OB_FRESH) ? 1.0 : 0.7; // tested zones still count, just less
+   return MathMin(proximity * stateMult, 1.0);
+  }
+//+------------------------------------------------------------------+
+double CScoringEngine::CalculateConfidence(bool forBuy)
+  {
+   // v2.8: session gate runs first and cheapest — no point evaluating the
+   // rest of the pipeline for a bar that's going to be rejected anyway.
+   if(!m_sessionFilter.IsAllowed())
+      return 0.0;
+
+   InducementResult ind = m_inducement.Validate(forBuy);
+   if(!ind.valid) return 0.0;
+
+   double score = ind.totalScore;
+   score += 15.0 * FVGScore(forBuy);
+   score += 15.0 * TrendScore(forBuy);
+
+   if(m_requirePremiumDiscount)
+     {
+      double price = CurrentPrice();
+      if(price > 0 && !CPremiumDiscount::OK(forBuy, price, ind.leg))
+         return 0.0;
+     }
+
+   if(m_requireDistribution)
+     {
+      if(m_phase.Detect() != PHASE_DISTRIBUTION)
+         return 0.0;
+     }
+
+   // v2.6 gates — see ConfigureVolumeFibonacci()'s comment for why both
+   // default OFF. When ON, a fail here zeroes confidence exactly like the
+   // premium/discount and phase gates above; nothing downstream can undo
+   // that with a high inducement score. When passed (or disabled), a
+   // small capped bonus nudges ranking only.
+   if(m_requireVolumeConfirmation)
+     {
+      if(m_bosCtx == NULL || m_bosCtx.volume.RVOL(0) < m_rvolThreshold)
+         return 0.0;
+     }
+   if(m_requireFibonacciZone)
+     {
+      double price = CurrentPrice();
+      if(price <= 0 || m_bosCtx == NULL ||
+         !m_bosCtx.fibonacci.InPullbackZone(forBuy, price, m_fibZoneMinPct, m_fibZoneMaxPct))
+         return 0.0;
+     }
+   if(m_requireValueAreaLocation)
+     {
+      double price = CurrentPrice();
+      if(price <= 0 || m_srCtx == NULL || !m_srCtx.valueArea.IsValid() ||
+         !m_srCtx.valueArea.LocationOK(forBuy, price))
+         return 0.0;
+     }
+   // v2.8 gates — same "fail-closed on unverifiable, hard-zero on
+   // confirmed-wrong" discipline as the v2.6 block above. Both OFF by
+   // default (see ConfigureHtfOrderBlock()/ConfigureVolatilityRegime()).
+   if(m_requireHtfOB)
+     {
+      if(OBScore(forBuy) <= 0.0)
+         return 0.0;
+     }
+   if(m_blockLowVolRegime)
+     {
+      ENUM_VOL_REGIME regime = m_volRegime.Classify(0);
+      if(regime == VOL_REGIME_LOW)
+         return 0.0;
+      // VOL_REGIME_UNDEFINED (not enough ATR history) fails OPEN here,
+      // deliberately inconsistent with the fail-closed CONFIRMATION rule
+      // elsewhere: this is a data-availability gap, not a claim the setup
+      // failed to confirm, and early-history warm-up shouldn't zero every
+      // setup for the first `lookback` bars of a backtest.
+     }
+
+   score += 5.0 * VolumeScore(forBuy);
+   score += 5.0 * FibonacciScore(forBuy);
+   score += 5.0 * ValueAreaScore(forBuy);
+   score += 5.0 * OBScore(forBuy);
+
+   return MathMin(score, 100.0);
+  }
+//+------------------------------------------------------------------+
+double CScoringEngine::PipSize()
+  {
+   if(m_priceRef == NULL) return 0.0001;
+   string sym = m_priceRef.Symbol();
+   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(sym, SYMBOL_POINT);
+   return (digits == 3 || digits == 5) ? point * 10.0 : point;
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::EvaluateReasons(bool forBuy, SetupReasons &out)
+  {
+   ZeroMemory(out);
+   out.trend_aligned   = (TrendScore(forBuy) >= 0.6);
+   out.bos_confirmed   = (BOSChoCHScore(forBuy) > 0.0);
+   out.liquidity_swept = (LiquidityScore(forBuy) > 0.0);
+   out.fresh_fvg       = (FVGScore(forBuy) > 0.0);
+   out.sr_confluence   = (SRScore(forBuy) > 0.0);
+
+   InducementResult ind = m_inducement.Validate(forBuy);
+   out.inducement_valid = ind.valid;
+   out.phase = m_phase.Detect();
+
+   double price = CurrentPrice();
+   out.premium_discount_ok = (price > 0) ? CPremiumDiscount::OK(forBuy, price, ind.leg) : true;
+
+   // v2.6 diagnostics — always populated (dashboard/CSV visibility) even
+   // when the corresponding gate in CalculateConfidence is disabled.
+   if(m_bosCtx != NULL)
+     {
+      out.rvol = m_bosCtx.volume.RVOL(0);
+      out.volume_confirmed = (out.rvol >= m_rvolThreshold);
+      if(price > 0)
+        {
+         out.fib_zone = m_bosCtx.fibonacci.Zone(forBuy, price);
+         out.fib_in_zone = m_bosCtx.fibonacci.InPullbackZone(forBuy, price, m_fibZoneMinPct, m_fibZoneMaxPct);
+         double pctOut;
+         out.fib_nearest_level = m_bosCtx.fibonacci.NearestLevel(forBuy, price, pctOut);
+        }
+     }
+
+   if(m_srCtx != NULL && m_srCtx.valueArea.IsValid())
+     {
+      out.value_area_ok = m_srCtx.valueArea.LocationOK(forBuy, price);
+      out.va_zone = m_srCtx.valueArea.Zone(price);
+      out.va_poc = m_srCtx.valueArea.POC();
+      out.va_high = m_srCtx.valueArea.VAH();
+      out.va_low = m_srCtx.valueArea.VAL();
+     }
+
+   // v2.8 diagnostics — always populated regardless of gate state, same
+   // convention as the v2.6 block above.
+   out.htf_ob_confluence = (OBScore(forBuy) > 0.0);
+   if(m_htfObCtx != NULL && price > 0)
+     {
+      double atr = m_htfObCtx.candles.GetATR(0);
+      OrderBlockZone z;
+      if(atr > 0 && m_htfObCtx.orderBlock.NearestZone(forBuy ? FVG_BULL : FVG_BEAR, price, atr, m_obDistATRMax, z))
+         out.htf_ob_state = z.state;
+     }
+   out.vol_regime = m_volRegime.Classify(0);
+   out.session = m_sessionFilter.CurrentSession();
+   out.session_ok = m_sessionFilter.IsAllowed();
+
+   out.risk_warning = "";
+   if(m_srCtx == NULL || m_priceRef == NULL || m_priceRef.Total() == 0) return;
+
+   double pip = PipSize();
+   if(pip <= 0) pip = 0.0001;
+   double bestDist = -1.0;
+   ENUM_SR_TYPE bestType = SR_MINOR_RESISTANCE;
+   int bestTouches = 0;
+
+   for(int i = 0; i < m_srCtx.sr.Count(); i++)
+     {
+      SRZone z = m_srCtx.sr.GetZone(i);
+      bool isResistance = (z.type == SR_MAJOR_RESISTANCE || z.type == SR_MINOR_RESISTANCE);
+      bool isSupport = (z.type == SR_MAJOR_SUPPORT || z.type == SR_MINOR_SUPPORT);
+      double mid = (z.top + z.bottom) / 2.0;
+
+      if(forBuy && isResistance && mid > price)
+        {
+         double dist = (mid - price) / pip;
+         if(bestDist < 0 || dist < bestDist) { bestDist = dist; bestType = z.type; bestTouches = z.touches; }
+        }
+      else if(!forBuy && isSupport && mid < price)
+        {
+         double dist = (price - mid) / pip;
+         if(bestDist < 0 || dist < bestDist) { bestDist = dist; bestType = z.type; bestTouches = z.touches; }
+        }
+     }
+
+   if(bestDist >= 0 && bestDist <= 60.0)
+     {
+      string strength = (bestType == SR_MAJOR_RESISTANCE || bestType == SR_MAJOR_SUPPORT) ? "High-impact" : "Minor";
+      string kind = forBuy ? "resistance" : "support";
+      out.risk_warning = StringFormat("%s %s %.0f pips away (%d touches)", strength, kind, bestDist, bestTouches);
+     }
+  }
+#endif
+//+------------------------------------------------------------------+
