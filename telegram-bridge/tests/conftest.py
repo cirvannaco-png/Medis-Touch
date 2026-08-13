@@ -126,7 +126,7 @@ def client():
 
         from app.database import engine
         from app.main import app
-        from app.models import Signal, TradeEvent
+        from app.models import BotSetting, Signal, TradeEvent
 
         with TestClient(app) as c:
             yield c
@@ -141,6 +141,7 @@ def client():
             async with engine.begin() as conn:
                 await conn.run_sync(lambda sync_conn: sync_conn.execute(Signal.__table__.delete()))
                 await conn.run_sync(lambda sync_conn: sync_conn.execute(TradeEvent.__table__.delete()))
+                await conn.run_sync(lambda sync_conn: sync_conn.execute(BotSetting.__table__.delete()))
 
         asyncio.run(_truncate())
 

@@ -6,6 +6,7 @@
 
 #include "../Core/Config.mqh"
 #include "../Core/CandleData.mqh"
+#include "../Structure/BOS.mqh"
 
 // v2.8 addition, closing the gap flagged in the pre-rewrite audit: the
 // codebase had Inducement/FVG/Liquidity/SR confluence but nothing reading
@@ -35,11 +36,16 @@ private:
    int                m_maxZones;              // cap so old HTF zones don't accumulate forever
 
    bool              IsDisplacement(int idx, bool &bullish);
+   // FIX (audit #18): checks whether a genuine, chronologically-confirmed
+   // BOS event (from the already-fixed CBOS engine — see Structure/BOS.mqh)
+   // exists at or near this candle, in the matching direction.
+   bool              CoincidesWithStructureBreak(int idx, bool bullish);
    void              UpdateState(OrderBlockZone &z);
+   CBOS*             m_bos;
 
 public:
                      COrderBlock();
-   void              Init(CCandleData* candleData, double displacementATRMult = 1.5,
+   void              Init(CCandleData* candleData, CBOS* bos, double displacementATRMult = 1.5,
                           double minBodyRatio = 0.5, int maxZones = 15);
    void              Detect();
    void              UpdateAllStates();
@@ -50,12 +56,13 @@ public:
    bool              NearestZone(ENUM_FVG_DIR dir, double price, double atr, double distATRMax, OrderBlockZone &out);
   };
 //+------------------------------------------------------------------+
-COrderBlock::COrderBlock() : m_candles(NULL), m_zoneCount(0), m_displacementATRMult(1.5),
+COrderBlock::COrderBlock() : m_candles(NULL), m_bos(NULL), m_zoneCount(0), m_displacementATRMult(1.5),
                               m_minBodyRatio(0.5), m_maxZones(15) {}
 //+------------------------------------------------------------------+
-void COrderBlock::Init(CCandleData* candleData, double displacementATRMult, double minBodyRatio, int maxZones)
+void COrderBlock::Init(CCandleData* candleData, CBOS* bos, double displacementATRMult, double minBodyRatio, int maxZones)
   {
    m_candles = candleData;
+   m_bos = bos;
    m_displacementATRMult = displacementATRMult;
    m_minBodyRatio = minBodyRatio;
    m_maxZones = MathMax(3, maxZones);
@@ -74,6 +81,31 @@ bool COrderBlock::IsDisplacement(int idx, bool &bullish)
    if(body / range < m_minBodyRatio) return false;
    bullish = (cd.close > cd.open);
    return true;
+  }
+//+------------------------------------------------------------------+
+// FIX (audit #18): "large directional candle" alone was standing in for
+// "order block confirmed by displacement + structure break" — the docstring
+// at the top of this file promised the latter but IsDisplacement() only
+// ever checked the former (range/ATR, body/range, direction). A large
+// candle in the middle of a trading range with no structure broken is not
+// an institutional order block by any SMC definition; it's just a big
+// candle. This cross-checks against CBOS's already-corrected, non-
+// lookahead event list: a real BOS event of the matching direction must
+// exist within a small tolerance of this bar for the displacement to
+// count as genuine. Tolerance of 2 bars covers the close that actually
+// triggers the BOS landing 1-2 bars after the visually "big" candle
+// starts the move (common when displacement spans multiple candles).
+bool COrderBlock::CoincidesWithStructureBreak(int idx, bool bullish)
+  {
+   if(m_bos == NULL) return true; // no BOS engine wired in — fail open rather than silently disabling OB detection entirely
+   int n = m_bos.Count();
+   for(int i = 0; i < n; i++)
+     {
+      BOSEvent ev = m_bos.GetBOS(i);
+      if(ev.is_bullish != bullish) continue;
+      if(MathAbs(ev.bar_index - idx) <= 2) return true;
+     }
+   return false;
   }
 //+------------------------------------------------------------------+
 // Series-indexed like FVG.mqh: shift 0 = current bar, i grows toward the
@@ -96,6 +128,7 @@ void COrderBlock::Detect()
      {
       bool dispBullish;
       if(!IsDisplacement(i, dispBullish)) continue;
+      if(!CoincidesWithStructureBreak(i, dispBullish)) continue; // FIX #18: displacement alone isn't enough
 
       // walk backward (older bars) from the displacement candle for the
       // nearest candle of the opposite close direction, within 5 bars —

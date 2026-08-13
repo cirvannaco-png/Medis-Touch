@@ -17,6 +17,7 @@ from app.formatter import format_signal_message, format_trade_message
 from app.logger import logger
 from app.models import Signal, SignalStatus, TradeEvent, TradeEventStatus, TradeEventType
 from app.ratelimit import enforce_rate_limit
+from app.settings_store import is_broadcast_paused, is_symbol_muted
 from app.telegram import NonRetryableError, send_telegram_message
 from app.utils import measure_latency
 from app.validator import validate_signal, validate_trade_event
@@ -218,6 +219,25 @@ async def receive_signal(
 
     # From here on this request exclusively owns signal_id - safe to call
     # Telegram exactly once.
+    #
+    # /mute <SYMBOL> and /pause (Telegram, admin-only - see bot_handlers.py)
+    # write here: a muted symbol or a global pause suppresses the outbound
+    # broadcast without touching the EA at all, and without losing the
+    # signal - it's still recorded as ACTIVE (nothing about the signal
+    # itself failed) with telegram_message_id left null. This mirrors
+    # what /muted and /signal already show, since a muted signal still
+    # counts toward win-rate stats.
+    if await is_broadcast_paused(session) or await is_symbol_muted(session, payload.symbol):
+        db_signal.status = SignalStatus.ACTIVE
+        db_signal.error_message = "Broadcast suppressed (paused or symbol muted)"
+        await session.commit()
+        log.info(f"Signal broadcast suppressed for {payload.symbol}")
+        return SignalResponse(
+            status="suppressed",
+            signal_id=payload.signal_id,
+            details="Broadcast paused or symbol muted - signal recorded, not sent to Telegram.",
+        )
+
     message_text = format_signal_message(payload.model_dump())
     try:
         msg_id = await send_telegram_message(message_text)
@@ -344,15 +364,15 @@ async def receive_trade_event(
     )
 
 
-# ---------- Retry Failed Trade Events Endpoint ----------
-@router.post("/trade/retry-failed")
-async def retry_failed_trade_events(
-    session: AsyncSession = Depends(get_session),
-    _auth: bool = Depends(verify_api_key),
-    _rate: None = Depends(enforce_rate_limit),
-):
-    """Mirrors /retry-failed but for the trade_events table - see that
-    endpoint's comments for why PENDING rows older than
+# ---------- Retry Failed Trade Events (core + HTTP endpoint) ----------
+# Split into a plain async function (retry_failed_trade_events_core) and a
+# thin route wrapper so app/bot_handlers.py's /retry command can call the
+# exact same logic from an already-open session, instead of the bot having
+# to make an HTTP call to itself with its own SECRET_KEY (which it doesn't
+# have configured, on purpose - see verify_api_key).
+async def retry_failed_trade_events_core(session: AsyncSession) -> dict:
+    """Mirrors retry_failed_signals_core but for the trade_events table -
+    see that function's comments for why PENDING rows older than
     PENDING_STALE_SECONDS are reclaimed alongside FAILED ones."""
     stale_before = datetime.now(timezone.utc) - timedelta(seconds=settings.PENDING_STALE_SECONDS)
     result = await session.execute(
@@ -411,13 +431,17 @@ async def retry_failed_trade_events(
     }
 
 
-# ---------- Retry Failed Signals Endpoint ----------
-@router.post("/retry-failed")
-async def retry_failed_signals(
+@router.post("/trade/retry-failed")
+async def retry_failed_trade_events(
     session: AsyncSession = Depends(get_session),
     _auth: bool = Depends(verify_api_key),
     _rate: None = Depends(enforce_rate_limit),
 ):
+    return await retry_failed_trade_events_core(session)
+
+
+# ---------- Retry Failed Signals (core + HTTP endpoint) ----------
+async def retry_failed_signals_core(session: AsyncSession) -> dict:
     # FAILED (transient) signals are retried. PERMANENTLY_FAILED signals
     # (NonRetryableError - e.g. malformed chat_id, bot blocked) are excluded
     # on purpose, otherwise they'd be re-selected and re-fail forever.
@@ -477,3 +501,12 @@ async def retry_failed_signals(
         "message": f"Processed {len(failed_signals)} failed signals. Retried {retried_count} successfully.",
         "remaining_failed": len(failed_signals) - retried_count
     }
+
+
+@router.post("/retry-failed")
+async def retry_failed_signals(
+    session: AsyncSession = Depends(get_session),
+    _auth: bool = Depends(verify_api_key),
+    _rate: None = Depends(enforce_rate_limit),
+):
+    return await retry_failed_signals_core(session)

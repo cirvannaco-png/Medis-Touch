@@ -25,6 +25,9 @@
 // been a lie. Each CTFContext owns its own candle series for its own TF.
 class CTFContext
   {
+private:
+   datetime          m_lastBarTime; // FIX: per-context new-bar gate — see Detect() below
+
 public:
    ENUM_TIMEFRAMES   tf;
    CCandleData       candles;
@@ -44,8 +47,20 @@ public:
                           int swingStrength, double fvgMinSizeATR, double liqThresholdATR,
                           int rvolLookback = 20, int vaLookbackBars = 100, int vaNumBins = 24,
                           double vaPercent = 0.70, double obDisplacementATRMult = 1.5, double obMinBodyRatio = 0.5);
-   void              Detect();
-  };
+   // FIX (perf trap flagged during the v2.8 audit): "refreshes the entire
+   // historical buffer on every tick... acceptable for 500 bars [but] not
+   // a scalable architecture." Detect() now only actually does the
+   // Refresh()+redetect work when THIS context's own timeframe has
+   // printed a new bar since the last call — a context on H4 doesn't
+   // need CopyRates/swings/BOS/liquidity/etc. recomputed on every M15
+   // tick just because the chart TF ticked. force=true bypasses the gate
+   // (used once at EA/indicator startup so the first pass always runs).
+   void              Detect(bool force = false);
+  }; // FIX: this closing brace was dropped during the event-driven-refresh edit —
+     // everything below (both method bodies, plus the entire CTFContextPool class)
+     // was accidentally left nested inside CTFContext. Caught by manual brace-balance
+     // review since no MQL5 compiler is available in this environment; would have been
+     // a hard compile failure in MetaEditor.
 //+------------------------------------------------------------------+
 bool CTFContext::Init(string symbol, ENUM_TIMEFRAMES timeframe, int maxBars,
                       int swingStrength, double fvgMinSizeATR, double liqThresholdATR,
@@ -53,6 +68,7 @@ bool CTFContext::Init(string symbol, ENUM_TIMEFRAMES timeframe, int maxBars,
                       double obDisplacementATRMult, double obMinBodyRatio)
   {
    tf = timeframe;
+   m_lastBarTime = 0; // 0 guarantees the very first Detect() call always runs, force or not
    if(!candles.Init(symbol, tf, maxBars))
       return false;
    swings.SetParameters(&candles, swingStrength);
@@ -65,12 +81,17 @@ bool CTFContext::Init(string symbol, ENUM_TIMEFRAMES timeframe, int maxBars,
    volume.Init(&candles, rvolLookback);
    fibonacci.Init(&swings, &candles);
    valueArea.Init(&candles, vaLookbackBars, vaNumBins, vaPercent);
-   orderBlock.Init(&candles, obDisplacementATRMult, obMinBodyRatio);
+   orderBlock.Init(&candles, &bos, obDisplacementATRMult, obMinBodyRatio);
    return true;
   }
 //+------------------------------------------------------------------+
-void CTFContext::Detect()
+void CTFContext::Detect(bool force)
   {
+   datetime barTime = iTime(candles.Symbol(), tf, 0);
+   if(!force && barTime != 0 && barTime == m_lastBarTime)
+      return; // no new bar on THIS context's own timeframe — nothing has changed since the last full pass
+   m_lastBarTime = barTime;
+
    candles.Refresh();
    if(!candles.IsReady()) return;
    swings.Detect();
@@ -114,7 +135,7 @@ public:
                                int vaLookbackBars = 100, int vaNumBins = 24, double vaPercent = 0.70,
                                double obDisplacementATRMult = 1.5, double obMinBodyRatio = 0.5);
    CTFContext*       Get(ENUM_TIMEFRAMES tf); // creates on first request, reuses after
-   void              DetectAll();
+   void              DetectAll(bool force = false);
   };
 //+------------------------------------------------------------------+
 CTFContextPool::CTFContextPool() : m_count(0), m_rvolLookback(20), m_vaLookbackBars(100),
@@ -170,11 +191,11 @@ CTFContext* CTFContextPool::Get(ENUM_TIMEFRAMES tf)
    return c;
   }
 //+------------------------------------------------------------------+
-void CTFContextPool::DetectAll()
+void CTFContextPool::DetectAll(bool force)
   {
    for(int i = 0; i < m_count; i++)
       if(m_ctx[i] != NULL)
-         m_ctx[i].Detect();
+         m_ctx[i].Detect(force);
   }
 #endif
 //+------------------------------------------------------------------+

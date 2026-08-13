@@ -23,12 +23,22 @@ from app.bot_handlers import (
     COMMAND_LIST,
     analysis,
     help_command,
+    mute,
+    muted_command,
+    pause,
     performance,
     positions,
+    resume,
+    retry,
     risk,
     signal,
     start,
+    stats,
+    status,
+    symbols_command,
     unknown_command,
+    unmute,
+    version_command,
 )
 from app.config import settings
 from app.logger import logger
@@ -46,6 +56,16 @@ def _build_application() -> Application:
     app.add_handler(CommandHandler("positions", positions))
     app.add_handler(CommandHandler("risk", risk))
     app.add_handler(CommandHandler("performance", performance))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("symbols", symbols_command))
+    app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("mute", mute))
+    app.add_handler(CommandHandler("unmute", unmute))
+    app.add_handler(CommandHandler("muted", muted_command))
+    app.add_handler(CommandHandler("pause", pause))
+    app.add_handler(CommandHandler("resume", resume))
+    app.add_handler(CommandHandler("retry", retry))
+    app.add_handler(CommandHandler("version", version_command))
     # Catches any other "/whatever" sent to the bot. Must be added last -
     # PTB tries handlers in registration order and stops at the first match,
     # so this only fires when none of the specific commands above matched.

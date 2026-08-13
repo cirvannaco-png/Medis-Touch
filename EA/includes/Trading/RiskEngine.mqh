@@ -12,7 +12,8 @@ class CRiskEngine
 public:
    bool              ValidateSetup(TradeSetup &setup, double minRR, double maxSLDistanceATR, double currentATR);
    double            CalculateLotSize(string symbol, double riskPercent, double entry, double stopLoss,
-                                      bool halveForReducedRisk, bool allowMinLotOverride, bool &exceededRiskBudget);
+                                      bool halveForReducedRisk, bool allowMinLotOverride, bool &exceededRiskBudget,
+                                      double sizeMultiplier = 1.0); // RiskGuard's drawdown de-risk ramp — see Portfolio/RiskGuard.mqh
    double            RiskAmountForLots(string symbol, double lots, double entry, double stopLoss);
   };
 //+------------------------------------------------------------------+
@@ -34,7 +35,8 @@ public:
 // which case exceededRiskBudget tells the caller it happened so it can
 // be logged, not silently absorbed.
 double CRiskEngine::CalculateLotSize(string symbol, double riskPercent, double entry, double stopLoss,
-                                     bool halveForReducedRisk, bool allowMinLotOverride, bool &exceededRiskBudget)
+                                     bool halveForReducedRisk, bool allowMinLotOverride, bool &exceededRiskBudget,
+                                     double sizeMultiplier)
   {
    exceededRiskBudget = false;
 
@@ -44,6 +46,7 @@ double CRiskEngine::CalculateLotSize(string symbol, double riskPercent, double e
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double riskAmount = equity * (riskPercent / 100.0);
    if(halveForReducedRisk) riskAmount *= 0.5;
+   riskAmount *= MathMax(0.0, MathMin(1.0, sizeMultiplier)); // RiskGuard drawdown ramp — 1.0 = no change
 
    double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
    double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);

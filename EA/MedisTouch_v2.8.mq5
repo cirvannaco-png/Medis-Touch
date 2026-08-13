@@ -30,6 +30,8 @@
 #include "includes/Execution/PositionManager.mqh"
 #include "includes/Recovery/RecoveryEngine.mqh"
 #include "includes/Portfolio/PortfolioManager.mqh"
+#include "includes/Portfolio/RiskGuard.mqh"
+#include "includes/Core/NewsFilter.mqh"
 #include "includes/Signals/SubscriberPlatform.mqh"
 #include "includes/Signals/SignalPublisher.mqh"
 #include "includes/Monitoring/ProductionMonitor.mqh"
@@ -57,6 +59,11 @@ input double InpInternalLiqThresholdATR = 0.2;
 input group "Risk (setup validation)"
 input double InpMinRiskReward = 1.5;
 input double InpMaxSLDistanceATR = 1.5;
+input double InpSLBufferATR = 0.25;        // invalidation margin beyond FVG far edge, in ATR (audit #23 fix)
+input double InpMinStopSpreadMult = 3.0;   // floor: SL distance from entry never below (current spread * this) -- check against real Pepperstone/Exness spread in Tester
+input double InpMaxEntryDeviationATR = 0.15; // reject a market order if price drifted this many ATR from decision entry (audit #25 fix)
+input double InpSLBufferATR = 0.25;        // invalidation margin beyond FVG far edge, in ATR (audit #23 fix)
+input double InpMinStopSpreadMult = 3.0;   // floor: SL distance from entry never below (current spread * this) -- check against real Pepperstone/Exness spread in Tester
 
 input group "Inducement Engine"
 input int    InpImpulseLookbackBars = 40;
@@ -128,6 +135,14 @@ input double InpRiskPercentPerTrade = 0.5;      // % of account equity risked pe
 input int    InpMaxOpenTrades = 3;
 input ulong  InpMagicNumber = 987654321;
 input bool   InpAllowMinLotOverride = false;    // if riskPercent's true size < broker min lot: false = skip the trade (keeps risk% exact), true = trade at min lot anyway (risks MORE than InpRiskPercentPerTrade — will be logged when it happens)
+input double InpMaxDailyLossPercent = 3.0;      // real daily loss cap — no new trades once hit (0 = disabled)
+input double InpMaxDrawdownPercent = 10.0;      // hard halt: trading stops entirely below this equity drawdown from peak (0 = disabled)
+input double InpDeriskStartPercent = 5.0;       // drawdown %, from peak, where position size starts ramping down
+input double InpDeriskFloor = 0.25;             // minimum size multiplier the de-risk ramp can reach (0.25 = never below 25% size)
+input bool   InpUseNewsFilter = false;          // off by default — you maintain the CSV yourself, see Core/NewsFilter.mqh
+input string InpNewsFilterFile = "MedisTouch_News.csv"; // MQL5/Files/<this>, format: YYYY.MM.DD,HH:MM,HIGH,Label
+input int    InpNewsMinutesBefore = 15;
+input int    InpNewsMinutesAfter = 5;
 
 input group "Position Management"
 input double InpBreakEvenAtR = 1.0;             // move SL to entry once price is this many R in favor
@@ -175,6 +190,8 @@ CPositionManager   g_positions;
 CDecisionStore     g_store;
 CRecoveryEngine    g_recovery;
 CPortfolioManager  g_portfolio;
+CRiskGuard         g_riskGuard;
+CNewsFilter        g_newsFilter;
 CSubscriberPlatform g_subscribers;
 CSignalPublisher   g_publisher;
 CProductionMonitor g_monitor;
@@ -219,7 +236,7 @@ int OnInit()
    g_scoring.ConfigureVolatilityRegime(InpBlockLowVolRegime, InpVolRegimeLookback, InpVolRegimeLowPct, InpVolRegimeHighPct);
    g_scoring.ConfigureSessionFilter(InpUseSessionFilter, InpAllowTokyoSession, InpAllowLondonSession,
                                     InpAllowNewYorkSession, InpAllowLondonNYOverlap);
-   g_decision.Init(&g_chartCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring);
+   g_decision.Init(&g_chartCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, InpSLBufferATR, InpMinStopSpreadMult);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);
    // Deliberately the SAME values driving g_positions/g_risk below — so the
@@ -240,6 +257,9 @@ int OnInit()
    g_subscribers.Init();
    g_publisher.Init(_Symbol, &g_subscribers, InpWebRequestTimeoutMs);
    g_portfolio.Init(InpMaxPortfolioRiskPercent, InpMaxPositionsPerSymbol, InpMaxPositionsPerGroup, InpMagicNumber, &g_risk);
+   g_riskGuard.Init(_Symbol, InpMaxDailyLossPercent, InpMaxDrawdownPercent, InpDeriskStartPercent, InpDeriskFloor);
+   if(InpUseNewsFilter)
+      g_newsFilter.Load(InpNewsFilterFile, InpNewsMinutesBefore, InpNewsMinutesAfter);
 
    // Recovery must run AFTER OrderManager/BrokerAdapter exist (it writes
    // into g_orders) and AFTER g_store is initialized (it reads decision
@@ -290,6 +310,28 @@ void OnTick()
    // a break-even/trailing update should never wait behind new-setup work.
    g_positions.OnTick(currentAtr);
    g_orders.Prune();
+   g_riskGuard.OnTick(); // cheap — daily rollover check + peak-equity/drawdown tracking
+
+   string haltReason;
+   if(g_riskGuard.IsHardHalted(haltReason))
+     {
+      static datetime lastHaltLog = 0;
+      if(TimeCurrent() - lastHaltLog > 3600) { PrintFormat("MedisTouch EA: no new trades — %s", haltReason); lastHaltLog = TimeCurrent(); }
+      return;
+     }
+   if(g_riskGuard.IsDailyLossLimitHit(haltReason))
+     {
+      static datetime lastDailyLog = 0;
+      if(TimeCurrent() - lastDailyLog > 3600) { PrintFormat("MedisTouch EA: no new trades — %s", haltReason); lastDailyLog = TimeCurrent(); }
+      return;
+     }
+   string newsReason;
+   if(InpUseNewsFilter && g_newsFilter.IsLocked(newsReason))
+     {
+      static datetime lastNewsLog = 0;
+      if(TimeCurrent() - lastNewsLog > 300) { PrintFormat("MedisTouch EA: no new trades — %s", newsReason); lastNewsLog = TimeCurrent(); }
+      return;
+     }
 
    // Only evaluate for a NEW decision once per closed bar, same as the
    // indicator's OnCalculate cadence — a decision per bar, not per tick.
@@ -340,7 +382,8 @@ void OnTick()
       double entry = ResolveExecutionEntry(chosen); // same price ValidateSetup() gated against — see Core/Config.mqh
       bool exceededRiskBudget = false;
       double lots = g_risk.CalculateLotSize(_Symbol, InpRiskPercentPerTrade, entry, chosen.stop_loss,
-                                            decision.reduce_risk, InpAllowMinLotOverride, exceededRiskBudget);
+                                            decision.reduce_risk, InpAllowMinLotOverride, exceededRiskBudget,
+                                            g_riskGuard.SizeMultiplier());
       if(lots <= 0)
          PrintFormat("MedisTouch EA: decision #%d skipped — %.2f%% risk at this stop distance is below the broker's minimum lot for %s.",
                      decision.decision_id, InpRiskPercentPerTrade, _Symbol);
@@ -357,7 +400,8 @@ void OnTick()
          else
            {
             ulong ticketOut = 0;
-            if(g_orders.Submit(decision, lots, InpUseMarketOrders, ticketOut))
+            double maxDeviation = InpMaxEntryDeviationATR * currentAtr;
+            if(g_orders.Submit(decision, lots, InpUseMarketOrders, maxDeviation, ticketOut))
                g_store.SaveExecution(decision.decision_id, lots, ticketOut);
             else
                g_monitor.NotifyBrokerReject();
@@ -397,8 +441,9 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    ulong positionTicket = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
    if(orderTicket == 0 || positionTicket == 0) return;
 
-   if(g_orders.MarkFilledFromPending(orderTicket, positionTicket))
-      PrintFormat("MedisTouch EA: pending order #%d filled as position #%d — caught live via OnTradeTransaction.",
-                  orderTicket, positionTicket);
+   double fillPrice = HistoryDealGetDouble(trans.deal, DEAL_PRICE); // FIX (#25): real fill price, straight off the deal record
+   if(g_orders.MarkFilledFromPending(orderTicket, positionTicket, fillPrice))
+      PrintFormat("MedisTouch EA: pending order #%d filled as position #%d at %.5f — caught live via OnTradeTransaction.",
+                  orderTicket, positionTicket, fillPrice);
   }
 //+------------------------------------------------------------------+

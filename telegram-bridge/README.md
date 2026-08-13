@@ -54,8 +54,23 @@ Commands, registered with Telegram on startup via `setMyCommands`:
 | `/positions`   | Trades whose latest event isn't a close (`closed_tp1/tp2/sl/manual`)         |
 | `/risk`        | Open position count, symbols exposed, total lot volume — *not* account equity or margin, which only exist inside the MT5 terminal |
 | `/performance` | Win rate and total P/L over closed trades in the last 30 days                |
+| `/stats`       | Today's summary: signals received, trades opened/closed, realized P/L        |
+| `/symbols`     | Symbols with signal activity in the last 7 days, flagging muted ones         |
+| `/status`      | Bridge health: DB connectivity, broadcast pause state, muted symbols, last signal age |
+| `/mute SYMBOL` | Stop broadcasting new signals for a symbol (signal is still recorded, just not sent) |
+| `/unmute SYMBOL` | Resume broadcasting for a previously muted symbol                          |
+| `/muted`       | List currently muted symbols                                                 |
+| `/pause`       | Pause outbound signal broadcasts for **all** symbols                         |
+| `/resume`      | Resume outbound signal broadcasts                                            |
+| `/retry`       | Manually retry failed/stuck signal and trade-event deliveries                |
+| `/version`     | Reports the running bridge version                                           |
 
 All commands are restricted to `ADMIN_CHAT_ID` — a message from any other chat, including the `CHAT_ID` signal group, is silently ignored.
+
+`/mute`, `/unmute`, and `/pause`/`/resume` are backed by a small `bot_settings` key/value
+table (see `app/settings_store.py`) so the state survives a Render redeploy. `POST /signal`
+checks this state before contacting Telegram — a muted or paused signal is still saved to
+the `signals` table (so `/stats` and win-rate history stay accurate), it's just not sent.
 
 **How it's wired:** this runs in Telegram **webhook** mode, not long-polling. On startup, `app/bot.py`
 calls `setWebhook` pointing at `POST /telegram/webhook` on this same service, using

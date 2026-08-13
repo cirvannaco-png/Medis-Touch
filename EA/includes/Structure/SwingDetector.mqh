@@ -28,6 +28,7 @@ public:
 
    int               HighCount() const { return m_highCount; }
    int               LowCount() const { return m_lowCount; }
+   int               Strength() const { return m_strength; } // needed by BOS/Liquidity to know a swing's confirmation lag (audit #7/#11 fix)
    SwingPoint        GetHigh(int i) const;  // 0 = most recent
    SwingPoint        GetLow(int i) const;   // 0 = most recent
   };

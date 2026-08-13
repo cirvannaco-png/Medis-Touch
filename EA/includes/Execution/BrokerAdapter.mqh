@@ -35,8 +35,14 @@ private:
 
 public:
    void              Init(ulong magic, int maxRetries = 3, int retryDelayMs = 300);
-   bool              MarketBuy(string symbol, double volume, double sl, double tp, ulong &ticketOut, string comment = "");
-   bool              MarketSell(string symbol, double volume, double sl, double tp, ulong &ticketOut, string comment = "");
+   // FIX (audit #25): fillPriceOut returns the REAL price CTrade filled at
+   // (ResultPrice()), not the theoretical FVG-edge entry the signal was
+   // built around. Market execution uses price=0.0 (fill at whatever the
+   // market gives), so the two can differ. Everything downstream that
+   // assumed "filled at the decision's entry price" (break-even trigger,
+   // R-multiple, partial-close trigger) needs this real number instead.
+   bool              MarketBuy(string symbol, double volume, double sl, double tp, ulong &ticketOut, double &fillPriceOut, string comment = "");
+   bool              MarketSell(string symbol, double volume, double sl, double tp, ulong &ticketOut, double &fillPriceOut, string comment = "");
    bool              PlaceLimit(string symbol, ENUM_ORDER_TYPE type, double volume, double price,
                                 double sl, double tp, ulong &ticketOut, string comment = "");
    bool              CancelOrder(ulong ticket);
@@ -95,13 +101,15 @@ ulong CBrokerAdapter::ResolvePositionTicket()
    return positionId;
   }
 //+------------------------------------------------------------------+
-bool CBrokerAdapter::MarketBuy(string symbol, double volume, double sl, double tp, ulong &ticketOut, string comment)
+bool CBrokerAdapter::MarketBuy(string symbol, double volume, double sl, double tp, ulong &ticketOut, double &fillPriceOut, string comment)
   {
+   fillPriceOut = 0.0;
    for(int i = 0; i < m_maxRetries; i++)
      {
       if(m_trade.Buy(volume, symbol, 0.0, sl, tp, comment) && LastRequestOk("MarketBuy"))
         {
          ticketOut = ResolvePositionTicket();
+         fillPriceOut = m_trade.ResultPrice();
          return true;
         }
       Sleep(m_retryDelayMs);
@@ -109,13 +117,15 @@ bool CBrokerAdapter::MarketBuy(string symbol, double volume, double sl, double t
    return false;
   }
 //+------------------------------------------------------------------+
-bool CBrokerAdapter::MarketSell(string symbol, double volume, double sl, double tp, ulong &ticketOut, string comment)
+bool CBrokerAdapter::MarketSell(string symbol, double volume, double sl, double tp, ulong &ticketOut, double &fillPriceOut, string comment)
   {
+   fillPriceOut = 0.0;
    for(int i = 0; i < m_maxRetries; i++)
      {
       if(m_trade.Sell(volume, symbol, 0.0, sl, tp, comment) && LastRequestOk("MarketSell"))
         {
          ticketOut = ResolvePositionTicket();
+         fillPriceOut = m_trade.ResultPrice();
          return true;
         }
       Sleep(m_retryDelayMs);

@@ -15,6 +15,7 @@ struct ManagedTrade
    TradeDecisionRecord  decision;
    CTradeStateMachine   fsm;
    double               volume;
+   double               fillPrice; // FIX (#25): actual broker fill, 0 until known / for restored trades
   };
 //+------------------------------------------------------------------+
 // Owns every ManagedTrade from Submit() through FILLED/REJECTED/
@@ -34,12 +35,17 @@ private:
 
 public:
    void              Init(CBrokerAdapter* broker, int maxOpenTrades, CProductionMonitor* monitor);
-   bool              Submit(const TradeDecisionRecord &decision, double volume, bool useMarket, ulong &ticketOut);
+   // FIX (audit #25): maxEntryDeviation is a PRICE distance (caller
+   // converts from ATR). Submit() rejects a market order outright if the
+   // current market price has already moved further than this from the
+   // theoretical entry the setup/risk math was built on -- a pre-trade
+   // guard against filling a stale signal at a materially worse price.
+   bool              Submit(const TradeDecisionRecord &decision, double volume, bool useMarket, double maxEntryDeviation, ulong &ticketOut);
    bool              RestoreTrade(const TradeDecisionRecord &decision, double volume, ulong ticket, ENUM_TRADE_STATE state);
    int               OpenCount();
    int               Total() { return ArraySize(m_trades); }
    void              Prune();  // drop ARCHIVED/CANCELLED/REJECTED rows to keep the array bounded
-   bool              MarkFilledFromPending(ulong orderTicket, ulong positionTicket);
+   bool              MarkFilledFromPending(ulong orderTicket, ulong positionTicket, double fillPrice = 0.0);
 
    // Accessors used by PositionManager instead of direct array access.
    ENUM_TRADE_STATE     StateAt(int idx)              { return m_trades[idx].fsm.State(); }
@@ -47,6 +53,15 @@ public:
    TradeDecisionRecord  DecisionAt(int idx)            { return m_trades[idx].decision; }
    double               VolumeAt(int idx)              { return m_trades[idx].volume; }
    bool                 TransitionAt(int idx, ENUM_TRADE_STATE to) { return m_trades[idx].fsm.Transition(to); }
+   // FIX (#25): real fill for R-multiple/break-even math -- falls back to
+   // the theoretical entry only if a fill somehow left this at 0 (e.g. a
+   // restored trade from before this field existed).
+   double               FillPriceAt(int idx)
+     {
+      if(m_trades[idx].fillPrice > 0.0) return m_trades[idx].fillPrice;
+      bool isBuy = (m_trades[idx].decision.setup.type == ORDER_TYPE_BUY);
+      return isBuy ? m_trades[idx].decision.setup.entry_top : m_trades[idx].decision.setup.entry_bottom;
+     }
   };
 //+------------------------------------------------------------------+
 void COrderManager::Init(CBrokerAdapter* broker, int maxOpenTrades, CProductionMonitor* monitor)
@@ -101,7 +116,7 @@ void COrderManager::Prune()
 // instant MT5 reports the fill — not polled, not deferred to restart.
 // Market fills are unaffected: Submit() already transitions those to
 // TS_FILLED synchronously in the same call that sends the order.
-bool COrderManager::MarkFilledFromPending(ulong orderTicket, ulong positionTicket)
+bool COrderManager::MarkFilledFromPending(ulong orderTicket, ulong positionTicket, double fillPrice)
   {
    for(int i = 0; i < ArraySize(m_trades); i++)
      {
@@ -109,12 +124,13 @@ bool COrderManager::MarkFilledFromPending(ulong orderTicket, ulong positionTicke
       if(m_trades[i].fsm.Ticket() != orderTicket) continue;
 
       m_trades[i].fsm.SetTicket(positionTicket); // pending-order ticket -> live position ticket
+      if(fillPrice > 0.0) m_trades[i].fillPrice = fillPrice; // FIX (#25): capture the real fill for a limit order too, not just market orders
       return m_trades[i].fsm.Transition(TS_FILLED);
      }
    return false; // no matching pending trade — not ours, or already handled
   }
 //+------------------------------------------------------------------+
-bool COrderManager::Submit(const TradeDecisionRecord &decision, double volume, bool useMarket, ulong &ticketOut)
+bool COrderManager::Submit(const TradeDecisionRecord &decision, double volume, bool useMarket, double maxEntryDeviation, ulong &ticketOut)
   {
    ticketOut = 0;
    if(decision.action != POLICY_EXECUTE_ONLY && decision.action != POLICY_EXECUTE_AND_SIGNAL)
@@ -132,6 +148,31 @@ bool COrderManager::Submit(const TradeDecisionRecord &decision, double volume, b
      }
    if(FindByDecisionId(decision.decision_id) >= 0) return false; // already submitted, don't double-fire
 
+   double entry = ResolveExecutionEntry(decision.setup); // Core/Config.mqh — same price ValidateSetup() gated against
+
+   // FIX (#25): pre-trade staleness guard. A signal can sit for several
+   // ticks between "setup generated" and "order submitted" (scoring,
+   // portfolio gate, lot sizing all run in between). If the market has
+   // already moved past this decision's entry by more than the caller's
+   // tolerance, reject rather than filling at an unknown, unbounded worse
+   // price. useMarket only -- a limit order at `entry` either fills at
+   // that price or doesn't fill at all, so it doesn't need this guard.
+   if(useMarket && maxEntryDeviation > 0.0)
+     {
+      MqlTick tick;
+      if(SymbolInfoTick(decision.symbol, tick))
+        {
+         double marketPrice = (decision.setup.type == ORDER_TYPE_BUY) ? tick.ask : tick.bid;
+         double deviation = MathAbs(marketPrice - entry);
+         if(deviation > maxEntryDeviation)
+           {
+            PrintFormat("MedisTouch OrderManager: decision #%d rejected — market price %.5f has drifted %.5f from decision entry %.5f (max allowed %.5f). Signal is stale.",
+                        decision.decision_id, marketPrice, deviation, entry, maxEntryDeviation);
+            return false;
+           }
+        }
+     }
+
    // Tag every order with its decision ID so a restarted terminal can
    // match a live position/pending order straight back to the exact
    // TradeDecisionRecord that created it, via CDecisionStore. This is
@@ -142,28 +183,34 @@ bool COrderManager::Submit(const TradeDecisionRecord &decision, double volume, b
    ArrayResize(m_trades, idx + 1);
    m_trades[idx].decision = decision;
    m_trades[idx].volume = volume;
+   m_trades[idx].fillPrice = 0.0;
    m_trades[idx].fsm.Start(decision.decision_id);
    m_trades[idx].fsm.BindMonitor(m_monitor);
    m_trades[idx].fsm.Transition(TS_VALIDATED);
 
-   double entry = ResolveExecutionEntry(decision.setup); // Core/Config.mqh — same price ValidateSetup() gated against
    double sl = decision.setup.stop_loss;
    double tp = decision.setup.final_tp;
    ulong ticket = 0;
+   double fillPrice = 0.0;
    bool ok = false;
 
    if(useMarket)
      {
       m_trades[idx].fsm.Transition(TS_PENDING);
       if(decision.setup.type == ORDER_TYPE_BUY)
-         ok = m_broker.MarketBuy(decision.symbol, volume, sl, tp, ticket, tag);
+         ok = m_broker.MarketBuy(decision.symbol, volume, sl, tp, ticket, fillPrice, tag);
       else
-         ok = m_broker.MarketSell(decision.symbol, volume, sl, tp, ticket, tag);
+         ok = m_broker.MarketSell(decision.symbol, volume, sl, tp, ticket, fillPrice, tag);
 
       if(ok)
         {
          m_trades[idx].fsm.SetTicket(ticket);
          m_trades[idx].fsm.Transition(TS_FILLED);
+         m_trades[idx].fillPrice = fillPrice;
+         double slippage = fillPrice - entry;
+         if(MathAbs(slippage) > 0.0)
+            PrintFormat("MedisTouch OrderManager: decision #%d filled at %.5f (theoretical entry %.5f, slippage %.5f).",
+                        decision.decision_id, fillPrice, entry, slippage);
         }
       else
          m_trades[idx].fsm.Transition(TS_REJECTED);
@@ -198,6 +245,7 @@ bool COrderManager::RestoreTrade(const TradeDecisionRecord &decision, double vol
    ArrayResize(m_trades, idx + 1);
    m_trades[idx].decision = decision;
    m_trades[idx].volume = volume;
+   m_trades[idx].fillPrice = 0.0; // unknown for a restored trade -- FillPriceAt() falls back to theoretical entry
    m_trades[idx].fsm.Start(decision.decision_id);
    m_trades[idx].fsm.BindMonitor(m_monitor);
    m_trades[idx].fsm.SetTicket(ticket);

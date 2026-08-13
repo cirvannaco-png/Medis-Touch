@@ -349,14 +349,20 @@ double CScoringEngine::SRScore(bool forBuy)
    return 0.0;
   }
 //+------------------------------------------------------------------+
-// RVOL of the current bar on the BOS/structure timeframe — that's where
-// swings and breakouts are actually confirmed, so it's the natural home
-// for both the volume gate and the swing-anchored Fibonacci leg (see
-// SmartMoney/VolumeEngine.mqh, SmartMoney/FibonacciEngine.mqh).
+// RVOL of the BOS/structure timeframe's most recently CLOSED bar.
+// FIX (audit #16): the EA evaluates once per NEW bar (OnTick fires the
+// instant iTime() for shift 0 changes -- i.e. the instant a bar OPENS),
+// so shift 0 at that exact moment is a brand-new candle with almost no
+// tick volume accumulated yet. Gating InpRVOLThreshold against that
+// number checked volume at the single most uninformative instant
+// possible. Shift 1 is the bar that just fully closed -- final volume,
+// actually means something -- and matches what the audit itself
+// recommended ("the volume gate should probably use a closed BOS/
+// structure candle rather than the currently forming bar").
 double CScoringEngine::VolumeScore(bool forBuy)
   {
    if(m_bosCtx == NULL) return 0.0;
-   return m_bosCtx.volume.Score(0, m_rvolThreshold);
+   return m_bosCtx.volume.Score(1, m_rvolThreshold);
   }
 //+------------------------------------------------------------------+
 double CScoringEngine::FibonacciScore(bool forBuy)
@@ -435,7 +441,7 @@ double CScoringEngine::CalculateConfidence(bool forBuy)
    // small capped bonus nudges ranking only.
    if(m_requireVolumeConfirmation)
      {
-      if(m_bosCtx == NULL || m_bosCtx.volume.RVOL(0) < m_rvolThreshold)
+      if(m_bosCtx == NULL || m_bosCtx.volume.RVOL(1) < m_rvolThreshold) // FIX #16: shift 1, see VolumeScore() above
          return 0.0;
      }
    if(m_requireFibonacciZone)
@@ -477,7 +483,18 @@ double CScoringEngine::CalculateConfidence(bool forBuy)
    score += 5.0 * ValueAreaScore(forBuy);
    score += 5.0 * OBScore(forBuy);
 
-   return MathMin(score, 100.0);
+   // FIX (audit #21 -- scoring model drift): real max raw score is 120
+   // (70 inducement + 15 FVG + 15 Trend + 5+5+5+5 Vol/Fib/VA/OB), not the
+   // 100 the old MathMin(score,100) clip implied. A hard clip means a
+   // setup scoring 105 and one scoring 120 both reported as confidence
+   // 100 -- indistinguishable to InpMinConfidenceExecute,
+   // InpFullRiskConfidence, the dashboard, and the published signal, even
+   // though one was meaningfully stronger. Rescaling against the TRUE
+   // achievable maximum instead preserves relative ranking; confidence
+   // 100 now only occurs when every component is actually maxed.
+   const double MAX_RAW_SCORE = 120.0;
+   double normalized = (score / MAX_RAW_SCORE) * 100.0;
+   return MathMin(MathMax(normalized, 0.0), 100.0);
   }
 //+------------------------------------------------------------------+
 double CScoringEngine::PipSize()
@@ -509,7 +526,7 @@ void CScoringEngine::EvaluateReasons(bool forBuy, SetupReasons &out)
    // when the corresponding gate in CalculateConfidence is disabled.
    if(m_bosCtx != NULL)
      {
-      out.rvol = m_bosCtx.volume.RVOL(0);
+      out.rvol = m_bosCtx.volume.RVOL(1); // FIX #16: shift 1, see VolumeScore() above -- diagnostics must match the live gate
       out.volume_confirmed = (out.rvol >= m_rvolThreshold);
       if(price > 0)
         {

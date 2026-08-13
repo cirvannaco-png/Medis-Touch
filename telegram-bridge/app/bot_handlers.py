@@ -24,9 +24,16 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from app.config import APP_VERSION, settings
-from app.database import async_session
+from app.database import async_session, check_db_connection
 from app.logger import logger
 from app.models import Signal, TradeEvent, TradeEventType
+from app.settings_store import (
+    get_muted_symbols,
+    is_broadcast_paused,
+    mute_symbol,
+    set_broadcast_paused,
+    unmute_symbol,
+)
 
 _CLOSE_EVENTS = {
     TradeEventType.CLOSED_TP1,
@@ -42,6 +49,16 @@ COMMAND_LIST = [
     ("positions", "Currently open positions"),
     ("risk", "Risk information"),
     ("performance", "Trading performance"),
+    ("stats", "Today's signal & trade summary"),
+    ("symbols", "Symbols active in the last 7 days"),
+    ("status", "Bridge health (DB, uptime, version)"),
+    ("mute", "Mute broadcasts for a symbol, e.g. /mute XAUUSD"),
+    ("unmute", "Unmute a symbol, e.g. /unmute XAUUSD"),
+    ("muted", "List currently muted symbols"),
+    ("pause", "Pause all outbound signal broadcasts"),
+    ("resume", "Resume outbound signal broadcasts"),
+    ("retry", "Retry failed/stuck signal & trade deliveries"),
+    ("version", "Bridge version"),
     ("help", "Show this list"),
 ]
 
@@ -235,6 +252,175 @@ async def performance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"Closed trades: {len(closed)}",
         f"Win rate: {win_rate:.1f}% ({len(wins)}W / {len(losses)}L)",
         f"Total P/L: {total_pl:+.2f}",
+    ]
+    await update.message.reply_text("\n".join(lines))
+
+
+@_authorized_only
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    since = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    async with async_session() as session:
+        sig_result = await session.execute(
+            select(Signal).where(Signal.received_at >= since)
+        )
+        today_signals = sig_result.scalars().all()
+
+        evt_result = await session.execute(
+            select(TradeEvent).where(TradeEvent.received_at >= since)
+        )
+        today_events = evt_result.scalars().all()
+
+    opened = [e for e in today_events if e.event == TradeEventType.OPENED]
+    closed = [e for e in today_events if e.event in _CLOSE_EVENTS]
+    profits = [e.profit for e in closed if e.profit is not None]
+    total_pl = sum(profits) if profits else 0.0
+    wins = len([p for p in profits if p > 0])
+
+    lines = [
+        "🗓️ Today's summary",
+        "",
+        f"Signals received: {len(today_signals)}",
+        f"Trades opened: {len(opened)}",
+        f"Trades closed: {len(closed)} ({wins}W / {len(closed) - wins}L)",
+        f"Realized P/L today: {total_pl:+.2f}",
+    ]
+    await update.message.reply_text("\n".join(lines))
+
+
+@_authorized_only
+async def symbols_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+
+    async with async_session() as session:
+        sig_result = await session.execute(
+            select(Signal.symbol).where(Signal.received_at >= since).distinct()
+        )
+        active_symbols = {row[0] for row in sig_result.all()}
+        muted = await get_muted_symbols(session)
+
+    if not active_symbols and not muted:
+        await update.message.reply_text("No symbol activity in the last 7 days.")
+        return
+
+    lines = ["📋 Symbols — last 7 days", ""]
+    for sym in sorted(active_symbols | muted):
+        tag = " 🔇 muted" if sym in muted else ""
+        seen = " (no recent signals)" if sym not in active_symbols else ""
+        lines.append(f"{sym}{tag}{seen}")
+    await update.message.reply_text("\n".join(lines))
+
+
+@_authorized_only
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db_ok = await check_db_connection()
+
+    async with async_session() as session:
+        paused = await is_broadcast_paused(session)
+        muted = await get_muted_symbols(session)
+        last_signal_result = await session.execute(
+            select(Signal).order_by(Signal.received_at.desc()).limit(1)
+        )
+        last_signal = last_signal_result.scalar_one_or_none()
+
+    last_signal_age = "never"
+    if last_signal and last_signal.received_at:
+        delta = datetime.now(timezone.utc) - last_signal.received_at
+        last_signal_age = f"{int(delta.total_seconds() // 60)} min ago"
+
+    lines = [
+        f"🩺 Medis Touch bridge status (v{APP_VERSION})",
+        "",
+        f"Database: {'🟢 connected' if db_ok else '🔴 unreachable'}",
+        f"Broadcast: {'⏸️ paused' if paused else '🟢 active'}",
+        f"Muted symbols: {', '.join(sorted(muted)) if muted else 'none'}",
+        f"Last signal received: {last_signal_age}",
+    ]
+    await update.message.reply_text("\n".join(lines))
+
+
+@_authorized_only
+async def version_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(f"Medis Touch bridge v{APP_VERSION}")
+
+
+def _parse_symbol_arg(context: ContextTypes.DEFAULT_TYPE) -> str | None:
+    if not context.args:
+        return None
+    return context.args[0].strip().upper()
+
+
+@_authorized_only
+async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    sym = _parse_symbol_arg(context)
+    if not sym:
+        await update.message.reply_text("Usage: /mute SYMBOL (e.g. /mute XAUUSD)")
+        return
+    async with async_session() as session:
+        muted = await mute_symbol(session, sym)
+    await update.message.reply_text(
+        f"🔇 {sym} muted. New signals for this symbol will not be broadcast.\n"
+        f"Currently muted: {', '.join(sorted(muted))}"
+    )
+
+
+@_authorized_only
+async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    sym = _parse_symbol_arg(context)
+    if not sym:
+        await update.message.reply_text("Usage: /unmute SYMBOL (e.g. /unmute XAUUSD)")
+        return
+    async with async_session() as session:
+        muted = await unmute_symbol(session, sym)
+    await update.message.reply_text(
+        f"🔊 {sym} unmuted.\n"
+        f"Currently muted: {', '.join(sorted(muted)) if muted else 'none'}"
+    )
+
+
+@_authorized_only
+async def muted_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with async_session() as session:
+        muted = await get_muted_symbols(session)
+    await update.message.reply_text(
+        f"🔇 Muted symbols: {', '.join(sorted(muted))}" if muted else "No symbols currently muted."
+    )
+
+
+@_authorized_only
+async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with async_session() as session:
+        await set_broadcast_paused(session, True)
+    await update.message.reply_text(
+        "⏸️ All outbound signal broadcasts paused. Signals are still recorded, "
+        "just not sent to Telegram. Send /resume to re-enable."
+    )
+
+
+@_authorized_only
+async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with async_session() as session:
+        await set_broadcast_paused(session, False)
+    await update.message.reply_text("🟢 Broadcasts resumed.")
+
+
+@_authorized_only
+async def retry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Deferred import to avoid a circular import at module load time:
+    # app.routes imports app.bot (for bot_module), and app.bot imports
+    # app.bot_handlers - importing app.routes at the top of this module
+    # would close that loop. By the time this handler actually runs,
+    # everything is already fully imported, so a local import is safe.
+    from app.routes import retry_failed_signals_core, retry_failed_trade_events_core
+
+    await update.message.reply_text("🔁 Retrying failed/stuck deliveries…")
+    async with async_session() as session:
+        sig_result = await retry_failed_signals_core(session)
+        trade_result = await retry_failed_trade_events_core(session)
+
+    lines = [
+        "Signals: " + sig_result.get("message", "done"),
+        "Trade events: " + trade_result.get("message", "done"),
     ]
     await update.message.reply_text("\n".join(lines))
 

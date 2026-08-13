@@ -294,6 +294,11 @@ struct LiquidityPool
    ENUM_LIQ_TYPE     type;
    int               touches;
    bool              external;     // true = D1 high/low, false = internal equal highs/lows
+   int               confirmed_at_shift; // audit #11 fix: the shift at which BOTH member swings were
+                                          // actually confirmed — a sweep candle older than this (i.e.
+                                          // shift > confirmed_at_shift) predates the pool and cannot
+                                          // validly be tested against it. 0 for external pools, which
+                                          // are handled with per-day dynamic lookups instead (see Liquidity.mqh).
   };
 
 struct LiquidityEvent

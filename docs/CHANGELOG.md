@@ -8,6 +8,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`telegram-bridge/` — 10 new admin Telegram commands (bridge v1.4.0).**
+  `/stats`, `/symbols`, `/status`, `/mute`, `/unmute`, `/muted`, `/pause`,
+  `/resume`, `/retry`, `/version`. Backed by a new `bot_settings` key/value
+  table (migration `0003_bot_settings_table.py`, `app/settings_store.py`)
+  that persists mute/pause state across Render redeploys. `POST /signal`
+  now checks this state before contacting Telegram: a muted symbol or a
+  global pause suppresses the broadcast but still records the `Signal` row
+  (status `ACTIVE`, `telegram_message_id` left null) so `/stats` and win-rate
+  history stay accurate. `/retry` reuses the exact same retry logic as the
+  `/retry-failed` and `/trade/retry-failed` HTTP endpoints (both refactored
+  into `retry_failed_signals_core()` / `retry_failed_trade_events_core()`
+  in `app/routes.py` so there's one implementation, not two).
+
 - **`EA/` — MedisTouch v2.8 MQL5 source is now in the repository.**
   `EA/MedisTouch_v2.8.mq5` (Expert Advisor), `EA/MedisTouch_Indicator_v2.8.mq5`
   (visuals-only chart indicator, since MQL5 forbids trading calls from an

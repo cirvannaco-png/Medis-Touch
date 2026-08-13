@@ -22,7 +22,11 @@ private:
    double            m_trailAtrMult;      // runner trail distance, as an ATR multiple
 
    double            CurrentExitPrice(string symbol, bool isBuy);
-   double            RMultiple(const TradeDecisionRecord &dec, double price);
+   // FIX (#25): now takes the actual entry price explicitly (real fill,
+   // via COrderManager::FillPriceAt) instead of deriving it from
+   // dec.setup -- the theoretical FVG-edge entry is not what the
+   // position is actually sitting on.
+   double            RMultiple(const TradeDecisionRecord &dec, double entry, double price);
 
 public:
    void              Init(COrderManager* orders, CBrokerAdapter* broker,
@@ -49,10 +53,9 @@ double CPositionManager::CurrentExitPrice(string symbol, bool isBuy)
    return isBuy ? tick.bid : tick.ask;
   }
 //+------------------------------------------------------------------+
-double CPositionManager::RMultiple(const TradeDecisionRecord &dec, double price)
+double CPositionManager::RMultiple(const TradeDecisionRecord &dec, double entry, double price)
   {
    bool isBuy = (dec.setup.type == ORDER_TYPE_BUY);
-   double entry = isBuy ? dec.setup.entry_top : dec.setup.entry_bottom;
    double riskDist = MathAbs(entry - dec.setup.stop_loss);
    if(riskDist <= 0) return 0.0;
    double moveInFavor = isBuy ? (price - entry) : (entry - price);
@@ -78,19 +81,29 @@ void CPositionManager::OnTick(double currentAtr)
 
       TradeDecisionRecord dec = m_orders.DecisionAt(i);
       bool isBuy = (dec.setup.type == ORDER_TYPE_BUY);
+      double entry = m_orders.FillPriceAt(i); // FIX (#25): actual fill, not the theoretical FVG edge
       double price = CurrentExitPrice(dec.symbol, isBuy);
       if(price <= 0) continue;
-      double r = RMultiple(dec, price);
+      double r = RMultiple(dec, entry, price);
 
-      // 1. Break-even
+      // 1. Break-even -- moves SL to the price this position ACTUALLY
+      // entered at. Moving it to the theoretical entry instead (the old
+      // behavior) could leave a "protected" trade still sitting at a
+      // real loss if the fill was worse than the signal's theoretical
+      // price.
       if(state == TS_FILLED && r >= m_breakEvenAtR)
         {
-         double entry = isBuy ? dec.setup.entry_top : dec.setup.entry_bottom;
          if(m_broker.ModifySLTP(ticket, entry, dec.setup.final_tp))
             m_orders.TransitionAt(i, TS_PROTECTED);
         }
 
-      // 2. Partial at TP1 (only after break-even, matching the documented order)
+      // 2. Partial (only after break-even, matching the documented order).
+      // NOTE (#26, flagged not "fixed"): this fires at m_partialAtR (e.g.
+      // 2R), a fixed R-multiple -- not at dec.setup.tp1. TP1/TP2 are
+      // liquidity-derived DISPLAY targets for the dashboard/signal feed;
+      // they were never the live partial-close trigger, and a liquidity
+      // level isn't guaranteed to be a good partial-exit point on every
+      // setup. Real distinction, not a bug to silently paper over.
       if(state == TS_PROTECTED && r >= m_partialAtR)
         {
          double vol = m_orders.VolumeAt(i) * m_partialFraction;

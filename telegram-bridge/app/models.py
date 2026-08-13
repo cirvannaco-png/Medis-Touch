@@ -63,6 +63,30 @@ _trade_event_type_type = PG_ENUM(
 )
 
 
+class BotSetting(Base):
+    """
+    Generic key/value store for operator-facing bridge controls that must
+    survive restarts (Render redeploys, dyno cycling) - the kind of thing
+    that otherwise accumulates as one dedicated column + migration per
+    flag. Two keys currently in use:
+
+      "muted_symbols"    -> JSON list[str], e.g. ["XAUUSD", "GBPJPY"]
+      "broadcast_paused" -> JSON bool
+
+    See app/settings_store.py for the read/write helpers; nothing should
+    query this table directly outside that module.
+    """
+    __tablename__ = "bot_settings"
+
+    key = Column(String, primary_key=True)
+    value = Column(JSON, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class TradeEvent(Base):
     """
     A single lifecycle event for a live trade the EA has actually placed
