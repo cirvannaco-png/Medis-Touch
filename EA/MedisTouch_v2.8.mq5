@@ -62,8 +62,6 @@ input double InpMaxSLDistanceATR = 1.5;
 input double InpSLBufferATR = 0.25;        // invalidation margin beyond FVG far edge, in ATR (audit #23 fix)
 input double InpMinStopSpreadMult = 3.0;   // floor: SL distance from entry never below (current spread * this) -- check against real Pepperstone/Exness spread in Tester
 input double InpMaxEntryDeviationATR = 0.15; // reject a market order if price drifted this many ATR from decision entry (audit #25 fix)
-input double InpSLBufferATR = 0.25;        // invalidation margin beyond FVG far edge, in ATR (audit #23 fix)
-input double InpMinStopSpreadMult = 3.0;   // floor: SL distance from entry never below (current spread * this) -- check against real Pepperstone/Exness spread in Tester
 
 input group "Inducement Engine"
 input int    InpImpulseLookbackBars = 40;
@@ -162,6 +160,7 @@ input int    InpMaxPositionsPerGroup = 3;       // per correlation bucket — se
 
 input group "Signal Transport"
 input int    InpWebRequestTimeoutMs = 5000;
+input string InpBridgeApiKey = "";              // must match telegram-bridge's SECRET_KEY env var — sent as X-API-Key on every /signal POST. Leave blank and WebRequest is skipped (Publish() still writes the local CSV feed, nothing is transmitted).
 
 input group "Production Monitoring"
 input int    InpHeartbeatIntervalSec = 60;
@@ -255,7 +254,7 @@ int OnInit()
 
    g_store.Init(_Symbol);
    g_subscribers.Init();
-   g_publisher.Init(_Symbol, &g_subscribers, InpWebRequestTimeoutMs);
+   g_publisher.Init(_Symbol, &g_subscribers, InpWebRequestTimeoutMs, InpBridgeApiKey);
    g_portfolio.Init(InpMaxPortfolioRiskPercent, InpMaxPositionsPerSymbol, InpMaxPositionsPerGroup, InpMagicNumber, &g_risk);
    g_riskGuard.Init(_Symbol, InpMaxDailyLossPercent, InpMaxDrawdownPercent, InpDeriskStartPercent, InpDeriskFloor);
    if(InpUseNewsFilter)

@@ -32,21 +32,26 @@ private:
    long                 m_lastPublishedId;
    CSubscriberPlatform* m_platform;
    int                  m_timeoutMs;
+   string               m_apiKey;    // sent as X-API-Key on every POST — must match telegram-bridge's SECRET_KEY
 
    bool                 TransmitOne(string endpoint, const string &payload);
    string               BuildJsonPayload(const TradeDecisionRecord &dec);
 
 public:
-   void                 Init(string symbol, CSubscriberPlatform* platform, int timeoutMs = 5000);
+   void                 Init(string symbol, CSubscriberPlatform* platform, int timeoutMs = 5000, string apiKey = "");
    void                 Deinit();
    bool                 Publish(const TradeDecisionRecord &dec);
   };
 //+------------------------------------------------------------------+
-void CSignalPublisher::Init(string symbol, CSubscriberPlatform* platform, int timeoutMs)
+void CSignalPublisher::Init(string symbol, CSubscriberPlatform* platform, int timeoutMs, string apiKey)
   {
    m_lastPublishedId = 0;
    m_platform = platform;
    m_timeoutMs = timeoutMs;
+   m_apiKey = apiKey;
+   if(StringLen(m_apiKey) == 0)
+      Print("MedisTouch SignalPublisher: InpBridgeApiKey is blank — every WebRequest to the bridge will be ",
+            "rejected with HTTP 401 until it's set to match the backend's SECRET_KEY.");
    m_filename = "MedisTouch_SignalFeed_" + symbol + ".csv";
    bool exists = FileIsExist(m_filename);
    m_fileHandle = FileOpen(m_filename, FILE_READ | FILE_WRITE | FILE_CSV, ',');
@@ -101,7 +106,14 @@ bool CSignalPublisher::TransmitOne(string endpoint, const string &payload)
 
    char result[];
    string resultHeaders;
+   // X-API-Key is mandatory server-side (verify_api_key in routes.py has
+   // no default) - every POST without it gets a 401 before the payload
+   // is even validated. Concatenated as its own CRLF-terminated header
+   // line per HTTP semantics; WebRequest() takes the whole header block
+   // as one string.
    string headers = "Content-Type: application/json\r\n";
+   if(StringLen(m_apiKey) > 0)
+      headers += "X-API-Key: " + m_apiKey + "\r\n";
 
    ResetLastError();
    int status = WebRequest("POST", endpoint, headers, m_timeoutMs, data, result, resultHeaders);
