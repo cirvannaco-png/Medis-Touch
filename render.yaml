@@ -45,6 +45,15 @@ services:
         sync: false
       - key: ADMIN_CHAT_ID
         sync: false
+      # Telegram *user* id allowed to run admin commands (defaults to
+      # ADMIN_CHAT_ID when unset). Lets the admin command the bot from
+      # inside the group as well as the DM.
+      - key: ADMIN_USER_ID
+        sync: false
+      # Optional second broadcast destination (the subscriber group).
+      # Read it out of the service logs: every inbound update logs its chat_id.
+      - key: GROUP_CHAT_ID
+        sync: false
       - key: SECRET_KEY
         sync: false
       - key: WEBHOOK_SECRET_TOKEN

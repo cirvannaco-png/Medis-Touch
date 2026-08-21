@@ -22,6 +22,18 @@ class Settings(BaseSettings):
     # (typically your personal DM). Kept separate from CHAT_ID so members
     # of the signal group can't run /positions, /risk, etc.
     ADMIN_CHAT_ID: str
+
+    # Inbound authorization by *user* id. Telegram chat ids and user ids
+    # differ once the bot is in a group: the chat id is the group's, while
+    # the user id is stable and belongs to you personally. Authorizing on
+    # the user id means admin commands work from the DM *and* from inside
+    # the group, while still being refused for everybody else.
+    # Defaults to ADMIN_CHAT_ID (identical to the user id for a private chat).
+    ADMIN_USER_ID: str = ""
+
+    # Optional second broadcast destination (the subscriber group). When
+    # set, signals and trade alerts fan out to CHAT_ID *and* GROUP_CHAT_ID.
+    GROUP_CHAT_ID: str = ""
     SECRET_KEY: str
 
     # Use PostgreSQL for production (Render); SQLite for local dev.
@@ -122,6 +134,23 @@ class Settings(BaseSettings):
     @property
     def authorized_chat_id(self) -> str:
         return self.ADMIN_CHAT_ID
+
+    @property
+    def authorized_user_id(self) -> str:
+        """Telegram user id allowed to run admin commands."""
+        return (self.ADMIN_USER_ID or self.ADMIN_CHAT_ID).strip()
+
+    @property
+    def broadcast_chat_ids(self) -> list[str]:
+        """Every destination outbound signals/trade alerts go to, de-duped
+        and order-preserving (CHAT_ID first, so its message_id is the one
+        persisted against the signal)."""
+        ids: list[str] = []
+        for cid in (self.CHAT_ID, self.GROUP_CHAT_ID):
+            cid = (cid or "").strip()
+            if cid and cid not in ids:
+                ids.append(cid)
+        return ids
 
 
 settings = Settings()

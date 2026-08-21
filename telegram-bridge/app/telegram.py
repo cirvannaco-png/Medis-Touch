@@ -48,10 +48,10 @@ def _get_client() -> httpx.AsyncClient:
     retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.RequestError, TelegramSendError)),
     reraise=True,
 )
-async def send_telegram_message(text: str) -> int:
+async def _send_to_chat(text: str, chat_id: str) -> int:
     url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage"
     payload = {
-        "chat_id": settings.CHAT_ID,
+        "chat_id": chat_id,
         "text": text,
         "disable_web_page_preview": True,
     }
@@ -78,8 +78,34 @@ async def send_telegram_message(text: str) -> int:
             raise NonRetryableError(f"Telegram API error (code={error_code}): {data}")
 
     message_id = data["result"]["message_id"]
-    logger.info(f"Telegram message sent, id={message_id}")
+    logger.info(f"Telegram message sent to chat_id={chat_id}, id={message_id}")
     return message_id
+
+
+async def send_telegram_message(text: str, chat_id: str | None = None) -> int:
+    """Send `text` to `chat_id`, or broadcast it to every configured
+    destination (CHAT_ID plus GROUP_CHAT_ID when set).
+
+    The message_id returned is always the one from the primary destination
+    (CHAT_ID) - that's what gets persisted against the signal. A failure on
+    a secondary destination is logged and swallowed so one bad group id
+    can't fail an otherwise delivered signal; a failure on the primary
+    propagates exactly as before.
+    """
+    if chat_id is not None:
+        return await _send_to_chat(text, chat_id)
+
+    targets = settings.broadcast_chat_ids or [settings.CHAT_ID]
+    primary_id = await _send_to_chat(text, targets[0])
+    for extra in targets[1:]:
+        try:
+            await _send_to_chat(text, extra)
+        except Exception as e:  # secondary delivery is best-effort
+            logger.error(
+                f"Broadcast to secondary chat_id={extra} failed "
+                f"({type(e).__name__}): {e}"
+            )
+    return primary_id
 
 
 async def check_bot_token() -> bool:

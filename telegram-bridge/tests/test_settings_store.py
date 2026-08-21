@@ -34,9 +34,15 @@ class _FakeChat:
         self.id = chat_id
 
 
+class _FakeUser:
+    def __init__(self, user_id):
+        self.id = user_id
+
+
 class _FakeUpdate:
-    def __init__(self, chat_id=AUTHORIZED_CHAT_ID):
+    def __init__(self, chat_id=AUTHORIZED_CHAT_ID, user_id=None):
         self.effective_chat = _FakeChat(chat_id)
+        self.effective_user = _FakeUser(chat_id if user_id is None else user_id)
         self.message = _FakeMessage()
 
 

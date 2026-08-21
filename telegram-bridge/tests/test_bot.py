@@ -98,8 +98,12 @@ def test_signal_handler_reflects_stored_signal(client, auth_headers):
     class _FakeChat:
         id = AUTHORIZED_CHAT_ID
 
+    class _FakeUser:
+        id = AUTHORIZED_CHAT_ID
+
     class _FakeUpdate:
         effective_chat = _FakeChat()
+        effective_user = _FakeUser()
         message = _FakeMessage()
 
     import asyncio
@@ -128,8 +132,12 @@ def test_positions_handler_reflects_open_trade(client, auth_headers):
     class _FakeChat:
         id = AUTHORIZED_CHAT_ID
 
+    class _FakeUser:
+        id = AUTHORIZED_CHAT_ID
+
     class _FakeUpdate:
         effective_chat = _FakeChat()
+        effective_user = _FakeUser()
         message = _FakeMessage()
 
     import asyncio
@@ -158,11 +166,57 @@ def test_unauthorized_chat_gets_no_reply():
     class _FakeChat:
         id = 424242
 
+    class _FakeUser:
+        id = 424242
+
     class _FakeUpdate:
         effective_chat = _FakeChat()
+        effective_user = _FakeUser()
         message = _FakeMessage()
 
     update = _FakeUpdate()
     asyncio.run(start_handler(update, context=None))
 
     assert update.message.replies == []
+
+
+def test_admin_user_authorized_from_group_chat():
+    """Authorization is by *user* id, so the admin can run commands from
+    inside the signal group, not just the DM."""
+    import asyncio
+
+    from app.bot_handlers import start as start_handler
+
+    class _FakeMessage:
+        def __init__(self):
+            self.replies = []
+
+        async def reply_text(self, text):
+            self.replies.append(text)
+
+    class _FakeChat:
+        id = BROADCAST_CHAT_ID
+
+    class _FakeUser:
+        id = AUTHORIZED_CHAT_ID
+
+    class _FakeUpdate:
+        effective_chat = _FakeChat()
+        effective_user = _FakeUser()
+        message = _FakeMessage()
+
+    update = _FakeUpdate()
+    asyncio.run(start_handler(update, context=None))
+
+    assert update.message.replies, "admin should be answered inside the group"
+
+
+def test_broadcast_targets_include_group_chat_id(monkeypatch):
+    """GROUP_CHAT_ID, when set, is fanned out to alongside CHAT_ID."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "GROUP_CHAT_ID", "-1009999999", raising=False)
+    assert settings.broadcast_chat_ids == [settings.CHAT_ID, "-1009999999"]
+
+    monkeypatch.setattr(settings, "GROUP_CHAT_ID", "", raising=False)
+    assert settings.broadcast_chat_ids == [settings.CHAT_ID]

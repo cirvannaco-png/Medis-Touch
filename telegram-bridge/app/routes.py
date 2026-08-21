@@ -153,6 +153,21 @@ async def telegram_webhook(
         raise HTTPException(status_code=401, detail="Invalid secret token")
 
     payload = await request.json()
+
+    # Temporary discovery aid: log the chat id of every inbound update so
+    # the group's chat id can be read straight out of the service logs and
+    # set as GROUP_CHAT_ID. Safe to remove once that's configured.
+    try:
+        _chat = (payload.get("message") or payload.get("channel_post") or {}).get("chat") or {}
+        _from = (payload.get("message") or {}).get("from") or {}
+        logger.info(
+            f"Telegram update from chat_id={_chat.get('id')} "
+            f"type={_chat.get('type')} title={_chat.get('title')} "
+            f"user_id={_from.get('id')}"
+        )
+    except AttributeError:
+        logger.info("Telegram update with unexpected payload shape")
+
     try:
         await bot_module.process_update(payload)
     except Exception as e:

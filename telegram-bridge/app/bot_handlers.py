@@ -65,7 +65,10 @@ COMMAND_LIST = [
 
 def _authorized_only(handler):
     """
-    Reject anything not coming from settings.ADMIN_CHAT_ID (the admin DM).
+    Reject anything not sent by settings.authorized_user_id (ADMIN_USER_ID,
+    falling back to ADMIN_CHAT_ID). Authorizing on the *user* id rather than
+    the chat id means admin commands work from the DM and from inside the
+    signal group, while everyone else is still ignored.
     CHAT_ID is only the broadcast destination for signals and trade fills;
     it is deliberately not authorized here, so neither a stranger who finds
     the bot's username nor a member of the signal group can pull open
@@ -74,9 +77,13 @@ def _authorized_only(handler):
 
     @wraps(handler)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
         chat = update.effective_chat
-        if chat is None or str(chat.id) != settings.authorized_chat_id:
-            logger.warning(f"Ignored command from unauthorized chat_id={chat.id if chat else None}")
+        if user is None or str(user.id) != settings.authorized_user_id:
+            logger.warning(
+                f"Ignored command from unauthorized user_id="
+                f"{user.id if user else None} chat_id={chat.id if chat else None}"
+            )
             return
         return await handler(update, context)
 
