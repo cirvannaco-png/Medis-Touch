@@ -8,6 +8,7 @@
 #include "../Core/SignalLogger.mqh"
 #include "../Analysis/TFContext.mqh"
 #include "RiskEngine.mqh"
+#include "CalibrationEngine.mqh"
 
 // SCOPE / HONEST LIMITATIONS — read before trusting the numbers this
 // produces:
@@ -105,6 +106,11 @@ private:
    double            m_spreadPoints;         // simulated spread, in points
    double            m_slippagePoints;       // simulated adverse slippage per fill, in points
 
+   // v2.9: feeds every resolved trade's (confidence, netPnL) into the
+   // calibration bucket engine — see CalibrationEngine.mqh for scope/limits.
+   CCalibrationEngine m_calibration;
+   bool              m_calibrationEnabled;
+
    void              RemoveAt(int idx);
    // Pre-fill resolutions only (Invalidated_NoFill / Timeout_NoFill) —
    // never a real trade, so no $ accounting applies. Post-fill
@@ -164,6 +170,14 @@ public:
    int               ActiveCount() const { return m_count; }
    OutcomeStats      GetStats() const { return m_stats; }
    bool              GetFillState(datetime creation_time, bool &filled, double &fillPrice, datetime &fillTime, int &barsToFill);
+   // v2.9. Call once after Init(), same pattern as ConfigureSimulation().
+   // OFF by default — calibration data is only meaningful once you've
+   // deliberately decided to start collecting it (see CalibrationEngine.mqh
+   // limitation #4 re: resetting after scoring-formula changes).
+   void              ConfigureCalibration(bool enabled, int minSample = 30) { m_calibrationEnabled = enabled; m_calibration.Init(m_symbol, minSample); }
+   double            GetCalibratedProbability(double confidence, int &sampleSizeOut, bool &hasEnoughDataOut) const
+     { return m_calibration.GetCalibratedProbability(confidence, sampleSizeOut, hasEnoughDataOut); }
+   const CCalibrationEngine* CalibrationEngine() const { return GetPointer(m_calibration); }
   };
 //+------------------------------------------------------------------+
 COutcomeTracker::COutcomeTracker() : m_count(0), m_maxBars(100), m_logger(NULL),
@@ -171,7 +185,7 @@ COutcomeTracker::COutcomeTracker() : m_count(0), m_maxBars(100), m_logger(NULL),
                                       m_riskPercent(0.5), m_allowMinLotOverride(true),
                                       m_breakEvenAtR(1.0), m_partialAtR(2.0), m_partialFraction(0.5),
                                       m_trailAtrMult(1.5), m_commissionPerLot(7.0),
-                                      m_spreadPoints(10.0), m_slippagePoints(2.0)
+                                      m_spreadPoints(10.0), m_slippagePoints(2.0), m_calibrationEnabled(false)
   {
    ZeroMemory(m_stats);
   }
@@ -364,6 +378,13 @@ void COutcomeTracker::FinalizeExit(int idx, PendingSetup &p, string outcome, dou
 
          double oneRDollar = p.mgmtRiskDist * ValuePerUnitDistance() * p.lots;
          if(oneRDollar > 0) m_stats.sumRMultiple += p.realizedPnL / oneRDollar;
+
+         // v2.9: feed this resolved, sized, non-ambiguous trade into the
+         // calibration engine. p.setup.confidence is the RAW score at
+         // signal time — see CalibrationEngine.mqh limitation #4 about
+         // what happens to this data across a scoring-formula change.
+         if(m_calibrationEnabled)
+            m_calibration.Record(p.setup.confidence, p.realizedPnL);
         }
      }
 

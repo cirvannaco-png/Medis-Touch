@@ -110,10 +110,27 @@ input bool   InpAllowLondonSession = true;
 input bool   InpAllowNewYorkSession = true;
 input bool   InpAllowLondonNYOverlap = true;       // highest-liquidity window; independent of the two flags above
 
+input group "Sweep Quality / Chase Filter / FVG Proximity (v2.9)"
+input bool   InpRequireMinSweepGrade = false;      // Gate: OFF by default, unbacktested — reject sweeps graded below InpMinSweepGrade
+input int    InpMinSweepGrade = 2;                 // 1=C(any valid sweep), 2=B, 3=A — see ENUM_SWEEP_GRADE
+input bool   InpRequireFreshSetup = false;         // Gate: OFF by default — hard-reject once TimeDecay() hits 0 bars-since-BOS
+input int    InpMaxBarsSinceBOS = 5;               // Decay-to-zero cutoff (0/90/75/55/0% curve, see Inducement.mqh)
+input bool   InpRequireChaseFilter = false;        // Gate: OFF by default — reject setups that ran too far past BOS before entry
+input double InpMaxChaseDistATR = 0.75;            // Max (price - BOS close)/ATR in the trade direction before rejecting as "chased"
+input double InpFVGMaxDistATR = 1.25;              // FVG proximity cap — tightened default from the old hardcoded 3.0 (see Scoring.mqh)
+input double InpMinDirectionalAdvantage = 0.0;     // v2.9: min confidence-point edge BUY must have over SELL (or vice versa) to be selected; 0 = old ">="-only behavior, unvalidated nonzero values need ablation testing (review item "directional competition")
+
+input group "Signal Lifecycle (v2.9)"
+input bool   InpPublishLifecycleUpdates = false;   // OFF by default — requires the bridge to be on migration 0004+; a pre-0004 bridge will 404 the PATCH endpoint
+input int    InpSignalExpiryBars = 12;             // unfilled for this many bars -> EXPIRED (review: "signal expiry")
+input double InpSignalStaleChaseATR = 1.0;         // unfilled AND price has moved this many ATR past entry -> STALE (looser than InpMaxChaseDistATR's pre-entry gate — this is post-publish drift, not pre-entry rejection)
+input double InpInvalidateOpposingConfidence = 70.0; // unfilled AND the opposite direction's confidence reaches this -> INVALIDATED
+
 input group "Logging"
 input bool   InpLogSignals = true;
 input bool   InpTrackOutcomes = true;
 input int    InpMaxTrackingBars = 100;
+input int    InpCalibrationMinSample = 30;         // v2.9: bucket sample size before GetCalibratedProbability() is trusted — see CalibrationEngine.mqh
 input int    InpSessionGMTOffsetOverride = 999;
 input ENUM_FILL_POLICY InpFillPolicy = FILL_CONSERVATIVE;
 input ENUM_TIMEFRAMES  InpReplayTF = PERIOD_M1;
@@ -141,6 +158,9 @@ input bool   InpUseNewsFilter = false;          // off by default — you mainta
 input string InpNewsFilterFile = "MedisTouch_News.csv"; // MQL5/Files/<this>, format: YYYY.MM.DD,HH:MM,HIGH,Label
 input int    InpNewsMinutesBefore = 15;
 input int    InpNewsMinutesAfter = 5;
+input int    InpNewsWarnMinutesBefore = 60;        // v2.9: soft-discount window, wider than the hard block above — see NewsFilter.mqh
+input int    InpNewsWarnMinutesAfter = 30;
+input double InpNewsWarnMultiplier = 0.85;         // confidence *= this while inside the warning window but outside the block window
 
 input group "Position Management"
 input double InpBreakEvenAtR = 1.0;             // move SL to entry once price is this many R in favor
@@ -198,6 +218,16 @@ CProductionMonitor g_monitor;
 datetime           g_lastLoggedTime = 0;
 datetime           g_lastBarTime = 0;
 
+// v2.9 — signal lifecycle monitor state. Tracks only the single most
+// recently published, still-unfilled decision — matches the existing
+// g_lastLoggedTime dedup pattern (one active setup at a time is this
+// EA's whole model; see the "already routed this exact setup" check
+// above). g_lifecycleDecisionId==0 means "nothing pending to monitor".
+long               g_lifecycleDecisionId = 0;
+datetime           g_lifecycleCreationTime = 0;
+TradeSetup         g_lifecycleSetup;
+string             g_lifecycleStatus = "valid"; // last status pushed for this decision — avoids re-POSTing the same transition every tick
+
 //+------------------------------------------------------------------+
 int OnInit()
   {
@@ -235,6 +265,10 @@ int OnInit()
    g_scoring.ConfigureVolatilityRegime(InpBlockLowVolRegime, InpVolRegimeLookback, InpVolRegimeLowPct, InpVolRegimeHighPct);
    g_scoring.ConfigureSessionFilter(InpUseSessionFilter, InpAllowTokyoSession, InpAllowLondonSession,
                                     InpAllowNewYorkSession, InpAllowLondonNYOverlap);
+   g_scoring.ConfigureSweepQuality(InpRequireMinSweepGrade, (ENUM_SWEEP_GRADE)InpMinSweepGrade,
+                                   InpRequireFreshSetup, InpMaxBarsSinceBOS);
+   g_scoring.ConfigureChaseFilter(InpRequireChaseFilter, InpMaxChaseDistATR);
+   g_scoring.ConfigureFVGProximity(InpFVGMaxDistATR);
    g_decision.Init(&g_chartCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, InpSLBufferATR, InpMinStopSpreadMult);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);
@@ -244,6 +278,7 @@ int OnInit()
    g_tracker.ConfigureSimulation(InpRiskPercentPerTrade, InpAllowMinLotOverride,
                                  InpBreakEvenAtR, InpPartialAtR, InpPartialFraction, InpTrailATRMult,
                                  InpSimCommissionPerLot, InpSimSpreadPoints, InpSimSlippagePoints);
+   g_tracker.ConfigureCalibration(InpTrackOutcomes, InpCalibrationMinSample);
 
    g_router.Init(_Symbol, InpEnableExecution, InpEnableSignals,
                 InpMinConfidenceExecute, InpMinConfidenceSignal, InpFullRiskConfidence, InpMaxSpreadPoints);
@@ -259,6 +294,13 @@ int OnInit()
    g_riskGuard.Init(_Symbol, InpMaxDailyLossPercent, InpMaxDrawdownPercent, InpDeriskStartPercent, InpDeriskFloor);
    if(InpUseNewsFilter)
       g_newsFilter.Load(InpNewsFilterFile, InpNewsMinutesBefore, InpNewsMinutesAfter);
+   // v2.9: wire the same CNewsFilter instance into scoring for the
+   // soft-discount tier. If InpUseNewsFilter is false, the filter was
+   // never Load()-ed (m_enabled stays false internally), so
+   // GetRiskTier() always returns NEWS_NONE and this is a no-op —
+   // consistent with every other OFF-by-default v2.9 gate.
+   g_scoring.ConfigureNewsAwareness(GetPointer(g_newsFilter), InpNewsWarnMinutesBefore,
+                                    InpNewsWarnMinutesAfter, InpNewsWarnMultiplier);
 
    // Recovery must run AFTER OrderManager/BrokerAdapter exist (it writes
    // into g_orders) and AFTER g_store is initialized (it reads decision
@@ -296,6 +338,96 @@ void OnDeinit(const int reason)
    g_store.Deinit();
   }
 //+------------------------------------------------------------------+
+// v2.9 — signal lifecycle monitor (review: "SCANNING -> QUALIFIED ->
+// POSTED -> ACTIVE -> TP/SL/EXPIRED/INVALIDATED"). Called every tick
+// when InpPublishLifecycleUpdates is on; each check is cheap (a handful
+// of comparisons + at most one CalculateConfidence() call), and the
+// function returns immediately if nothing is being tracked.
+//
+// Deliberately does NOT handle TP/SL resolution — that's already
+// covered by the existing PositionManager -> OutcomeTracker -> POST
+// /trade closed_tp1/closed_tp2/closed_sl path. This only handles "this
+// setup stopped being a valid reason to enter", which is a distinct
+// question from "did a filled position hit its target".
+void CheckSignalLifecycle(double currentAtr)
+  {
+   if(g_lifecycleDecisionId == 0) return;
+
+   bool filled; double fillPrice; datetime fillTime; int barsToFill;
+   bool haveState = g_tracker.GetFillState(g_lifecycleCreationTime, filled, fillPrice, fillTime, barsToFill);
+   if(!haveState) { g_lifecycleDecisionId = 0; return; } // tracker no longer has this setup (fell off m_maxBars window) — nothing more to say
+
+   if(filled)
+     {
+      // Filled — no longer a "will this get entered" question. Clear
+      // tracking; TP/SL/close events take over from here via /trade.
+      g_lifecycleDecisionId = 0;
+      return;
+     }
+
+   bool isBuy = (g_lifecycleSetup.type == ORDER_TYPE_BUY);
+   int barsSinceCreation = iBarShift(_Symbol, InpFVGTF, g_lifecycleCreationTime, false);
+
+   // EXPIRED takes priority over STALE — an old-and-drifted setup should
+   // report as expired, not stale, since expiry is the terminal state.
+   if(barsSinceCreation >= InpSignalExpiryBars)
+     {
+      if(g_lifecycleStatus != "expired")
+        {
+         g_publisher.PublishStatusUpdate(g_lifecycleDecisionId, "expired",
+                                         StringFormat("Unfilled for %d bars (max %d) — setup abandoned", barsSinceCreation, InpSignalExpiryBars));
+         g_lifecycleStatus = "expired";
+        }
+      g_lifecycleDecisionId = 0; // terminal — stop tracking
+      return;
+     }
+
+   // INVALIDATED: the opposite direction has since become a strong
+   // setup in its own right — a real structural contradiction of the
+   // original read, not just drift. Checked before STALE for the same
+   // "worse state wins" reasoning as EXPIRED above.
+   double oppositeConfidence = g_scoring.CalculateConfidence(!isBuy);
+   if(oppositeConfidence >= InpInvalidateOpposingConfidence)
+     {
+      if(g_lifecycleStatus != "invalidated")
+        {
+         g_publisher.PublishStatusUpdate(g_lifecycleDecisionId, "invalidated",
+                                         StringFormat("Opposing setup confidence reached %.0f — original read contradicted", oppositeConfidence));
+         g_lifecycleStatus = "invalidated";
+        }
+      g_lifecycleDecisionId = 0; // terminal — stop tracking
+      return;
+     }
+
+   // STALE: unfilled and price has drifted meaningfully past the
+   // intended entry zone. Non-terminal — price can pull back into the
+   // zone, so keep monitoring (but only publish the transition once).
+   if(currentAtr > 0)
+     {
+      double entry = ResolveExecutionEntry(g_lifecycleSetup);
+      double price = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double driftATR = MathAbs(price - entry) / currentAtr;
+      bool wentWrongWay = isBuy ? (price > entry) : (price < entry); // "chased" means price ran further into the trade direction, unfilled
+      if(wentWrongWay && driftATR >= InpSignalStaleChaseATR)
+        {
+         if(g_lifecycleStatus != "stale")
+           {
+            g_publisher.PublishStatusUpdate(g_lifecycleDecisionId, "stale",
+                                            StringFormat("Price drifted %.2f ATR past the entry zone, unfilled", driftATR));
+            g_lifecycleStatus = "stale";
+           }
+        }
+      else if(g_lifecycleStatus == "stale" && driftATR < InpSignalStaleChaseATR * 0.5)
+        {
+         // Price came back — revert to VALID. Half the trigger distance
+         // as a hysteresis band so this doesn't flip-flop every tick
+         // right at the threshold.
+         g_publisher.PublishStatusUpdate(g_lifecycleDecisionId, "valid", "Price returned toward the entry zone");
+         g_lifecycleStatus = "valid";
+        }
+     }
+  }
+//+------------------------------------------------------------------+
 void OnTick()
   {
    g_monitor.OnTickCheck(); // cheap, cadence-gated internally — safe to call every tick
@@ -310,6 +442,9 @@ void OnTick()
    g_positions.OnTick(currentAtr);
    g_orders.Prune();
    g_riskGuard.OnTick(); // cheap — daily rollover check + peak-equity/drawdown tracking
+
+   if(InpPublishLifecycleUpdates)
+      CheckSignalLifecycle(currentAtr);
 
    string haltReason;
    if(g_riskGuard.IsHardHalted(haltReason))
@@ -342,9 +477,36 @@ void OnTick()
    TradeSetup buySetup = g_decision.GenerateBuySetup();
    TradeSetup sellSetup = g_decision.GenerateSellSetup();
 
+   // v2.9 — directional competition (review: "don't force equal BUY/SELL
+   // frequency; require a minimum probability/confidence advantage").
+   // Previously this was a bare ">=", i.e. a 0.01-point edge could flip
+   // direction — no different from a coin flip when both setups are
+   // roughly equally valid. InpMinDirectionalAdvantage=0 preserves that
+   // exact old behavior (default); a nonzero value requires the winning
+   // side to actually be ahead by that many confidence points, and drops
+   // the bar entirely (no trade either direction) when neither side
+   // clears it — an ambiguous market gets skipped instead of arbitrarily
+   // resolved. Needs the same ablation-test treatment as everything else
+   // to find a real threshold; 0 ships as the safe default.
    TradeSetup chosen;
    ZeroMemory(chosen);
-   if(buySetup.active && (!sellSetup.active || buySetup.confidence >= sellSetup.confidence))
+   double confDelta = buySetup.confidence - sellSetup.confidence;
+   if(buySetup.active && sellSetup.active)
+     {
+      if(confDelta >= InpMinDirectionalAdvantage)
+        {
+         if(g_risk.ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr))
+            chosen = buySetup;
+        }
+      else if(-confDelta >= InpMinDirectionalAdvantage)
+        {
+         if(g_risk.ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr))
+            chosen = sellSetup;
+        }
+      // else: neither side clears the advantage threshold — no trade,
+      // market read as ambiguous rather than arbitrarily picking one.
+     }
+   else if(buySetup.active)
      {
       if(g_risk.ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr))
          chosen = buySetup;
@@ -358,6 +520,14 @@ void OnTick()
    if(!chosen.active) return;
    if(chosen.creation_time == g_lastLoggedTime) return; // already routed this exact setup
    g_lastLoggedTime = chosen.creation_time;
+
+   // v2.9: attach the empirical calibration read for this confidence
+   // bucket to the chosen setup before it's logged/published — this is
+   // what turns "confidence 78" into "confidence 78, historically wins
+   // 63% of the time (114 comparable setups)" on the Telegram card.
+   chosen.calibrated_probability = g_tracker.GetCalibratedProbability(chosen.confidence,
+                                                                       chosen.calibration_sample,
+                                                                       chosen.calibration_has_enough_data);
 
    if(InpLogSignals)
      {
@@ -408,7 +578,17 @@ void OnTick()
         }
      }
    if(decision.action == POLICY_SIGNAL_ONLY || decision.action == POLICY_EXECUTE_AND_SIGNAL)
+     {
       g_publisher.Publish(decision);
+      // v2.9: start lifecycle-monitoring this decision. Overwrites
+      // whatever was being tracked before — matches the
+      // one-active-setup-at-a-time model g_lastLoggedTime already
+      // assumes elsewhere in this function.
+      g_lifecycleDecisionId = decision.decision_id;
+      g_lifecycleCreationTime = chosen.creation_time;
+      g_lifecycleSetup = chosen;
+      g_lifecycleStatus = "valid";
+     }
   }
 //+------------------------------------------------------------------+
 // C003 FIX: a resting limit order (InpUseMarketOrders = false) sits in

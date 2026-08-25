@@ -108,6 +108,44 @@ async def send_telegram_message(text: str, chat_id: str | None = None) -> int:
     return primary_id
 
 
+async def edit_telegram_message(message_id: int, text: str, chat_id: str | None = None) -> bool:
+    """v2.9 addition — signal lifecycle support (VALID -> STALE/EXPIRED/
+    INVALIDATED). Edits the primary chat's copy of a previously-sent
+    message. KNOWN LIMITATION: send_telegram_message() broadcasts to
+    every configured chat_id (CHAT_ID + GROUP_CHAT_ID + extras) but only
+    persists the primary destination's message_id on the Signal row —
+    so this can only edit the primary copy. Secondary/group copies of a
+    signal that later goes STALE/EXPIRED/INVALIDATED will NOT be edited
+    until message_id tracking is extended to one-per-destination. Not
+    silently broken: this is a real gap, flagged rather than hidden.
+    Returns False (not raised) on failure — a failed edit shouldn't ever
+    take down the caller; the DB-side lifecycle_status update in
+    routes.py still lands either way.
+    """
+    url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/editMessageText"
+    target = chat_id or settings.CHAT_ID
+    payload = {
+        "chat_id": target,
+        "message_id": message_id,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+    client = _get_client()
+    try:
+        response = await client.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        if not data.get("ok"):
+            logger.warning(f"editMessageText returned ok=false: {data}")
+            return False
+        return True
+    except Exception as e:
+        # Intentionally broad + swallowed, same rationale as check_bot_token():
+        # a failed lifecycle-status edit must never break signal ingestion.
+        logger.warning(f"editMessageText failed ({type(e).__name__}): {e}")
+        return False
+
+
 async def check_bot_token() -> bool:
     """Check if the bot token is valid. Returns True if valid, False otherwise."""
     url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/getMe"

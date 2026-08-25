@@ -8,6 +8,8 @@
 #ifndef CONFIG_MQH
 #define CONFIG_MQH
 
+#include "NewsFilter.mqh" // for ENUM_NEWS_RISK, used by SetupReasons (v2.9)
+
 // --- Enums ---
 enum ENUM_TREND_STATE
   {
@@ -129,6 +131,18 @@ enum ENUM_TRADING_SESSION
    SESSION_LONDON_NY_OVERLAP
   };
 
+// v2.9 addition — Inducement.mqh's sweep-quality classification. A
+// boolean sweepFound treats a 1-tick liquidity poke and a violent
+// displacement-sweep-rejection identically; this doesn't. See
+// CInducement::GradeSweep() for the scoring components.
+enum ENUM_SWEEP_GRADE
+  {
+   SWEEP_GRADE_NONE,   // no sweep (Validate() already returns early in this case)
+   SWEEP_GRADE_C,      // technically valid, weak: shallow/deep penetration, poor reclaim, no follow-through
+   SWEEP_GRADE_B,      // valid sweep, decent rejection, missing one of the A-grade components
+   SWEEP_GRADE_A       // strong reclaim + sensible penetration depth + immediate displacement follow-through
+  };
+
 struct ImpulseLeg
   {
    bool              valid;
@@ -161,6 +175,20 @@ struct InducementResult
    double            totalScore;         // sum of the above, 0-70 (FVG+HTF add the remaining 30 in Scoring.mqh)
    ImpulseLeg        leg;                // the impulse this result was built from (only meaningful if impulseFound)
    string            reason;             // plain-language explanation, mainly for the dashboard/log
+
+   // --- v2.9 additions ---------------------------------------------
+   // sweepScore/bosScore above are now WEIGHTED by these rather than
+   // being flat 25/20-or-0 — see CInducement::Validate(). Kept as
+   // separate fields (rather than silently folded into totalScore only)
+   // so the dashboard/CSV can show WHY a setup scored what it did.
+   ENUM_SWEEP_GRADE  sweepGrade;         // A/B/C — see ENUM_SWEEP_GRADE
+   double            sweepGradeScore;    // 0-1 continuous form GradeSweep() actually computed
+   double            bosStrength;        // 0-1: break-distance(ATR) + body-ratio blend, replaces the old binary bosConfirmed-only read
+   int               barsSinceSweep;     // series-index (bars ago) of the sweep bar, i.e. "how stale is this setup"
+   int               barsSinceBOS;       // series-index of the confirming BOS close
+   double            timeDecay;          // 0-1 multiplier from barsSinceBOS — see CInducement::TimeDecay()
+   double            bosClosePrice;      // close price of the bar that confirmed BOS — used by Scoring.mqh's chase filter
+   int               bosBarIndex;        // == barsSinceBOS, kept as an explicit index for clarity at call sites; -1 if no BOS yet
   };
 
 // One resolved outcome bucketed for honest win-rate reporting. Kept
@@ -356,6 +384,20 @@ struct SetupReasons
    ENUM_VOL_REGIME   vol_regime;         // ATR-percentile regime at setup creation
    ENUM_TRADING_SESSION session;         // named session window at setup creation
    bool              session_ok;         // session gate result (always computed; only blocks if enabled)
+   // --- v2.9 diagnostics — always populated, same "informational unless
+   // the gate is enabled" convention as the v2.6/v2.8 blocks above.
+   ENUM_SWEEP_GRADE  sweep_grade;
+   double            bos_strength;
+   double            time_decay;
+   double            chase_dist_atr;     // (price - BOS close) / ATR in the trade direction; negative/zero = not chasing
+   bool              chase_ok;           // chase_dist_atr <= the configured max (always computed; only blocks if enabled)
+   // v2.9 — news-aware soft scoring diagnostics (distinct from the EA-level
+   // hard IsLocked() block, which still fully prevents entries near an
+   // event; this is the WIDER warning-tier read Scoring.mqh applies as a
+   // soft confidence discount). See CScoringEngine::ConfigureNewsAwareness().
+   ENUM_NEWS_RISK    news_risk;
+   string            news_label;
+   int               news_minutes_to_event;
   };
 
 struct TradeSetup
@@ -371,6 +413,16 @@ struct TradeSetup
    datetime          creation_time;
    bool              active;
    SetupReasons      reasons;
+   // v2.9: populated by the EA right after g_tracker.GetCalibratedProbability()
+   // is called on the chosen setup (see MedisTouch_v2.8.mq5) — NOT set by
+   // the scoring engine itself, since calibration data lives in
+   // COutcomeTracker, not Scoring.mqh. calibration_sample==0 means "no
+   // calibration data for this bucket yet"; always check
+   // calibration_has_enough_data before treating calibrated_probability
+   // as meaningful (see CalibrationEngine.mqh).
+   double            calibrated_probability;   // 0-100, empirical win rate for this confidence bucket
+   int               calibration_sample;
+   bool              calibration_has_enough_data;
   };
 
 // Single source of truth for "what price does this setup actually fill

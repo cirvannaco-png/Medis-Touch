@@ -13,12 +13,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import bot as bot_module
 from app.config import APP_VERSION, settings
 from app.database import check_db_connection, get_session
-from app.formatter import format_signal_message, format_trade_message
+from app.formatter import format_lifecycle_banner, format_signal_message, format_trade_message
 from app.logger import logger
-from app.models import Signal, SignalStatus, TradeEvent, TradeEventStatus, TradeEventType
+from app.models import (
+    Signal,
+    SignalLifecycleStatus,
+    SignalStatus,
+    TradeEvent,
+    TradeEventStatus,
+    TradeEventType,
+)
 from app.ratelimit import enforce_rate_limit
 from app.settings_store import is_broadcast_paused, is_symbol_muted
-from app.telegram import NonRetryableError, send_telegram_message
+from app.telegram import NonRetryableError, edit_telegram_message, send_telegram_message
 from app.utils import measure_latency
 from app.validator import validate_signal, validate_trade_event
 
@@ -39,6 +46,13 @@ class SignalRequest(BaseModel):
     confidence: int = Field(..., ge=0, le=100)
     reasons: list[str] = Field(..., min_length=1)
     timeframe: str
+    # v2.9: optional so pre-v2.9 EA builds keep working unmodified — see
+    # models.py:Signal.extra. Not validated field-by-field on purpose;
+    # this is display-only diagnostic data (sweep grade, BOS strength,
+    # decay, chase distance, news risk, calibrated probability, pip
+    # distances), never used for trading logic on the bridge side, so a
+    # missing or malformed key degrades the Telegram card, not a decision.
+    extra: dict | None = Field(default=None)
 
     @field_validator("reasons")
     @classmethod
@@ -223,6 +237,7 @@ async def receive_signal(
         reasons=payload.reasons,
         timeframe=payload.timeframe,
         status=SignalStatus.PENDING,
+        extra=payload.extra,
     )
     session.add(db_signal)
     try:
@@ -284,6 +299,72 @@ async def receive_signal(
         )
 
     return SignalResponse(status="sent", signal_id=payload.signal_id, telegram_message_id=msg_id)
+
+
+# v2.9 addition — signal lifecycle (review: "SCANNING -> QUALIFIED ->
+# POSTED -> ACTIVE -> TP/SL/EXPIRED/INVALIDATED"). This endpoint handles
+# the STALE/EXPIRED/INVALIDATED transitions the EA detects post-publish
+# (see EA/includes/Signals/SignalPublisher.mqh::PublishStatusUpdate()).
+# TP/SL resolution is already covered separately by POST /trade's
+# closed_tp1/closed_tp2/closed_sl events — this endpoint is only for "this
+# setup is no longer a valid reason to enter", not fills/closes.
+class LifecycleUpdateRequest(BaseModel):
+    status: Literal["stale", "expired", "invalidated", "valid"]
+    reason: str = Field(..., min_length=1, max_length=300)
+
+
+class LifecycleUpdateResponse(BaseModel):
+    signal_id: str
+    lifecycle_status: str
+    message_edited: bool
+
+
+@router.patch("/signal/{signal_id}/status", response_model=LifecycleUpdateResponse)
+async def update_signal_lifecycle(
+    signal_id: str,
+    payload: LifecycleUpdateRequest,
+    session: AsyncSession = Depends(get_session),
+    _auth: bool = Depends(verify_api_key),
+):
+    log = logger.bind(signal_id=signal_id)
+    result = await session.execute(select(Signal).where(Signal.signal_id == signal_id))
+    db_signal = result.scalar_one_or_none()
+    if db_signal is None:
+        raise HTTPException(status_code=404, detail=f"No signal found with signal_id={signal_id}")
+
+    new_status = SignalLifecycleStatus(payload.status)
+    # A signal that was never successfully delivered (no telegram_message_id)
+    # has nothing to edit — still record the status change, just skip the
+    # Telegram call rather than erroring the whole request over it.
+    edited = False
+    if db_signal.telegram_message_id is not None and new_status != SignalLifecycleStatus.VALID:
+        original_text = format_signal_message(
+            {
+                "signal_id": db_signal.signal_id,
+                "symbol": db_signal.symbol,
+                "direction": db_signal.direction,
+                "entry": db_signal.entry,
+                "sl": db_signal.sl,
+                "tp1": db_signal.tp1,
+                "tp2": db_signal.tp2,
+                "timeframe": db_signal.timeframe,
+                "confidence": db_signal.confidence,
+                "reasons": db_signal.reasons,
+                "extra": db_signal.extra,
+            }
+        )
+        banner = format_lifecycle_banner(new_status.value, payload.reason)
+        edited = await edit_telegram_message(db_signal.telegram_message_id, banner + "\n\n" + original_text)
+        if not edited:
+            log.warning(f"Lifecycle status DB-updated to {new_status.value} but Telegram edit failed")
+
+    db_signal.lifecycle_status = new_status
+    db_signal.lifecycle_reason = payload.reason
+    db_signal.lifecycle_updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    log.info(f"Lifecycle status -> {new_status.value}: {payload.reason}")
+
+    return LifecycleUpdateResponse(signal_id=signal_id, lifecycle_status=new_status.value, message_edited=edited)
 
 
 @router.post("/trade", response_model=TradeEventResponse)

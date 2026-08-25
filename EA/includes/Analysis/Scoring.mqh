@@ -13,6 +13,7 @@
 #include "../SmartMoney/OrderBlock.mqh"
 #include "VolatilityRegime.mqh"
 #include "../Core/SessionFilter.mqh"
+#include "../Core/PipCalculator.mqh"
 
 // v2.1 SCORING MODEL — replaces the old flat weighted sum with the
 // point table from the inducement-engine spec:
@@ -86,6 +87,18 @@ private:
    CSessionFilter    m_sessionFilter;        // ON by default (see Init()) — direct fix for
                                               // "trading time is across all sessions"
 
+   // --- v2.9 additions ---------------------------------------------
+   double            m_fvgMaxDistATR;        // was hardcoded 3.0; now 1.25 by default — see ConfigureFVGProximity()
+   bool              m_requireChaseFilter;   // OFF by default — see ConfigureChaseFilter()
+   double            m_maxChaseDistATR;
+
+   // v2.9 — news-aware soft scoring. Distinct from the EA-level hard
+   // IsLocked() block (which fully prevents entries in the narrow window
+   // regardless of this). NULL pointer = feature inactive, same
+   // fail-open-if-unconfigured convention as m_htfObCtx etc.
+   CNewsFilter*      m_newsFilter;
+   double            m_newsWarningMultiplier; // confidence *= this when in the WARNING tier
+
    double            OBScore(bool forBuy);
 
    double            TrendScore(bool forBuy);
@@ -151,6 +164,36 @@ public:
    // enabled=false to restore pre-v2.8 all-sessions behavior.
    void              ConfigureSessionFilter(bool enabled, bool allowTokyo = false, bool allowLondon = true,
                                             bool allowNewYork = true, bool allowOverlap = true);
+   // v2.9 addition. FVGScore() now ranks every qualifying FVG and keeps
+   // the best-scoring one instead of returning the first match found —
+   // "first" had no relationship to "best" (freshness/proximity), so two
+   // setups with identical top-line confidence could be resting on very
+   // different FVG quality. Default distance cap tightened from the old
+   // hardcoded 3.0 ATR to 1.25 ATR (item #8 in the review — a zone 2.8
+   // ATR away isn't an immediate entry zone); this is a default-value
+   // change, not a new OFF-by-default gate, since it only tightens an
+   // existing filter rather than adding a new one. Still needs the same
+   // ablation-test validation as everything else before being trusted.
+   void              ConfigureFVGProximity(double maxDistATR = 1.25);
+   // v2.9 addition (review item #4/#10 — "chase filter"). Rejects a
+   // setup when price has already run too far past the BOS confirmation
+   // close before the EA gets to evaluate it. Distinct from the existing
+   // entry-deviation guard in OrderManager (which protects execution
+   // AFTER a decision is made) — this catches a setup that was
+   // strategically late before any order is even built. OFF by default,
+   // same discipline as every other v2.8/v2.9 gate.
+   void              ConfigureChaseFilter(bool requireChaseFilter, double maxChaseDistATR = 0.75);
+   // v2.9 addition — passthrough to CInducement::ConfigureQualityGates().
+   // See that method's comment for the OFF-by-default rationale.
+   void              ConfigureSweepQuality(bool requireMinSweepGrade, ENUM_SWEEP_GRADE minSweepGrade,
+                                           bool requireFreshSetup, int maxBarsSinceBOS = 5);
+   // v2.9. warnMinutesBefore/After must be >= the EA's hard-block window
+   // (InpNewsMinutesBefore/After) or they're clamped up to it inside
+   // CNewsFilter::ConfigureWarningWindow() — WARNING is defined as a
+   // superset of BLOCKED. newsWarningMultiplier default 0.85 is a
+   // starting point, not a tuned constant.
+   void              ConfigureNewsAwareness(CNewsFilter* newsFilter, int warnMinutesBefore = 60,
+                                            int warnMinutesAfter = 30, double newsWarningMultiplier = 0.85);
    double            CalculateConfidence(bool forBuy);
    void              EvaluateReasons(bool forBuy, SetupReasons &out);
    InducementResult  GetInducement(bool forBuy) { return m_inducement.Validate(forBuy); }
@@ -164,7 +207,9 @@ CScoringEngine::CScoringEngine() : m_trendCtx(NULL), m_bosCtx(NULL), m_liqCtx(NU
                                     m_requireFibonacciZone(false), m_fibZoneMinPct(50.0), m_fibZoneMaxPct(61.8),
                                     m_requireValueAreaLocation(false),
                                     m_htfObCtx(NULL), m_requireHtfOB(false), m_obDistATRMax(2.0),
-                                    m_blockLowVolRegime(false)
+                                    m_blockLowVolRegime(false),
+                                    m_fvgMaxDistATR(1.25), m_requireChaseFilter(false), m_maxChaseDistATR(0.75),
+                                    m_newsFilter(NULL), m_newsWarningMultiplier(0.85)
   {
    // Session filter defaults to ON — see ConfigureSessionFilter()'s
    // comment. Unlike the other v2.8 gates this isn't a new, unbacktested
@@ -242,6 +287,32 @@ void CScoringEngine::ConfigureSessionFilter(bool enabled, bool allowTokyo, bool 
    m_sessionFilter.Configure(enabled, allowTokyo, allowLondon, allowNewYork, allowOverlap);
   }
 //+------------------------------------------------------------------+
+void CScoringEngine::ConfigureFVGProximity(double maxDistATR)
+  {
+   m_fvgMaxDistATR = (maxDistATR > 0) ? maxDistATR : 1.25;
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::ConfigureChaseFilter(bool requireChaseFilter, double maxChaseDistATR)
+  {
+   m_requireChaseFilter = requireChaseFilter;
+   m_maxChaseDistATR = (maxChaseDistATR > 0) ? maxChaseDistATR : 0.75;
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::ConfigureSweepQuality(bool requireMinSweepGrade, ENUM_SWEEP_GRADE minSweepGrade,
+                                           bool requireFreshSetup, int maxBarsSinceBOS)
+  {
+   m_inducement.ConfigureQualityGates(requireMinSweepGrade, minSweepGrade, requireFreshSetup, maxBarsSinceBOS);
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::ConfigureNewsAwareness(CNewsFilter* newsFilter, int warnMinutesBefore,
+                                            int warnMinutesAfter, double newsWarningMultiplier)
+  {
+   m_newsFilter = newsFilter;
+   if(m_newsFilter != NULL)
+      m_newsFilter.ConfigureWarningWindow(warnMinutesBefore, warnMinutesAfter);
+   m_newsWarningMultiplier = (newsWarningMultiplier > 0 && newsWarningMultiplier <= 1.0) ? newsWarningMultiplier : 0.85;
+  }
+//+------------------------------------------------------------------+
 double CScoringEngine::CurrentPrice()
   {
    if(m_priceRef == NULL || m_priceRef.Total() == 0) return 0.0;
@@ -312,6 +383,11 @@ double CScoringEngine::FVGScore(bool forBuy)
    if(price <= 0 || atr <= 0) return 0.0;
    ENUM_FVG_DIR wantDir = forBuy ? FVG_BULL : FVG_BEAR;
 
+   // v2.9 (review item #7/#8): rank every qualifying zone instead of
+   // returning the first match — "first" is an artifact of detection
+   // order, not quality. Distance cap now m_fvgMaxDistATR (default 1.25,
+   // was hardcoded 3.0) — see ConfigureFVGProximity().
+   double best = 0.0;
    for(int i = 0; i < m_fvgCtx.fvg.Count(); i++)
      {
       FVGZone z = m_fvgCtx.fvg.GetZone(i);
@@ -319,12 +395,13 @@ double CScoringEngine::FVGScore(bool forBuy)
       if(z.state != FVG_FRESH && z.state != FVG_TESTED) continue;
       double mid = (z.top + z.bottom) / 2.0;
       double distATR = MathAbs(price - mid) / atr;
-      if(distATR > 3.0) continue;
+      if(distATR > m_fvgMaxDistATR) continue;
       double base = (z.state == FVG_FRESH) ? 1.0 : 0.6;
-      double proximity = MathMax(0.0, 1.0 - distATR / 3.0);
-      return base * (0.5 + 0.5 * proximity);
+      double proximity = MathMax(0.0, 1.0 - distATR / m_fvgMaxDistATR);
+      double score = base * (0.5 + 0.5 * proximity);
+      if(score > best) best = score;
      }
-   return 0.0;
+   return best;
   }
 //+------------------------------------------------------------------+
 double CScoringEngine::SRScore(bool forBuy)
@@ -417,7 +494,37 @@ double CScoringEngine::CalculateConfidence(bool forBuy)
    InducementResult ind = m_inducement.Validate(forBuy);
    if(!ind.valid) return 0.0;
 
+   // v2.9 (review item #4/#10 — chase filter). Rejects a setup that's
+   // already run too far past the BOS confirmation close by the time the
+   // EA evaluates it — the single worst entry location per the review
+   // ("BOS -> price explodes 1.2 ATR -> EA enters after"). Distinct from
+   // OrderManager's entry-deviation guard, which protects execution
+   // slippage AFTER a decision, not the decision itself. OFF by default.
+   if(m_requireChaseFilter && ind.bosBarIndex >= 0 && m_bosCtx != NULL)
+     {
+      double price = CurrentPrice();
+      double atr = m_bosCtx.candles.GetATR(0);
+      if(price > 0 && atr > 0)
+        {
+         double chaseDist = forBuy ? (price - ind.bosClosePrice) : (ind.bosClosePrice - price);
+         if(chaseDist / atr > m_maxChaseDistATR)
+            return 0.0;
+        }
+     }
+
    double score = ind.totalScore;
+
+   // v2.9: news-aware soft discount. The EA-level IsLocked() hard-blocks
+   // the narrow window already (this code path never even runs then,
+   // since the EA skips setup generation entirely) — this only fires in
+   // the wider WARNING band around the block window.
+   if(m_newsFilter != NULL)
+     {
+      string newsLabel; int newsMinutes;
+      ENUM_NEWS_RISK tier = m_newsFilter.GetRiskTier(newsLabel, newsMinutes);
+      if(tier == NEWS_WARNING)
+         score *= m_newsWarningMultiplier;
+     }
    score += 15.0 * FVGScore(forBuy);
    score += 15.0 * TrendScore(forBuy);
 
@@ -500,10 +607,10 @@ double CScoringEngine::CalculateConfidence(bool forBuy)
 double CScoringEngine::PipSize()
   {
    if(m_priceRef == NULL) return 0.0001;
-   string sym = m_priceRef.Symbol();
-   int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-   double point = SymbolInfoDouble(sym, SYMBOL_POINT);
-   return (digits == 3 || digits == 5) ? point * 10.0 : point;
+   // v2.9: delegates to CPipCalculator so this is the same definition
+   // everywhere (Telegram payload, dashboard) instead of a locally
+   // re-derived one. Behavior is unchanged — same formula as before.
+   return CPipCalculator::PipSize(m_priceRef.Symbol());
   }
 //+------------------------------------------------------------------+
 void CScoringEngine::EvaluateReasons(bool forBuy, SetupReasons &out)
@@ -559,6 +666,29 @@ void CScoringEngine::EvaluateReasons(bool forBuy, SetupReasons &out)
    out.vol_regime = m_volRegime.Classify(0);
    out.session = m_sessionFilter.CurrentSession();
    out.session_ok = m_sessionFilter.IsAllowed();
+
+   // v2.9 diagnostics — always populated regardless of gate state, same
+   // convention as the v2.6/v2.8 blocks above.
+   out.sweep_grade = ind.sweepGrade;
+   out.bos_strength = ind.bosStrength;
+   out.time_decay = ind.timeDecay;
+   out.chase_dist_atr = 0.0;
+   out.chase_ok = true;
+   if(ind.bosBarIndex >= 0 && m_bosCtx != NULL && price > 0)
+     {
+      double atrB = m_bosCtx.candles.GetATR(0);
+      if(atrB > 0)
+        {
+         out.chase_dist_atr = (forBuy ? (price - ind.bosClosePrice) : (ind.bosClosePrice - price)) / atrB;
+         out.chase_ok = (out.chase_dist_atr <= m_maxChaseDistATR);
+        }
+     }
+
+   out.news_risk = NEWS_NONE;
+   out.news_label = "";
+   out.news_minutes_to_event = 0;
+   if(m_newsFilter != NULL)
+      out.news_risk = m_newsFilter.GetRiskTier(out.news_label, out.news_minutes_to_event);
 
    out.risk_warning = "";
    if(m_srCtx == NULL || m_priceRef == NULL || m_priceRef.Total() == 0) return;

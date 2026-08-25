@@ -130,6 +130,14 @@ void CDashboard::Update()
       if(r.liquidity_swept) reasonLines += StringFormat("\u2713 %s liquidity sweep\n", liqTF);
       if(r.fresh_fvg)       reasonLines += "\u2713 Fresh FVG in zone\n";
       if(r.sr_confluence)   reasonLines += "\u2713 S/R confluence\n";
+      // v2.9: sweep grade / BOS strength / chase distance — the setup
+      // grading breakdown from the review (items #16/#17), not just a
+      // single confidence number.
+      string gradeStr = (r.sweep_grade == SWEEP_GRADE_A) ? "A" : (r.sweep_grade == SWEEP_GRADE_B) ? "B" :
+                         (r.sweep_grade == SWEEP_GRADE_C) ? "C" : "-";
+      reasonLines += StringFormat("  Sweep grade: %s | BOS strength: %.0f%% | Decay: %.0f%%\n",
+                                   gradeStr, r.bos_strength * 100.0, r.time_decay * 100.0);
+      reasonLines += StringFormat("  Chase distance: %.2f ATR%s\n", r.chase_dist_atr, r.chase_ok ? "" : " \u26a0 late entry");
       reasonLines += StringFormat("  RVOL: %.2f%s\n", r.rvol, r.volume_confirmed ? " \u2713" : "");
       reasonLines += StringFormat("  Fib zone: %s%s\n", FibZoneLabel(r.fib_zone), r.fib_in_zone ? " \u2713 in pullback zone" : "");
       reasonLines += StringFormat("  Value Area: %s%s\n", VAZoneLabel(r.va_zone), r.value_area_ok ? " \u2713" : "");

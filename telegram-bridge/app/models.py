@@ -15,6 +15,19 @@ class SignalStatus(str, enum.Enum):
     DUPLICATE = "duplicate"
 
 
+# v2.9 addition. Distinct from SignalStatus above: SignalStatus tracks
+# DELIVERY (did the Telegram call succeed), lifecycle_status tracks
+# MARKET VALIDITY (does this setup still describe current price action).
+# A signal can be status=ACTIVE (delivered fine) and lifecycle_status=
+# STALE (price ran away from it) at the same time — these are
+# orthogonal, not a single combined state machine.
+class SignalLifecycleStatus(str, enum.Enum):
+    VALID = "valid"              # default — setup still describes current conditions
+    STALE = "stale"              # price moved meaningfully past the intended entry zone
+    EXPIRED = "expired"          # unfilled for too long; EA gave up waiting
+    INVALIDATED = "invalidated"  # an opposing BOS or other structural break contradicts the original setup
+
+
 class TradeEventStatus(str, enum.Enum):
     PENDING = "pending"                  # event_id reserved, Telegram call not yet resolved
     ACTIVE = "active"
@@ -49,6 +62,13 @@ class TradeEventType(str, enum.Enum):
 _signal_status_type = PG_ENUM(
     SignalStatus,
     name="signalstatus",
+    create_type=False,
+)
+# v2.9. Same PG_ENUM + create_type=False pattern as _signal_status_type
+# above, for the exact DuplicateObjectError reason documented there.
+_signal_lifecycle_status_type = PG_ENUM(
+    SignalLifecycleStatus,
+    name="signallifecyclestatus",
     create_type=False,
 )
 _trade_event_status_type = PG_ENUM(
@@ -154,3 +174,17 @@ class Signal(Base):
     status = Column(_signal_status_type, nullable=False, default=SignalStatus.PENDING)
     error_message = Column(Text, nullable=True)
     latency_ms = Column(Integer, nullable=True)
+    # --- v2.9 additions -----------------------------------------------
+    lifecycle_status = Column(_signal_lifecycle_status_type, nullable=False, default=SignalLifecycleStatus.VALID)
+    lifecycle_reason = Column(String, nullable=True)          # human-readable, mirrors NewsFilter/chase-filter style reasons
+    lifecycle_updated_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)  # EA-computed hard expiry; NULL = no expiry set
+    # Freeform diagnostics that don't warrant their own column yet: sweep
+    # grade, BOS strength, decay %, chase distance, news risk tier,
+    # calibrated probability + sample size, pip distances. Kept as JSON
+    # (not `reasons`, which is a fixed list[str] the validator/formatter
+    # already depend on) so the schema can absorb new EA-side fields
+    # without a migration each time. NULL for signals from an EA build
+    # older than v2.9 — formatter.py must degrade gracefully, not assume
+    # this is always populated.
+    extra = Column(JSON, nullable=True)
