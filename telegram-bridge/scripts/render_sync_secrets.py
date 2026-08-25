@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Sync secret env vars to a Render service and (optionally) redeploy.
 
 Why this exists
