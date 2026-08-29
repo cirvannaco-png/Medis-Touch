@@ -186,7 +186,10 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
                "Confidence", "EntryTop", "EntryBottom", "StopLoss", "TP1", "TP2", "FinalTP",
                "Reasons", "RiskWarning", "RVOL", "VolumeConfirmed", "FibZone", "FibInZone", "FibNearestLevel",
                "VAZone", "ValueAreaOK", "POC", "VAH", "VAL",
-               "HtfOBConfluence", "HtfOBState", "VolRegime", "SessionOK");
+               "HtfOBConfluence", "HtfOBState", "VolRegime", "SessionOK",
+               // v2.10 diagnostics. Appended, never inserted: parsers keyed
+               // on column position keep working.
+               "ContradictionPenalty", "EnvScore", "ExecScore", "EnvExecConfidence");
       m_headerWritten = true;
      }
 
@@ -212,7 +215,11 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
             DoubleToString(setup.reasons.va_poc, _Digits), DoubleToString(setup.reasons.va_high, _Digits),
             DoubleToString(setup.reasons.va_low, _Digits),
             setup.reasons.htf_ob_confluence ? "Yes" : "No", OBStateLabel(setup.reasons.htf_ob_state),
-            VolRegimeLabel(setup.reasons.vol_regime), setup.reasons.session_ok ? "Yes" : "No");
+            VolRegimeLabel(setup.reasons.vol_regime), setup.reasons.session_ok ? "Yes" : "No",
+            DoubleToString(setup.reasons.contradiction_penalty, 3),
+            DoubleToString(setup.reasons.env_score, 3),
+            DoubleToString(setup.reasons.exec_score, 3),
+            DoubleToString(setup.reasons.env_exec_confidence, 1));
 
    FileClose(handle);
    return true;
@@ -235,7 +242,14 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
                "EntryRef", "RiskDistance", "Filled", "FillTime", "BarsToFill", "MFE_Price", "MAE_Price",
                "MFE_R", "MAE_R", "TP1_Hit", "TP2_Hit", "BarsHeld", "SameBarSLTPCollision", "FillPolicy",
                "Lots", "EntryFillPrice", "BreakEvenDone", "PartialDone", "RealizedNetPnL", "RealizedR",
-               "Commission", "SpreadCost", "SlippageCost");
+               "Commission", "SpreadCost", "SlippageCost",
+               // v2.10 - the decay diagnostic, paired with the resolved
+               // outcome so the retraining pipeline can test whether
+               // staleness actually predicts a worse result.
+               "ConfidenceAtSignal", "ConfidenceDecayed", "DecayBars",
+               // Repeated from the signal row so an outcomes file is
+               // self-sufficient for fitting the multiplicative model.
+               "ContradictionPenalty", "EnvScore", "ExecScore", "EnvExecConfidence");
       m_outcomeHeaderWritten = true;
      }
 
@@ -281,7 +295,13 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
             p.beDone ? "Yes" : "No", p.partialDone ? "Yes" : "No",
             DoubleToString(p.realizedPnL, 2), DoubleToString(realizedR, 2),
             DoubleToString(p.totalCommission, 2), DoubleToString(p.totalSpreadCost, 2),
-            DoubleToString(p.totalSlippageCost, 2));
+            DoubleToString(p.totalSlippageCost, 2),
+            DoubleToString(p.confidenceAtSignal, 1), DoubleToString(p.confidenceDecayed, 1),
+            p.decayBars,
+            DoubleToString(p.setup.reasons.contradiction_penalty, 3),
+            DoubleToString(p.setup.reasons.env_score, 3),
+            DoubleToString(p.setup.reasons.exec_score, 3),
+            DoubleToString(p.setup.reasons.env_exec_confidence, 1));
 
    FileClose(handle);
    return true;

@@ -132,6 +132,9 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    setup.creation_time = TimeCurrent();
    setup.active = true;
    m_scoring.EvaluateReasons(true, setup.reasons);
+   // v2.10: diagnostic-only contradiction/env/exec fields. Deliberately
+   // AFTER setup.confidence is assigned, and never fed back into it.
+   m_scoring.PopulateConfidenceDiagnostics(setup.reasons, setup.confidence);
    m_lastSetup = setup;
    return setup;
   }
@@ -161,6 +164,9 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    setup.creation_time = TimeCurrent();
    setup.active = true;
    m_scoring.EvaluateReasons(false, setup.reasons);
+   // v2.10: diagnostic-only contradiction/env/exec fields. Deliberately
+   // AFTER setup.confidence is assigned, and never fed back into it.
+   m_scoring.PopulateConfidenceDiagnostics(setup.reasons, setup.confidence);
    m_lastSetup = setup;
    return setup;
   }

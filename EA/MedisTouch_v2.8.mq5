@@ -126,6 +126,19 @@ input int    InpSignalExpiryBars = 12;             // unfilled for this many bar
 input double InpSignalStaleChaseATR = 1.0;         // unfilled AND price has moved this many ATR past entry -> STALE (looser than InpMaxChaseDistATR's pre-entry gate — this is post-publish drift, not pre-entry rejection)
 input double InpInvalidateOpposingConfidence = 70.0; // unfilled AND the opposite direction's confidence reaches this -> INVALIDATED
 
+input group "Confidence Diagnostics (v2.10) - measured, NOT acted on"
+// Every input in this group affects CSV columns and nothing else. The
+// contradiction/environment/execution model and the confidence decay are
+// logged beside each signal and its resolved outcome so the multiplicative
+// score can be compared against the live additive one on YOUR data. None of
+// them can change a confidence value, a filter verdict, a lot size, or an
+// order. Promoting the model to live is a deliberate code change, not a
+// setting - see the v2.10 block in Analysis/Scoring.mqh.
+input double InpDiagContradictionWeight = 0.25;    // penalty per actively-contradicting condition (0 = disable the penalty)
+input double InpDiagEnvWeight = 1.0;               // 0..1 blend of the environment component toward neutral (0 = ignore it)
+input double InpDiagExecWeight = 1.0;              // 0..1 blend of the execution component toward neutral (0 = ignore it)
+input double InpDiagDecayHalfLifeBars = 12.0;      // half-life, in UNFILLED bars, of the logged confidence decay (<=0 = no decay)
+
 input group "Logging"
 input bool   InpLogSignals = true;
 input bool   InpTrackOutcomes = true;
@@ -269,6 +282,7 @@ int OnInit()
                                    InpRequireFreshSetup, InpMaxBarsSinceBOS);
    g_scoring.ConfigureChaseFilter(InpRequireChaseFilter, InpMaxChaseDistATR);
    g_scoring.ConfigureFVGProximity(InpFVGMaxDistATR);
+   g_scoring.ConfigureLearnedDiagnostics(InpDiagContradictionWeight, InpDiagEnvWeight, InpDiagExecWeight);
    g_decision.Init(&g_chartCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, InpSLBufferATR, InpMinStopSpreadMult);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);
@@ -279,6 +293,8 @@ int OnInit()
                                  InpBreakEvenAtR, InpPartialAtR, InpPartialFraction, InpTrailATRMult,
                                  InpSimCommissionPerLot, InpSimSpreadPoints, InpSimSlippagePoints);
    g_tracker.ConfigureCalibration(InpTrackOutcomes, InpCalibrationMinSample);
+   // v2.10 diagnostics - see the "Confidence Diagnostics" input group.
+   g_tracker.ConfigureConfidenceDecay(InpDiagDecayHalfLifeBars);
 
    g_router.Init(_Symbol, InpEnableExecution, InpEnableSignals,
                 InpMinConfidenceExecute, InpMinConfidenceSignal, InpFullRiskConfidence, InpMaxSpreadPoints);

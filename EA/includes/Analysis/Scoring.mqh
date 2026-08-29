@@ -99,6 +99,13 @@ private:
    CNewsFilter*      m_newsFilter;
    double            m_newsWarningMultiplier; // confidence *= this when in the WARNING tier
 
+   // --- v2.10 diagnostic weights (see ConfigureLearnedDiagnostics()) ---
+   // Used ONLY by the diagnostic block below; never enter
+   // CalculateConfidence()'s arithmetic.
+   double            m_contradictionWeight;  // scales the contradiction count into a 0-1 penalty
+   double            m_envWeight;            // 0-1 blend: how much of env_score counts vs. assumed-neutral
+   double            m_execWeight;           // 0-1 blend: same for exec_score
+
    double            OBScore(bool forBuy);
 
    double            TrendScore(bool forBuy);
@@ -111,6 +118,12 @@ private:
    double            ValueAreaScore(bool forBuy);
    double            PipSize();
    double            CurrentPrice();
+   // v2.10 diagnostics - read the already-computed reasons instead of
+   // re-deriving anything, so a diagnostic can never disagree with the
+   // CSV row it is logged next to.
+   double            ContradictionPenalty(const SetupReasons &r);
+   double            EnvironmentScore(const SetupReasons &r);
+   double            ExecutionScore(const SetupReasons &r);
 
 public:
                      CScoringEngine();
@@ -194,8 +207,23 @@ public:
    // starting point, not a tuned constant.
    void              ConfigureNewsAwareness(CNewsFilter* newsFilter, int warnMinutesBefore = 60,
                                             int warnMinutesAfter = 30, double newsWarningMultiplier = 0.85);
+   // v2.10 addition. Weights for the DIAGNOSTIC-ONLY contradiction /
+   // environment / execution model. Defaults are the neutral starting
+   // point from the upgrade spec, NOT tuned constants - replace them with
+   // whatever tools/medistouch_retrain.py fits on your own resolved
+   // outcomes. Changing these cannot change any trading decision; see the
+   // SetupReasons v2.10 block in Core/Config.mqh.
+   void              ConfigureLearnedDiagnostics(double contradictionWeight = 0.25,
+                                                 double envWeight = 1.0,
+                                                 double execWeight = 1.0);
    double            CalculateConfidence(bool forBuy);
    void              EvaluateReasons(bool forBuy, SetupReasons &out);
+   // v2.10. Call right after EvaluateReasons() with the confidence the
+   // additive model actually returned; fills the four v2.10 diagnostic
+   // fields on `out`. Separate from EvaluateReasons() because
+   // env_exec_confidence needs a confidence value, and EvaluateReasons()
+   // is deliberately allowed to run without one (the dashboard calls it).
+   void              PopulateConfidenceDiagnostics(SetupReasons &out, double confidence);
    InducementResult  GetInducement(bool forBuy) { return m_inducement.Validate(forBuy); }
    ENUM_MARKET_PHASE GetPhase() { return m_phase.Detect(); }
   };
@@ -209,7 +237,8 @@ CScoringEngine::CScoringEngine() : m_trendCtx(NULL), m_bosCtx(NULL), m_liqCtx(NU
                                     m_htfObCtx(NULL), m_requireHtfOB(false), m_obDistATRMax(2.0),
                                     m_blockLowVolRegime(false),
                                     m_fvgMaxDistATR(1.25), m_requireChaseFilter(false), m_maxChaseDistATR(0.75),
-                                    m_newsFilter(NULL), m_newsWarningMultiplier(0.85)
+                                    m_newsFilter(NULL), m_newsWarningMultiplier(0.85),
+                                    m_contradictionWeight(0.25), m_envWeight(1.0), m_execWeight(1.0)
   {
    // Session filter defaults to ON — see ConfigureSessionFilter()'s
    // comment. Unlike the other v2.8 gates this isn't a new, unbacktested
@@ -724,6 +753,82 @@ void CScoringEngine::EvaluateReasons(bool forBuy, SetupReasons &out)
       string kind = forBuy ? "resistance" : "support";
       out.risk_warning = StringFormat("%s %s %.0f pips away (%d touches)", strength, kind, bestDist, bestTouches);
      }
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::ConfigureLearnedDiagnostics(double contradictionWeight, double envWeight, double execWeight)
+  {
+   m_contradictionWeight = MathMax(0.0, contradictionWeight);
+   m_envWeight  = MathMin(MathMax(envWeight, 0.0), 1.0);
+   m_execWeight = MathMin(MathMax(execWeight, 0.0), 1.0);
+  }
+//+------------------------------------------------------------------+
+// v2.10 - CONTRADICTION, not absence. The additive model's failure mode is
+// that a missing component costs the same as a component actively pointing
+// the other way: a setup with no HTF read and a setup fighting the HTF
+// trend score identically. This counts only actively-opposing conditions,
+// so "unknown" and "wrong" stop being the same number. Returns 0-1.
+double CScoringEngine::ContradictionPenalty(const SetupReasons &r)
+  {
+   int hits = 0;
+   if(!r.trend_aligned)               hits++; // trend does not support the direction
+   if(!r.premium_discount_ok)         hits++; // buying premium / selling discount
+   if(!r.chase_ok)                    hits++; // price already ran past the BOS close
+   if(r.vol_regime == VOL_REGIME_LOW) hits++; // thin, chop-prone regime
+   if(!r.session_ok)                  hits++; // outside the allowed liquidity hours
+   if(r.news_risk != NEWS_NONE)       hits++; // inside a news risk tier
+   if(r.htf_ob_state == OB_MITIGATED) hits++; // the HTF OB this leans on is already spent
+   if(hits == 0) return 0.0;
+   double penalty = m_contradictionWeight * (double)hits;
+   return MathMin(MathMax(penalty, 0.0), 1.0);
+  }
+//+------------------------------------------------------------------+
+// v2.10 - "is the market itself suitable right now", independent of this
+// particular entry. Multiplicative by design: a perfect entry in an
+// unsuitable environment should not score like a perfect entry in a
+// suitable one, which is exactly what adding points cannot express.
+double CScoringEngine::EnvironmentScore(const SetupReasons &r)
+  {
+   double s = 1.0;
+   if(r.vol_regime == VOL_REGIME_LOW)            s *= 0.60;
+   else if(r.vol_regime == VOL_REGIME_HIGH)      s *= 0.90; // tradeable, but stops get run
+   else if(r.vol_regime == VOL_REGIME_UNDEFINED) s *= 0.85; // warm-up: unknown rather than bad
+   if(!r.session_ok)                             s *= 0.70;
+   if(r.news_risk == NEWS_WARNING)               s *= 0.80;
+   else if(r.news_risk == NEWS_BLOCKED)          s *= 0.50; // the hard block already stops entries; this only shapes the diagnostic
+   // m_envWeight blends toward neutral 1.0, so 0 disables the component's
+   // influence without needing a separate on/off flag.
+   return MathMin(MathMax(1.0 - m_envWeight * (1.0 - s), 0.0), 1.0);
+  }
+//+------------------------------------------------------------------+
+// v2.10 - "how good is THIS entry", given the environment is acceptable.
+// Built from the v2.9 continuous reads (sweep grade, BOS strength, time
+// decay) that the additive model currently collapses into pass/fail.
+double CScoringEngine::ExecutionScore(const SetupReasons &r)
+  {
+   double grade = 0.40; // no graded sweep
+   switch(r.sweep_grade)
+     {
+      case SWEEP_GRADE_A: grade = 1.00; break;
+      case SWEEP_GRADE_B: grade = 0.80; break;
+      case SWEEP_GRADE_C: grade = 0.55; break;
+      default:            grade = 0.40; break;
+     }
+   double strength = MathMin(MathMax(r.bos_strength, 0.0), 1.0);
+   double freshness = MathMin(MathMax(r.time_decay, 0.0), 1.0);
+   if(freshness <= 0.0) freshness = 1.0; // 0 means "not computed", not "infinitely stale"
+   double s = grade * (0.5 + 0.5 * strength) * freshness;
+   if(!r.fresh_fvg) s *= 0.85;
+   if(!r.chase_ok)  s *= 0.75;
+   return MathMin(MathMax(1.0 - m_execWeight * (1.0 - s), 0.0), 1.0);
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::PopulateConfidenceDiagnostics(SetupReasons &out, double confidence)
+  {
+   out.contradiction_penalty = ContradictionPenalty(out);
+   out.env_score = EnvironmentScore(out);
+   out.exec_score = ExecutionScore(out);
+   double c = MathMin(MathMax(confidence, 0.0), 100.0);
+   out.env_exec_confidence = c * out.env_score * out.exec_score * (1.0 - out.contradiction_penalty);
   }
 #endif
 //+------------------------------------------------------------------+

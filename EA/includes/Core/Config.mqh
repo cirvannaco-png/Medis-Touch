@@ -398,6 +398,19 @@ struct SetupReasons
    ENUM_NEWS_RISK    news_risk;
    string            news_label;
    int               news_minutes_to_event;
+   // --- v2.10 confidence diagnostics - contradiction / environment /
+   // execution. DIAGNOSTIC ONLY. Always populated, never consulted:
+   // nothing here feeds CalculateConfidence()'s return value and nothing
+   // here gates a trade, exactly like the v2.6/v2.8/v2.9 blocks above on
+   // the day they landed. They exist so the offline retraining pipeline
+   // (tools/medistouch_retrain.py) accumulates real (signal, outcome)
+   // pairs for the multiplicative model BEFORE any of it is allowed to
+   // touch live confidence. Promote only after an out-of-sample
+   // comparison says it beats the additive model.
+   double            contradiction_penalty;  // 0-1: degree of active HTF/LTF/regime/location conflict (0 = nothing contradicts)
+   double            env_score;              // 0-1: market-suitability component (regime, session, news)
+   double            exec_score;             // 0-1: entry-quality component (sweep grade, BOS strength, freshness, chase)
+   double            env_exec_confidence;    // diagnostic alt score: confidence * env_score * exec_score * (1 - contradiction_penalty)
   };
 
 struct TradeSetup
@@ -501,6 +514,18 @@ struct PendingSetup
    double            totalCommission;
    double            totalSpreadCost;   // informational breakdown — cost is already embedded in fill prices, this is for reporting only
    double            totalSlippageCost; // informational breakdown — same caveat
+   // --- v2.10 confidence decay (DIAGNOSTIC ONLY) ---
+   // A setup's confidence was true of the bar that produced it. The longer
+   // it sits unfilled, the less of that evidence still holds.
+   // confidenceDecayed records what the score would be under an
+   // exponential half-life decay applied per unfilled bar; decayBars
+   // records how many bars of decay were applied. Nothing reads these to
+   // cancel, re-rank, or re-size a setup - they are logged so the
+   // retraining pipeline can measure whether staleness actually predicts
+   // worse outcomes before it is allowed to act on one.
+   double            confidenceAtSignal; // snapshot of setup.confidence at AddSetup() time
+   double            confidenceDecayed;  // confidenceAtSignal * decay(decayBars); frozen once filled
+   int               decayBars;          // unfilled bars the decay was applied over
   };
 
 #endif

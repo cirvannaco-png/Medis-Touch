@@ -110,6 +110,9 @@ private:
    // calibration bucket engine — see CalibrationEngine.mqh for scope/limits.
    CCalibrationEngine m_calibration;
    bool              m_calibrationEnabled;
+   // v2.10 - DIAGNOSTIC-ONLY confidence decay. Half-life in unfilled bars;
+   // <= 0 disables decay (confidenceDecayed stays == confidenceAtSignal).
+   double            m_decayHalfLifeBars;
 
    void              RemoveAt(int idx);
    // Pre-fill resolutions only (Invalidated_NoFill / Timeout_NoFill) —
@@ -145,6 +148,10 @@ private:
    // cascade described in the file header. May resolve (and remove) the
    // trade; if not, leaves it pending for the next bar.
    void              ProcessFilledBar(int idx, CandleData &bar0);
+   // v2.10. Recomputes p.confidenceDecayed from p.decayBars. Pure
+   // bookkeeping: no caller reads the result to cancel, re-rank or re-size
+   // anything - see the PendingSetup v2.10 block in Config.mqh.
+   void              ApplyDecay(PendingSetup &p) const;
    // Closes the trade's remaining lots (if any), logs it, updates
    // m_stats, and removes it from the pending array.
    void              FinalizeExit(int idx, PendingSetup &p, string outcome, double rawExitPrice,
@@ -174,6 +181,9 @@ public:
    // OFF by default — calibration data is only meaningful once you've
    // deliberately decided to start collecting it (see CalibrationEngine.mqh
    // limitation #4 re: resetting after scoring-formula changes).
+   // v2.10. Half-life, in unfilled bars, of the diagnostic confidence
+   // decay. 12 bars is the spec's starting point, not a fitted value.
+   void              ConfigureConfidenceDecay(double halfLifeBars = 12.0) { m_decayHalfLifeBars = halfLifeBars; }
    void              ConfigureCalibration(bool enabled, int minSample = 30) { m_calibrationEnabled = enabled; m_calibration.Init(m_symbol, minSample); }
    double            GetCalibratedProbability(double confidence, int &sampleSizeOut, bool &hasEnoughDataOut) const
      { return m_calibration.GetCalibratedProbability(confidence, sampleSizeOut, hasEnoughDataOut); }
@@ -185,7 +195,8 @@ COutcomeTracker::COutcomeTracker() : m_count(0), m_maxBars(100), m_logger(NULL),
                                       m_riskPercent(0.5), m_allowMinLotOverride(true),
                                       m_breakEvenAtR(1.0), m_partialAtR(2.0), m_partialFraction(0.5),
                                       m_trailAtrMult(1.5), m_commissionPerLot(7.0),
-                                      m_spreadPoints(10.0), m_slippagePoints(2.0), m_calibrationEnabled(false)
+                                      m_spreadPoints(10.0), m_slippagePoints(2.0), m_calibrationEnabled(false),
+                                      m_decayHalfLifeBars(12.0)
   {
    ZeroMemory(m_stats);
   }
@@ -412,6 +423,9 @@ void COutcomeTracker::AddSetup(TradeSetup &setup)
    p.fillTime = 0;
    p.barsToFill = 0;
    p.sameBarCollision = false;
+   p.confidenceAtSignal = setup.confidence;
+   p.confidenceDecayed = setup.confidence;
+   p.decayBars = 0;
 
    // --- v2.7: sizing at signal time, matching the live EA exactly (it
    // sizes and submits at decision time too — a pending order's volume
@@ -568,6 +582,17 @@ void COutcomeTracker::ProcessFilledBar(int idx, CandleData &bar0)
    m_pending[idx] = p;
   }
 //+------------------------------------------------------------------+
+void COutcomeTracker::ApplyDecay(PendingSetup &p) const
+  {
+   if(m_decayHalfLifeBars <= 0.0 || p.decayBars <= 0)
+     {
+      p.confidenceDecayed = p.confidenceAtSignal;
+      return;
+     }
+   double factor = MathPow(0.5, (double)p.decayBars / m_decayHalfLifeBars);
+   p.confidenceDecayed = p.confidenceAtSignal * factor;
+  }
+//+------------------------------------------------------------------+
 void COutcomeTracker::Update(CTFContext* fvgCtx)
   {
    if(fvgCtx == NULL || fvgCtx.candles.Total() == 0) return;
@@ -584,6 +609,14 @@ void COutcomeTracker::Update(CTFContext* fvgCtx)
         {
          p.barsElapsed++;
          p.lastBarTime = bar0.time;
+         // v2.10: only UNFILLED bars decay. Once price has traded the
+         // zone, the evidence was either right or wrong on its own terms;
+         // staleness stops being the question.
+         if(!p.filled)
+           {
+            p.decayBars++;
+            ApplyDecay(p);
+           }
         }
       m_pending[i] = p;
 

@@ -1,5 +1,43 @@
 # Changelog
 
+## v2.10 — Confidence Engine Upgrade (diagnostic only)
+
+Nothing in this release can change a trading decision. Every number added is
+computed, logged, and read by no filter, no confidence value, no lot size and
+no order — so the alternative model can be measured against the live one on
+real resolved outcomes before it is trusted with money.
+
+### Added
+- `SetupReasons.contradiction_penalty` — counts only *actively opposing*
+  conditions, so "no HTF read" stops costing the same as "fighting the HTF".
+- `SetupReasons.env_score` / `exec_score` / `env_exec_confidence` — the
+  multiplicative model: `Confidence x Env x Exec x (1 - Contradiction)`.
+  Expresses "unsuitable market" in a way adding points cannot.
+- `PendingSetup.confidenceAtSignal` / `confidenceDecayed` / `decayBars` —
+  exponential half-life decay applied per **unfilled** bar and frozen at
+  fill; a score is only true of the bar that produced it.
+- `CScoringEngine::ConfigureLearnedDiagnostics()` and
+  `COutcomeTracker::ConfigureConfidenceDecay()`.
+- EA input group "Confidence Diagnostics (v2.10)":
+  `InpDiagContradictionWeight`, `InpDiagEnvWeight`, `InpDiagExecWeight`,
+  `InpDiagDecayHalfLifeBars` — all CSV-only in effect.
+- `tools/medistouch_retrain.py` — offline AUC comparison of the additive vs.
+  multiplicative vs. decayed score, with per-component correlation against
+  realized R. Read-only; refuses a verdict below `--min-sample` trades.
+
+### Changed
+- Signals CSV gains `ContradictionPenalty`, `EnvScore`, `ExecScore`,
+  `EnvExecConfidence`. Outcomes CSV gains those plus `ConfidenceAtSignal`,
+  `ConfidenceDecayed`, `DecayBars`. Columns are **appended**, so
+  position-based parsers keep working.
+
+### Unchanged (deliberately)
+- `CalculateConfidence()`'s return value, every entry filter, the
+  news/session/sweep gates, sizing, and order placement. Promoting the
+  multiplicative model is a future, explicit edit to `Analysis/Scoring.mqh`,
+  justified by out-of-sample evidence from the script above.
+
+
 All notable changes to Medis Touch are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
