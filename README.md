@@ -39,7 +39,7 @@ GitHub Actions (biweekly cron)
 
 ```bash
 cd telegram-bridge
-cp .env.example .env          # fill in BOT_TOKEN, CHAT_ID, ADMIN_CHAT_ID, SECRET_KEY, DATABASE_URL
+cp .env.example .env          # fill in BOT_TOKEN, CHAT_ID, ADMIN_CHAT_ID, SECRET_KEY, WEBHOOK_SECRET_TOKEN, DATABASE_URL
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
