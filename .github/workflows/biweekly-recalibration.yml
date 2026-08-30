@@ -1,0 +1,71 @@
+# v2.11 step 6 — the actual biweekly trigger for POST /admin/run-cycle.
+#
+# WHY GITHUB ACTIONS AND NOT AN IN-APP SCHEDULER: the bridge runs on
+# Render's free web-service tier, which spins down after 15 minutes idle
+# (see /render.yaml). An in-process scheduler (APScheduler etc.) would
+# never fire on its own while the service is asleep — there's nothing
+# running to fire it. A cron trigger from OUTSIDE the service is required
+# either way, and it conveniently also wakes the service back up: the
+# curl below IS the wake-up call, not a separate step.
+#
+# WHY "THE WEEKEND AFTER MARKET CLOSE": forex markets close Friday
+# ~21:00 UTC and reopen Sunday ~21:00 UTC. Saturday 06:00 UTC sits
+# squarely inside that closed window on every account — no ambiguity
+# about broker timezone or DST mattering here, unlike picking a time
+# near the actual close/open boundary would.
+#
+# Runs every OTHER Saturday. cron itself has no native "every 2 weeks"
+# unit, so this runs weekly and the date-parity check in the job step
+# skips odd occurrences — anchored to 2026-01-03 (the first Saturday of
+# 2026) as week 0. Adjust FIRST_SATURDAY below if this anchor ever needs
+# to shift.
+name: Biweekly recalibration cycle
+
+on:
+  schedule:
+    - cron: "0 6 * * 6"  # every Saturday 06:00 UTC; parity-filtered to biweekly below
+  workflow_dispatch: {}   # manual "Run workflow" button for on-demand cycles
+
+jobs:
+  run-cycle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check biweekly parity
+        id: parity
+        run: |
+          FIRST_SATURDAY="2026-01-03"
+          TODAY=$(date -u +%Y-%m-%d)
+          DAYS_SINCE=$(( ( $(date -u -d "$TODAY" +%s) - $(date -u -d "$FIRST_SATURDAY" +%s) ) / 86400 ))
+          WEEKS_SINCE=$(( DAYS_SINCE / 7 ))
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ $(( WEEKS_SINCE % 2 )) -eq 0 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping — off week in the biweekly schedule (manual runs via workflow_dispatch always proceed)."
+          fi
+
+      - name: Trigger recalibration cycle
+        if: steps.parity.outputs.run == 'true'
+        run: |
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            "${{ secrets.BRIDGE_BASE_URL }}/admin/run-cycle" \
+            -H "X-API-Key: ${{ secrets.BRIDGE_API_KEY }}" \
+            --max-time 120)
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "HTTP $http_code"
+          echo "$body"
+          if [ "$http_code" -ge 300 ]; then
+            echo "::error::run-cycle returned HTTP $http_code"
+            exit 1
+          fi
+
+# SETUP REQUIRED (one-time, in this repo's Settings -> Secrets and
+# variables -> Actions):
+#   BRIDGE_BASE_URL  — e.g. https://medis-touch-telegram.onrender.com
+#   BRIDGE_API_KEY   — same value as the bridge's SECRET_KEY env var
+#
+# The free Render plan's cold start is ~1 minute (per /render.yaml); the
+# 120s --max-time above covers a cold start plus the cycle itself. If
+# cycles start timing out as signal_outcomes grows, raise this before
+# anything else.

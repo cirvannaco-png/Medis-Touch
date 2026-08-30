@@ -34,6 +34,13 @@ private:
    CSubscriberPlatform* m_platform;
    int                  m_timeoutMs;
    string               m_apiKey;    // sent as X-API-Key on every POST — must match telegram-bridge's SECRET_KEY
+   // v2.11 — InpWeightSetVersion, mirrored here so BuildJsonPayload() and
+   // BuildOutcomeJsonPayload() can both stamp every signal/outcome with
+   // which scoring weight set produced it. Set once via SetWeightVersion()
+   // after Init(); "" (default) is a valid, honest value meaning
+   // "not configured" — it round-trips to the bridge as an empty string,
+   // not a fabricated label.
+   string               m_weightVersion;
 
    bool                 TransmitOne(string endpoint, const string &payload);
    bool                 TransmitOnePatch(string endpoint, const string &payload);
@@ -41,6 +48,13 @@ private:
    string               BuildReasonsJsonArray(const SetupReasons &r);
    string               BuildExtraJson(const TradeDecisionRecord &dec);
    string               SignalIdFor(long decisionId);
+   // v2.11
+   string               BuildOutcomeJsonPayload(string signalId, string symbol, string direction,
+                                                 string outcome, double realizedR, double mfeR, double maeR,
+                                                 int barsHeld, int barsToFill, bool filled,
+                                                 string regime, string session, string sweepGrade,
+                                                 bool htfObAligned, double confidenceAtSignal,
+                                                 double confidenceDecayed, int decayBars);
 
 public:
    void                 Init(string symbol, CSubscriberPlatform* platform, int timeoutMs = 5000, string apiKey = "");
@@ -54,6 +68,24 @@ public:
    // subscriber's endpoint doesn't follow that convention the PATCH for
    // that one subscriber is skipped (logged), not silently malformed.
    bool                 PublishStatusUpdate(long decisionId, string status, string reason);
+   // v2.11. See OutcomeTracker.mqh ConfigurePublishing()/FinalizeExit()/
+   // Resolve() for the call sites. Posts to "<subscriber endpoint with
+   // trailing /signal stripped>/outcome" — same endpoint-shape assumption
+   // PublishStatusUpdate() already makes, for the same reason (one bridge
+   // deployment, one base URL). Fans out to every active subscriber
+   // exactly like Publish()/PublishStatusUpdate() do; returns true if at
+   // least one succeeded.
+   bool                 PublishOutcome(string signalId, string symbol, string direction, string outcome,
+                                        double realizedR, double mfeR, double maeR, int barsHeld,
+                                        int barsToFill, bool filled, string regime, string session,
+                                        string sweepGrade, bool htfObAligned, double confidenceAtSignal,
+                                        double confidenceDecayed, int decayBars);
+   void                 SetWeightVersion(string v) { m_weightVersion = v; }
+   // v2.11. Public wrapper so callers outside this class (OutcomeTracker,
+   // building the signal_id an outcome must attach to) use the exact same
+   // convention as Publish() itself, rather than duplicating the "MT#"
+   // format string in a second place where it could silently drift.
+   string               SignalIdForDecision(long decisionId) { return SignalIdFor(decisionId); }
   };
 //+------------------------------------------------------------------+
 void CSignalPublisher::Init(string symbol, CSubscriberPlatform* platform, int timeoutMs, string apiKey)
@@ -62,6 +94,7 @@ void CSignalPublisher::Init(string symbol, CSubscriberPlatform* platform, int ti
    m_platform = platform;
    m_timeoutMs = timeoutMs;
    m_apiKey = apiKey;
+   m_weightVersion = "";
    if(StringLen(m_apiKey) == 0)
       Print("MedisTouch SignalPublisher: InpBridgeApiKey is blank — every WebRequest to the bridge will be ",
             "rejected with HTTP 401 until it's set to match the backend's SECRET_KEY.");
@@ -172,14 +205,28 @@ string CSignalPublisher::BuildJsonPayload(const TradeDecisionRecord &dec)
    string tf = EnumToString((ENUM_TIMEFRAMES)Period());
    StringReplace(tf, "PERIOD_", ""); // EnumToString gives "PERIOD_M15"; schema's VALID_TIMEFRAMES wants "M15"
 
+   // v2.11 — promoted out of BuildExtraJson's blob into top-level fields
+   // (routes.py:SignalRequest.regime/session/sweep_grade/htf_ob_aligned)
+   // so they land in indexed Signal columns, not buried JSON. sweep_grade
+   // is intentionally sent BOTH here (structured) and inside extra
+   // (existing dashboards/formatter.py read it from extra — leaving that
+   // alone avoids a second coordinated change there).
+   SetupReasons r = dec.setup.reasons;
+   string regimeStr = EnumToString(r.vol_regime);
+   string sessionStr = EnumToString(r.session);
+   string sweepGradeStr = EnumToString(r.sweep_grade);
+
    return StringFormat(
       "{\"signal_id\":\"%s\",\"decision_id\":%d,\"symbol\":\"%s\",\"direction\":\"%s\",\"entry\":%.5f,\"sl\":%.5f,"
       "\"tp1\":%.5f,\"tp2\":%.5f,\"final_tp\":%.5f,\"confidence\":%.1f,\"reasons\":%s,\"timeframe\":\"%s\","
-      "\"time\":\"%s\",\"extra\":%s}",
+      "\"time\":\"%s\",\"regime\":\"%s\",\"session\":\"%s\",\"sweep_grade\":\"%s\",\"htf_ob_aligned\":%s,"
+      "\"weight_version\":\"%s\",\"extra\":%s}",
       SignalIdFor(dec.decision_id), dec.decision_id, dec.symbol, dir, entry, dec.setup.stop_loss,
       dec.setup.tp1, dec.setup.tp2, dec.setup.final_tp, dec.setup.confidence,
       BuildReasonsJsonArray(dec.setup.reasons), tf,
-      TimeToString(dec.decided_time, TIME_DATE | TIME_SECONDS), BuildExtraJson(dec));
+      TimeToString(dec.decided_time, TIME_DATE | TIME_SECONDS),
+      regimeStr, sessionStr, sweepGradeStr, r.htf_ob_confluence ? "true" : "false",
+      m_weightVersion, BuildExtraJson(dec));
   }
 //+------------------------------------------------------------------+
 bool CSignalPublisher::TransmitOne(string endpoint, const string &payload)
@@ -325,6 +372,68 @@ bool CSignalPublisher::PublishStatusUpdate(long decisionId, string status, strin
         }
       string patchUrl = StringSubstr(endpoint, 0, pos) + "/signal/" + signalId + "/status";
       if(TransmitOnePatch(patchUrl, payload)) anyOk = true;
+     }
+   return anyOk;
+  }
+//+------------------------------------------------------------------+
+// v2.11. Matches routes.py:OutcomeRequest exactly — field-for-field. If
+// that schema ever changes, this is the other half of the contract.
+string CSignalPublisher::BuildOutcomeJsonPayload(string signalId, string symbol, string direction,
+                                                  string outcome, double realizedR, double mfeR, double maeR,
+                                                  int barsHeld, int barsToFill, bool filled,
+                                                  string regime, string session, string sweepGrade,
+                                                  bool htfObAligned, double confidenceAtSignal,
+                                                  double confidenceDecayed, int decayBars)
+  {
+   // realized_r/mfe_r/mae_r are Optional[float] server-side; "null" (not
+   // 0.0) for the no_fill/ambiguous cases where they're not meaningful —
+   // a real 0.0 R-multiple is a legitimate scratch outcome and must stay
+   // distinguishable from "not applicable" in the expectancy metrics.
+   bool hasR = (outcome != "no_fill" && outcome != "ambiguous");
+   string realizedRStr = hasR ? StringFormat("%.4f", realizedR) : "null";
+   string mfeRStr = hasR ? StringFormat("%.4f", mfeR) : "null";
+   string maeRStr = hasR ? StringFormat("%.4f", maeR) : "null";
+
+   return StringFormat(
+      "{\"signal_id\":\"%s\",\"symbol\":\"%s\",\"direction\":\"%s\",\"outcome\":\"%s\","
+      "\"realized_r\":%s,\"mfe_r\":%s,\"mae_r\":%s,\"bars_held\":%d,\"bars_to_fill\":%d,\"filled\":%s,"
+      "\"regime\":\"%s\",\"session\":\"%s\",\"sweep_grade\":\"%s\",\"htf_ob_aligned\":%s,"
+      "\"weight_version\":\"%s\",\"confidence_at_signal\":%.2f,\"confidence_decayed\":%.2f,\"decay_bars\":%d}",
+      signalId, symbol, direction, outcome,
+      realizedRStr, mfeRStr, maeRStr, barsHeld, barsToFill, filled ? "true" : "false",
+      regime, session, sweepGrade, htfObAligned ? "true" : "false",
+      m_weightVersion, confidenceAtSignal, confidenceDecayed, decayBars);
+  }
+//+------------------------------------------------------------------+
+bool CSignalPublisher::PublishOutcome(string signalId, string symbol, string direction, string outcome,
+                                       double realizedR, double mfeR, double maeR, int barsHeld,
+                                       int barsToFill, bool filled, string regime, string session,
+                                       string sweepGrade, bool htfObAligned, double confidenceAtSignal,
+                                       double confidenceDecayed, int decayBars)
+  {
+   if(m_platform == NULL) return false;
+   string payload = BuildOutcomeJsonPayload(signalId, symbol, direction, outcome, realizedR, mfeR, maeR,
+                                             barsHeld, barsToFill, filled, regime, session, sweepGrade,
+                                             htfObAligned, confidenceAtSignal, confidenceDecayed, decayBars);
+
+   Subscriber subs[];
+   int targeted = m_platform.GetActiveSubscribers(subs);
+   bool anyOk = false;
+   for(int i = 0; i < targeted; i++)
+     {
+      // Same endpoint-shape assumption as PublishStatusUpdate() —
+      // "<base>/signal" rewritten to "<base>/outcome" — see that
+      // function's comment for what happens when a subscriber's
+      // endpoint doesn't follow it.
+      string endpoint = subs[i].endpoint;
+      int pos = StringFind(endpoint, "/signal");
+      if(pos < 0)
+        {
+         PrintFormat("MedisTouch SignalPublisher: subscriber endpoint %s doesn't end in /signal — skipping outcome POST for it.", endpoint);
+         continue;
+        }
+      string outcomeUrl = StringSubstr(endpoint, 0, pos) + "/outcome";
+      if(TransmitOne(outcomeUrl, payload)) anyOk = true;
      }
    return anyOk;
   }

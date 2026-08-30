@@ -55,11 +55,45 @@ on the same chart together.
 
 Compiled `.ex5` output is git-ignored on purpose — build it locally.
 
+## Multi-symbol
+
+Nothing in the engine is XAUUSD-specific: pip/point sizing
+(`Core/PipCalculator.mqh`) is derived from broker symbol properties, and
+the volatility regime classifier (`Analysis/VolatilityRegime.mqh`) is
+ATR-percentile-based against each symbol's own history, not a hardcoded
+absolute threshold. Trading EURUSD, USDJPY, or EURGBP alongside XAUUSD
+means attaching another instance of `MedisTouch_v2.8.mq5` to that
+symbol's chart with its own `InpWeightSetVersion` — MT5 runs one EA
+instance per chart/symbol by design, this isn't a single process
+handling multiple symbols. Every instance posts to the same bridge;
+`signals`/`signal_outcomes` already carry `symbol` as a first-class
+column, so `tools/metrics_engine.py --regime-matrix` and
+`tools/calibration_matrix.py` break down by symbol automatically once
+more than one is live.
+
 ## Signal publishing
 
 `Signals/SignalPublisher.mqh` posts each routed decision to the FastAPI
 service in `telegram-bridge`. The service broadcasts to `CHAT_ID` and
 accepts bot commands only from `ADMIN_CHAT_ID`.
+
+Each signal is tagged with `regime`, `session`, `sweep_grade`,
+`htf_ob_aligned`, and `weight_version` (the `InpWeightSetVersion` input —
+bump this by hand whenever a scoring-formula change ships; nothing
+enforces it yet). `Trading/OutcomeTracker.mqh` posts the matching
+resolved outcome (win/loss/scratch/no_fill/ambiguous, realized R,
+MFE/MAE) to `POST /outcome` the moment it resolves a setup, via the same
+`decision_id` the signal was published under — see that file's
+`PublishIfConfigured()` and `Config.mqh`'s `PendingSetup.decisionId` for
+why `AddSetup()` has to happen *after* `CDecisionRouter::Decide()` mints
+that id, not before.
+
+`Signals/ConfigSync.mqh` (opt-in via `InpConfigSyncEndpoint`, blank by
+default) polls `GET /config/{symbol}` on a timer (`InpConfigSyncPollMinutes`)
+and warns in the terminal log if the bridge's most-recently-approved
+weight_version differs from this instance's compiled `InpWeightSetVersion`.
+It never changes behavior automatically — see `telegram-bridge/README.md`'s
+"Trade tagging & recalibration" section for why nothing can yet.
 
 ## Decision persistence
 

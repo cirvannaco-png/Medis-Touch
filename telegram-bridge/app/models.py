@@ -1,6 +1,7 @@
 import enum
 from datetime import datetime, timezone
 
+import sqlalchemy as sa
 from sqlalchemy import JSON, Column, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
 
@@ -188,3 +189,127 @@ class Signal(Base):
     # older than v2.9 — formatter.py must degrade gracefully, not assume
     # this is always populated.
     extra = Column(JSON, nullable=True)
+    # --- v2.11 additions: promoted out of `extra` into first-class,
+    # indexed columns because these are exactly what the two-track
+    # metrics engine (tools/metrics_engine.py) groups and filters by.
+    # Anything left buried in a JSON blob can't be queried without a
+    # per-key JSON extraction on every report run — regime/session/sweep
+    # grade/HTF alignment/weight version are the tag set the whole
+    # tagging system exists to make queryable, so they get real columns.
+    # All nullable: a pre-v2.11 EA build still posts a valid Signal, it
+    # just won't be tag-breakdown-able until it's rebuilt against the new
+    # SignalPublisher payload.
+    regime = Column(String, nullable=True, index=True)          # ENUM_VOL_REGIME as string: Low/Normal/High/Undefined
+    session = Column(String, nullable=True, index=True)         # ENUM_TRADING_SESSION as string
+    sweep_grade = Column(String, nullable=True, index=True)     # ENUM_SWEEP_GRADE as string: None/C/B/A
+    htf_ob_aligned = Column(sa.Boolean, nullable=True)           # SetupReasons.htf_ob_confluence at signal time
+    weight_version = Column(String, nullable=True, index=True)  # InpWeightSetVersion — which scoring weight set produced this signal
+
+
+# One row per RESOLVED setup from the EA's simulated OutcomeTracker (see
+# EA/includes/Trading/OutcomeTracker.mqh) — win/loss/scratch/no_fill,
+# realized R, and the full tag context at signal time, denormalized onto
+# this row rather than requiring a join back to Signal. This is the
+# table the two-track metrics engine (tools/metrics_engine.py) actually
+# queries: coverage metrics group by tag regardless of outcome
+# (including no_fill rows), expectancy metrics filter to resolved rows
+# and break down realized R by every tag. Before this table existed,
+# this data only ever reached a local CSV on the MT5 terminal
+# (SignalLogger::LogOutcome) and never touched Postgres — "why did we
+# lose" was a CSV grep, not a query.
+class SignalOutcome(Base):
+    __tablename__ = "signal_outcomes"
+    __table_args__ = (
+        Index("ix_signal_outcomes_regime_session", "regime", "session"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Same convention as Signal.signal_id (f"{symbol}_{dir}_{epoch}") —
+    # one outcome per signal, enforced unique so a duplicate POST (retry
+    # after a dropped ack) upserts instead of double-counting.
+    signal_id = Column(String, unique=True, nullable=False, index=True)
+    symbol = Column(String, nullable=False)
+    direction = Column(String, nullable=False)
+    # "win" | "loss" | "scratch" | "no_fill" | "ambiguous" — no_fill and
+    # ambiguous are NOT dropped: a signal that never got a chance to
+    # prove itself is exactly what the coverage-metrics half of step 2
+    # needs (missed-long rate, directional bias) even though it
+    # contributes nothing to the expectancy half.
+    outcome = Column(String, nullable=False, index=True)
+    realized_r = Column(Float, nullable=True)     # NULL for no_fill/ambiguous
+    mfe_r = Column(Float, nullable=True)
+    mae_r = Column(Float, nullable=True)
+    bars_held = Column(Integer, nullable=True)
+    bars_to_fill = Column(Integer, nullable=True)
+    filled = Column(sa.Boolean, nullable=False, default=False)
+    # --- tag context, snapshotted at signal time (copied from Signal,
+    # not joined, so a report never depends on Signal retention policy) ---
+    regime = Column(String, nullable=True, index=True)
+    session = Column(String, nullable=True, index=True)
+    sweep_grade = Column(String, nullable=True, index=True)
+    htf_ob_aligned = Column(sa.Boolean, nullable=True)
+    weight_version = Column(String, nullable=True, index=True)
+    confidence_at_signal = Column(Float, nullable=True)
+    confidence_decayed = Column(Float, nullable=True)
+    decay_bars = Column(Integer, nullable=True)
+    received_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+# v2.11 step 6. One row per scheduled recalibration cycle's metrics_engine
+# report — the Postgres replacement for tools/cycle_store.py's JSON files.
+# report_json is the EXACT dict tools/metrics_engine.py's compute_report()
+# produces; gating.py's decide() doesn't care whether a cycle came from a
+# file or this table (see gating.py:load_cycles_from_db), which is what
+# keeps the synthetic-rehearsal tooling and the real scheduled pipeline
+# running the same decision logic.
+class CalibrationCycle(Base):
+    __tablename__ = "calibration_cycles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cycle_id = Column(String, unique=True, nullable=False, index=True)
+    # "live" (produced by the scheduled POST /admin/run-cycle) or
+    # "synthetic" (never written here — synthetic cycles stay local
+    # JSON-file-only via tools/generate_synthetic_cycles.py, precisely so
+    # a rehearsal cycle can never end up in the table a real promotion
+    # decision reads from).
+    source = Column(String, nullable=False, index=True, default="live")
+    generated_at = Column(DateTime(timezone=True), nullable=False)
+    report_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+# v2.11 step 5/6. One row per gating.py decision that was either a
+# promotion candidate (requires the human tap) or an auto-rollback
+# (executes immediately, logged here for the audit trail — never
+# silently reconciled, per the spec).
+class PromotionRequest(Base):
+    __tablename__ = "promotion_requests"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    weight_version = Column(String, nullable=False, index=True)
+    action = Column(String, nullable=False)  # "PROMOTE" | "ROLLBACK"
+    decision_json = Column(JSON, nullable=False)  # gating.Decision.to_dict()
+    # "pending" (awaiting a tap) | "approved" | "rejected" | "auto_executed"
+    # (ROLLBACK only — never waits for a tap, per the spec)
+    status = Column(String, nullable=False, default="pending", index=True)
+    telegram_message_id = Column(Integer, nullable=True)  # lets the callback edit the original card
+    requested_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    decided_at = Column(DateTime(timezone=True), nullable=True)
+    decided_by = Column(String, nullable=True)  # Telegram user id of whoever tapped
+
+
+# v2.11 step 5. An approval log, not a live "which weights are running"
+# registry — this table does NOT assign a weight_version to a symbol or
+# push anything to the EA. A weight_version landing here means a human
+# tapped Approve on it; whatever eventually reads this to decide what
+# the EA should run next (the config-sync endpoint discussed but not yet
+# built) is separate work. See PromotionRequest for the request/response
+# trail this is derived from.
+class ApprovedWeightVersion(Base):
+    __tablename__ = "approved_weight_versions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    weight_version = Column(String, unique=True, nullable=False, index=True)
+    approved_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    approved_by = Column(String, nullable=True)
+    promotion_request_id = Column(Integer, nullable=True)

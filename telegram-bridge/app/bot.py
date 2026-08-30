@@ -17,7 +17,14 @@ so app/main.py's lifespan reads consistently.
 from __future__ import annotations
 
 from telegram import BotCommand, Update
-from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
+)
 
 from app.bot_handlers import (
     COMMAND_LIST,
@@ -40,6 +47,7 @@ from app.bot_handlers import (
     unmute,
     version_command,
 )
+from app.bot_promotions import CALLBACK_PREFIX, handle_promotion_callback
 from app.config import settings
 from app.logger import logger
 
@@ -66,6 +74,11 @@ def _build_application() -> Application:
     app.add_handler(CommandHandler("resume", resume))
     app.add_handler(CommandHandler("retry", retry))
     app.add_handler(CommandHandler("version", version_command))
+    # v2.11 step 5 — tap-to-approve promotion cards. Pattern-matched on
+    # the "promo:" prefix (see bot_promotions.py) so this handler can't
+    # accidentally swallow callback_query updates from some future,
+    # unrelated inline-keyboard feature.
+    app.add_handler(CallbackQueryHandler(handle_promotion_callback, pattern=f"^{CALLBACK_PREFIX}:"))
     # Catches any other "/whatever" sent to the bot. Must be added last -
     # PTB tries handlers in registration order and stops at the first match,
     # so this only fires when none of the specific commands above matched.
@@ -110,7 +123,14 @@ async def init_bot() -> None:
         await application.bot.set_webhook(
             url=url,
             secret_token=settings.WEBHOOK_SECRET_TOKEN,
-            allowed_updates=["message"],
+            # v2.11 — "callback_query" added for step 5's tap-to-approve
+            # promotion cards (InlineKeyboardButton taps arrive as
+            # callback_query updates, never as "message"). Without this,
+            # Telegram silently never delivers button taps to this
+            # webhook at all — process_update()/application.process_update()
+            # are already update-type-agnostic (see bot.py), so this one
+            # line was the actual gap.
+            allowed_updates=["message", "callback_query"],
             drop_pending_updates=True,
         )
         logger.info(f"Telegram webhook set to {url}")

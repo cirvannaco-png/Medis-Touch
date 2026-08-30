@@ -110,17 +110,29 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 @_authorized_only
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # v2.11 — optional symbol filter: "/signal" (unchanged) shows the last
+    # 5 across every symbol; "/signal XAUUSD" (or usdjpy/eurgbp/eurusd,
+    # case-insensitive) filters to that one. This is a filter on signals
+    # ALREADY RECEIVED, not an on-demand "generate me a signal now" —
+    # Medis Touch is chart-driven per symbol; the bot can't ask a
+    # not-currently-running EA instance to produce one.
+    args = getattr(context, "args", None)
+    symbol_filter = args[0].upper() if args else None
+
     async with async_session() as session:
-        result = await session.execute(
-            select(Signal).order_by(Signal.received_at.desc()).limit(5)
-        )
+        stmt = select(Signal).order_by(Signal.received_at.desc()).limit(5)
+        if symbol_filter:
+            stmt = select(Signal).where(Signal.symbol == symbol_filter).order_by(Signal.received_at.desc()).limit(5)
+        result = await session.execute(stmt)
         signals = result.scalars().all()
 
     if not signals:
-        await update.message.reply_text("No signals recorded yet.")
+        msg = f"No signals recorded yet for {symbol_filter}." if symbol_filter else "No signals recorded yet."
+        await update.message.reply_text(msg)
         return
 
-    lines = ["📡 Last 5 signals", ""]
+    header = f"📡 Last {len(signals)} signals for {symbol_filter}" if symbol_filter else "📡 Last 5 signals"
+    lines = [header, ""]
     for s in signals:
         emoji = "🟢" if s.direction == "BUY" else "🔴"
         ts = s.received_at.strftime("%Y-%m-%d %H:%M UTC") if s.received_at else "?"
@@ -352,9 +364,10 @@ async def version_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 def _parse_symbol_arg(context: ContextTypes.DEFAULT_TYPE) -> str | None:
-    if not context.args:
+    args = getattr(context, "args", None)
+    if not args:
         return None
-    return context.args[0].strip().upper()
+    return args[0].strip().upper()
 
 
 @_authorized_only

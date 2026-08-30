@@ -9,6 +9,11 @@
 #include "../Analysis/TFContext.mqh"
 #include "RiskEngine.mqh"
 #include "CalibrationEngine.mqh"
+// v2.11 — optional publisher hook so a resolved/no-fill setup can be
+// POSTed to the bridge (POST /outcome) right alongside the existing
+// local-CSV LogOutcome() call. Include-guarded, so it's harmless that
+// the main .mq5 also includes this later for g_publisher itself.
+#include "../Signals/SignalPublisher.mqh"
 
 // SCOPE / HONEST LIMITATIONS — read before trusting the numbers this
 // produces:
@@ -113,6 +118,10 @@ private:
    // v2.10 - DIAGNOSTIC-ONLY confidence decay. Half-life in unfilled bars;
    // <= 0 disables decay (confidenceDecayed stays == confidenceAtSignal).
    double            m_decayHalfLifeBars;
+   // v2.11 — optional bridge publishing. NULL publisher = fully
+   // backward compatible no-op (see ConfigurePublishing).
+   CSignalPublisher* m_publisher;
+   string            m_weightVersion;
 
    void              RemoveAt(int idx);
    // Pre-fill resolutions only (Invalidated_NoFill / Timeout_NoFill) —
@@ -152,6 +161,15 @@ private:
    // bookkeeping: no caller reads the result to cancel, re-rank or re-size
    // anything - see the PendingSetup v2.10 block in Config.mqh.
    void              ApplyDecay(PendingSetup &p) const;
+   // v2.11. Shared by FinalizeExit() and Resolve() — no-ops silently if
+   // m_publisher is NULL (publishing not configured) or p.decisionId < 0
+   // (this setup was never routed through a decision, so there is no
+   // valid signal_id to attach an outcome to — see Config.mqh
+   // PendingSetup.decisionId). `coarseOutcome` is the already-normalized
+   // "win"/"loss"/"scratch"/"no_fill"/"ambiguous" label — callers compute
+   // this, not this function, so the win/loss/scratch epsilon logic lives
+   // in exactly one place (FinalizeExit's existing m_stats classification).
+   void              PublishIfConfigured(const PendingSetup &p, string coarseOutcome, bool ambiguous);
    // Closes the trade's remaining lots (if any), logs it, updates
    // m_stats, and removes it from the pending array.
    void              FinalizeExit(int idx, PendingSetup &p, string outcome, double rawExitPrice,
@@ -172,7 +190,7 @@ public:
                                          double breakEvenAtR, double partialAtR, double partialFraction,
                                          double trailAtrMult, double commissionPerLot,
                                          double spreadPoints, double slippagePoints);
-   void              AddSetup(TradeSetup &setup);
+   void              AddSetup(TradeSetup &setup, long decisionId = -1);
    void              Update(CTFContext* fvgCtx);
    int               ActiveCount() const { return m_count; }
    OutcomeStats      GetStats() const { return m_stats; }
@@ -185,6 +203,12 @@ public:
    // decay. 12 bars is the spec's starting point, not a fitted value.
    void              ConfigureConfidenceDecay(double halfLifeBars = 12.0) { m_decayHalfLifeBars = halfLifeBars; }
    void              ConfigureCalibration(bool enabled, int minSample = 30) { m_calibrationEnabled = enabled; m_calibration.Init(m_symbol, minSample); }
+   // v2.11. OFF by default (NULL publisher) — call once after Init(),
+   // same pattern as ConfigureSimulation/ConfigureCalibration. When set,
+   // FinalizeExit() and Resolve() push every outcome to the bridge in
+   // addition to the existing local-CSV LogOutcome() call.
+   void              ConfigurePublishing(CSignalPublisher* publisher, string weightVersion)
+     { m_publisher = publisher; m_weightVersion = weightVersion; }
    double            GetCalibratedProbability(double confidence, int &sampleSizeOut, bool &hasEnoughDataOut) const
      { return m_calibration.GetCalibratedProbability(confidence, sampleSizeOut, hasEnoughDataOut); }
    const CCalibrationEngine* CalibrationEngine() const { return GetPointer(m_calibration); }
@@ -196,7 +220,7 @@ COutcomeTracker::COutcomeTracker() : m_count(0), m_maxBars(100), m_logger(NULL),
                                       m_breakEvenAtR(1.0), m_partialAtR(2.0), m_partialFraction(0.5),
                                       m_trailAtrMult(1.5), m_commissionPerLot(7.0),
                                       m_spreadPoints(10.0), m_slippagePoints(2.0), m_calibrationEnabled(false),
-                                      m_decayHalfLifeBars(12.0)
+                                      m_decayHalfLifeBars(12.0), m_publisher(NULL), m_weightVersion("")
   {
    ZeroMemory(m_stats);
   }
@@ -402,14 +426,52 @@ void COutcomeTracker::FinalizeExit(int idx, PendingSetup &p, string outcome, dou
    m_pending[idx] = p;
    if(m_logger != NULL)
       m_logger.LogOutcome(m_pending[idx], m_symbol, m_entryTF, outcome, rawExitPrice, m_fillPolicy);
+   // v2.11 — same classification epsilons as the m_stats block above,
+   // kept in exactly one place logically (this block feeds both); lots<=0
+   // mirrors the doc comment at the top of this file: "excluded from
+   // every $ stat" because sizing was impossible, so it's reported as
+   // scratch (no informative PnL) rather than a fabricated win/loss.
+   string coarseOutcome;
+   if(ambiguous)                              coarseOutcome = "ambiguous";
+   else if(p.lots <= 0)                       coarseOutcome = "scratch";
+   else if(p.realizedPnL > 0.0000001)         coarseOutcome = "win";
+   else if(p.realizedPnL < -0.0000001)        coarseOutcome = "loss";
+   else                                        coarseOutcome = "scratch";
+   PublishIfConfigured(m_pending[idx], coarseOutcome, ambiguous);
    RemoveAt(idx);
   }
+void COutcomeTracker::PublishIfConfigured(const PendingSetup &p, string coarseOutcome, bool ambiguous)
+  {
+   if(m_publisher == NULL) return;
+   if(p.decisionId < 0) return; // no decision was ever minted for this setup — no valid signal_id to attach to
+
+   bool isBuy = (p.setup.type == ORDER_TYPE_BUY);
+   double realizedR = 0.0, mfeR = 0.0, maeR = 0.0;
+   if(coarseOutcome != "no_fill" && coarseOutcome != "ambiguous" && p.mgmtRiskDist > 0)
+     {
+      double oneRDollar = p.mgmtRiskDist * ValuePerUnitDistance() * p.lots;
+      if(oneRDollar > 0) realizedR = p.realizedPnL / oneRDollar;
+      mfeR = isBuy ? (p.mfePrice - p.sizingEntryPrice) / p.mgmtRiskDist
+                   : (p.sizingEntryPrice - p.mfePrice) / p.mgmtRiskDist;
+      maeR = isBuy ? (p.sizingEntryPrice - p.maePrice) / p.mgmtRiskDist
+                   : (p.maePrice - p.sizingEntryPrice) / p.mgmtRiskDist;
+     }
+
+   string signalId = m_publisher.SignalIdForDecision(p.decisionId);
+   string direction = isBuy ? "BUY" : "SELL";
+   SetupReasons r = p.setup.reasons;
+
+   m_publisher.PublishOutcome(signalId, m_symbol, direction, coarseOutcome, realizedR, mfeR, maeR,
+                              p.barsElapsed, p.barsToFill, p.filled,
+                              EnumToString(r.vol_regime), EnumToString(r.session), EnumToString(r.sweep_grade),
+                              r.htf_ob_confluence, p.confidenceAtSignal, p.confidenceDecayed, p.decayBars);
+  }
 //+------------------------------------------------------------------+
-void COutcomeTracker::AddSetup(TradeSetup &setup)
   {
    PendingSetup p;
    ZeroMemory(p);
    p.setup = setup;
+   p.decisionId = decisionId; // -1 unless the caller passed the real one post-Decide() — see Config.mqh
    bool isBuy = (setup.type == ORDER_TYPE_BUY);
    p.entryRef = isBuy ? setup.entry_bottom : setup.entry_top;
    p.riskDist = MathAbs(p.entryRef - setup.stop_loss);
@@ -464,6 +526,12 @@ void COutcomeTracker::Resolve(int idx, string outcome, double exitPrice)
   {
    if(m_logger != NULL)
       m_logger.LogOutcome(m_pending[idx], m_symbol, m_entryTF, outcome, exitPrice, m_fillPolicy);
+   // v2.11 — Resolve() is exclusively the pre-fill NoFill path (see class
+   // header point 1); always "no_fill" regardless of the specific label
+   // (Invalidated_NoFill/Timeout_NoFill) passed in, since neither
+   // contributes anything the outcome schema's win/loss/scratch/no_fill/
+   // ambiguous set needs to distinguish further.
+   PublishIfConfigured(m_pending[idx], "no_fill", false);
    RemoveAt(idx);
   }
 //+------------------------------------------------------------------+

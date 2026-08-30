@@ -34,6 +34,7 @@
 #include "includes/Core/NewsFilter.mqh"
 #include "includes/Signals/SubscriberPlatform.mqh"
 #include "includes/Signals/SignalPublisher.mqh"
+#include "includes/Signals/ConfigSync.mqh"
 #include "includes/Monitoring/ProductionMonitor.mqh"
 
 // --- Analysis inputs: kept identical to MedisTouch.mq5 so both files
@@ -194,6 +195,24 @@ input int    InpMaxPositionsPerGroup = 3;       // per correlation bucket — se
 input group "Signal Transport"
 input int    InpWebRequestTimeoutMs = 5000;
 input string InpBridgeApiKey = "";              // must match telegram-bridge's SECRET_KEY env var — sent as X-API-Key on every /signal POST. Leave blank and WebRequest is skipped (Publish() still writes the local CSV feed, nothing is transmitted).
+// v2.11 — manual weight-set version tag. Bump this string by hand every
+// time a scoring-formula change ships (same trigger as CalibrationEngine
+// Reset() — see its limitation #4). Nothing enforces this yet; it exists
+// so every signal AND its eventual outcome carry a queryable label for
+// "which weight set produced this," which is the prerequisite for the
+// statistical gating / promotion layer (steps 4-5) ever being able to
+// tell one weight set's expectancy apart from another's in signal_outcomes.
+input string InpWeightSetVersion = "v2.10-baseline";
+// v2.11 — the operator's OWN bridge endpoint, for ConfigSync polling
+// only. Deliberately separate from the subscriber-fan-out CSV
+// (SubscriberPlatform.mqh) — that list is for broadcasting signals to
+// potentially several parties, while config-sync is a private
+// operational concern about THIS instance's own weight_version staying
+// in sync with what was approved on YOUR bridge. Leave blank to disable
+// config sync entirely (the default; opt-in). Same base URL you'd use
+// as the /signal endpoint, e.g. "https://your-bridge.onrender.com/signal".
+input string InpConfigSyncEndpoint = "";
+input int    InpConfigSyncPollMinutes = 15; // how often OnTimer polls GET /config/{symbol}; irrelevant if InpConfigSyncEndpoint is blank
 
 input group "Production Monitoring"
 input int    InpHeartbeatIntervalSec = 60;
@@ -226,6 +245,7 @@ CRiskGuard         g_riskGuard;
 CNewsFilter        g_newsFilter;
 CSubscriberPlatform g_subscribers;
 CSignalPublisher   g_publisher;
+CConfigSync        g_configSync;
 CProductionMonitor g_monitor;
 
 datetime           g_lastLoggedTime = 0;
@@ -306,6 +326,20 @@ int OnInit()
    g_store.Init(_Symbol);
    g_subscribers.Init();
    g_publisher.Init(_Symbol, &g_subscribers, InpWebRequestTimeoutMs, InpBridgeApiKey);
+   g_publisher.SetWeightVersion(InpWeightSetVersion);
+   // v2.11 — dormant until InpConfigSyncEndpoint is set AND a real
+   // promotion has happened on the bridge; see ConfigSync.mqh header.
+   // EventSetTimer's argument is seconds, hence the *60.
+   if(StringLen(InpConfigSyncEndpoint) > 0)
+     {
+      g_configSync.Init(_Symbol, InpConfigSyncEndpoint, InpBridgeApiKey, InpWeightSetVersion, InpWebRequestTimeoutMs);
+      EventSetTimer(MathMax(60, InpConfigSyncPollMinutes * 60));
+     }
+   // v2.11 — lets the tracker push resolved outcomes to the bridge
+   // (POST /outcome) the moment it resolves them, right alongside the
+   // existing local-CSV LogOutcome() call. See OutcomeTracker.mqh
+   // FinalizeExit()/Resolve() for the call sites.
+   g_tracker.ConfigurePublishing(&g_publisher, InpWeightSetVersion);
    g_portfolio.Init(InpMaxPortfolioRiskPercent, InpMaxPositionsPerSymbol, InpMaxPositionsPerGroup, InpMagicNumber, &g_risk);
    g_riskGuard.Init(_Symbol, InpMaxDailyLossPercent, InpMaxDrawdownPercent, InpDeriskStartPercent, InpDeriskFloor);
    if(InpUseNewsFilter)
@@ -349,9 +383,20 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   if(StringLen(InpConfigSyncEndpoint) > 0)
+      EventKillTimer();
    g_publisher.Deinit();
    g_subscribers.Deinit();
    g_store.Deinit();
+  }
+//+------------------------------------------------------------------+
+// v2.11 — fires every InpConfigSyncPollMinutes when config sync is
+// enabled (see OnInit's EventSetTimer call); does nothing otherwise,
+// since EventSetTimer() is never called when InpConfigSyncEndpoint is
+// blank, so OnTimer() simply never fires in that case.
+void OnTimer()
+  {
+   g_configSync.Poll();
   }
 //+------------------------------------------------------------------+
 // v2.9 — signal lifecycle monitor (review: "SCANNING -> QUALIFIED ->
@@ -550,12 +595,22 @@ void OnTick()
       ENUM_TREND_STATE t = g_trendCtx.trend.GetCurrentTrend();
       g_logger.LogSetup(chosen, _Symbol, InpFVGTF, EnumToString(t));
      }
-   if(InpTrackOutcomes)
-      g_tracker.AddSetup(chosen);
-   g_tracker.Update(g_fvgCtx);
 
    // --- This is the seam the audit found missing: analysis -> decision -> action ---
+   // v2.11: moved ABOVE AddSetup()/Update() (was below) so a decision_id
+   // exists BEFORE the setup enters the tracker — without it, PendingSetup
+   // has no valid signal_id to publish resolved outcomes under (see
+   // Config.mqh PendingSetup.decisionId). Behavior is otherwise identical:
+   // Decide() always ran unconditionally on `chosen` right after this
+   // point before, so nothing about ITS timing or inputs has changed —
+   // only AddSetup()/Update() now run a few lines later, still within the
+   // same tick, still processing the same pending array.
    TradeDecisionRecord decision = g_router.Decide(chosen);
+
+   if(InpTrackOutcomes)
+      g_tracker.AddSetup(chosen, decision.decision_id);
+   g_tracker.Update(g_fvgCtx);
+
    if(!decision.valid || decision.action == POLICY_IGNORE) return;
 
    // Persist BEFORE acting — Recovery must be able to find this decision

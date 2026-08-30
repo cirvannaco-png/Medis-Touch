@@ -16,8 +16,10 @@ from app.database import check_db_connection, get_session
 from app.formatter import format_lifecycle_banner, format_signal_message, format_trade_message
 from app.logger import logger
 from app.models import (
+    ApprovedWeightVersion,
     Signal,
     SignalLifecycleStatus,
+    SignalOutcome,
     SignalStatus,
     TradeEvent,
     TradeEventStatus,
@@ -53,6 +55,18 @@ class SignalRequest(BaseModel):
     # distances), never used for trading logic on the bridge side, so a
     # missing or malformed key degrades the Telegram card, not a decision.
     extra: dict | None = Field(default=None)
+    # v2.11: promoted out of `extra` — see app/models.py:Signal for why.
+    # All optional so a pre-v2.11 EA build's payload (no top-level tag
+    # fields yet) still validates exactly as before; they just land NULL
+    # and won't show up in tag-breakdown reports until the EA is rebuilt
+    # against the new SignalPublisher payload.
+    regime: str | None = Field(default=None, max_length=32)
+    session_tag: str | None = Field(default=None, max_length=32, alias="session")
+    sweep_grade: str | None = Field(default=None, max_length=16)
+    htf_ob_aligned: bool | None = Field(default=None)
+    weight_version: str | None = Field(default=None, max_length=64)
+
+    model_config = {"populate_by_name": True}
 
     @field_validator("reasons")
     @classmethod
@@ -97,6 +111,49 @@ class TradeEventResponse(BaseModel):
     trade_id: str
     duplicate: bool = False
     telegram_message_id: int | None = None
+
+
+class OutcomeRequest(BaseModel):
+    """
+    v2.11. What the EA's OutcomeTracker simulator (see
+    EA/includes/Trading/OutcomeTracker.mqh::FinalizeExit/Resolve) resolves
+    a signal to, once resolved — this previously only ever reached a
+    local CSV on the MT5 terminal (SignalLogger::LogOutcome) and never
+    touched Postgres. One row per signal_id; a retried POST for the same
+    signal_id upserts rather than duplicating (see receive_outcome).
+    """
+    signal_id: str = Field(..., min_length=1, max_length=100)
+    symbol: str = Field(..., min_length=1, max_length=20)
+    direction: Literal["BUY", "SELL"]
+    # "win" | "loss" | "scratch" | "no_fill" | "ambiguous" — deliberately a
+    # free string, not an enum: the EA's outcome labels (Timeout, FinalTP_Hit,
+    # SL_Hit, Ambiguous_*, etc.) get normalized to this coarser set on the
+    # EA side (see SignalPublisher::BuildOutcomeJsonPayload), and adding a
+    # new EA-side label should never require a bridge migration to keep
+    # accepting it.
+    outcome: Literal["win", "loss", "scratch", "no_fill", "ambiguous"]
+    realized_r: float | None = Field(default=None)
+    mfe_r: float | None = Field(default=None)
+    mae_r: float | None = Field(default=None)
+    bars_held: int | None = Field(default=None, ge=0)
+    bars_to_fill: int | None = Field(default=None, ge=0)
+    filled: bool = Field(default=False)
+    regime: str | None = Field(default=None, max_length=32)
+    session_tag: str | None = Field(default=None, max_length=32, alias="session")
+    sweep_grade: str | None = Field(default=None, max_length=16)
+    htf_ob_aligned: bool | None = Field(default=None)
+    weight_version: str | None = Field(default=None, max_length=64)
+    confidence_at_signal: float | None = Field(default=None)
+    confidence_decayed: float | None = Field(default=None)
+    decay_bars: int | None = Field(default=None, ge=0)
+
+    model_config = {"populate_by_name": True}
+
+
+class OutcomeResponse(BaseModel):
+    status: str
+    signal_id: str
+    upserted: bool = False
 
 
 class HealthResponse(BaseModel):
@@ -238,6 +295,11 @@ async def receive_signal(
         timeframe=payload.timeframe,
         status=SignalStatus.PENDING,
         extra=payload.extra,
+        regime=payload.regime,
+        session=payload.session_tag,
+        sweep_grade=payload.sweep_grade,
+        htf_ob_aligned=payload.htf_ob_aligned,
+        weight_version=payload.weight_version,
     )
     session.add(db_signal)
     try:
@@ -525,6 +587,139 @@ async def retry_failed_trade_events_core(session: AsyncSession) -> dict:
         "message": f"Processed {len(failed_events)} failed trade events. Retried {retried_count} successfully.",
         "remaining_failed": len(failed_events) - retried_count
     }
+
+
+@router.post("/outcome", response_model=OutcomeResponse)
+async def receive_outcome(
+    payload: OutcomeRequest,
+    session: AsyncSession = Depends(get_session),
+    _auth: bool = Depends(verify_api_key),
+    _rate: None = Depends(enforce_rate_limit),
+):
+    """
+    v2.11 — foundation of the trade-tagging system. This is the endpoint
+    that closes the gap: a signal's tags were already reaching Postgres
+    (POST /signal), but what happened to it never did. Without this,
+    "why did we lose" was a CSV grep on the MT5 terminal; with it, it's a
+    query against signal_outcomes.
+
+    Upsert on signal_id (not insert-only like /signal's PENDING-row
+    reservation pattern) because an outcome POST failing transiently and
+    getting retried by the EA is a normal case here, not a race to guard
+    against — there's no external side effect (no Telegram call) to
+    dedupe against, just a row to get right.
+    """
+    log = logger.bind(signal_id=payload.signal_id)
+
+    existing = await session.scalar(
+        select(SignalOutcome).where(SignalOutcome.signal_id == payload.signal_id)
+    )
+    upserted = existing is not None
+    row = existing or SignalOutcome(signal_id=payload.signal_id)
+
+    row.symbol = payload.symbol
+    row.direction = payload.direction
+    row.outcome = payload.outcome
+    row.realized_r = payload.realized_r
+    row.mfe_r = payload.mfe_r
+    row.mae_r = payload.mae_r
+    row.bars_held = payload.bars_held
+    row.bars_to_fill = payload.bars_to_fill
+    row.filled = payload.filled
+    row.regime = payload.regime
+    row.session = payload.session_tag
+    row.sweep_grade = payload.sweep_grade
+    row.htf_ob_aligned = payload.htf_ob_aligned
+    row.weight_version = payload.weight_version
+    row.confidence_at_signal = payload.confidence_at_signal
+    row.confidence_decayed = payload.confidence_decayed
+    row.decay_bars = payload.decay_bars
+
+    if not upserted:
+        session.add(row)
+    await session.commit()
+
+    log.info(f"Outcome recorded: {payload.outcome}" + (" (updated)" if upserted else ""))
+    return OutcomeResponse(status="ok", signal_id=payload.signal_id, upserted=upserted)
+
+
+class ConfigResponse(BaseModel):
+    """
+    v2.11 — dormant until a real promotion happens. `symbol` is accepted
+    in the URL for forward-compatibility with eventual per-symbol
+    assignment, but approved_weight_versions has no symbol column today
+    (see app/models.py) — every symbol currently gets told the same
+    "most recently approved, if any" answer. `params` is reserved for a
+    not-yet-built numeric-parameter-proposal engine (the actual C4W/C2W
+    bounded-adjustment values — confidence threshold, FVG proximity,
+    etc.) and is always null until that exists; an EA polling this today
+    can detect "a different weight_version was approved than the one I'm
+    running" but nothing here yet tells it WHAT changed about it.
+    """
+    symbol: str
+    approved_weight_version: str | None
+    approved_at: str | None
+    params: dict | None = None
+
+
+@router.get("/config/{symbol}", response_model=ConfigResponse)
+async def get_config(
+    symbol: str,
+    session: AsyncSession = Depends(get_session),
+    _auth: bool = Depends(verify_api_key),
+):
+    """
+    Polled by the EA's ConfigSync (see EA/includes/Signals/ConfigSync.mqh)
+    to check whether a newer weight_version has been approved than the
+    one it's currently running. Read-only, side-effect-free — this
+    endpoint never changes anything, it only reports the current state of
+    `approved_weight_versions`. Returns nulls (not a 404) when nothing
+    has ever been approved, which is the expected state until the first
+    real PROMOTE decision clears a human tap — see app/calibration.py.
+    """
+    latest = await session.scalar(
+        select(ApprovedWeightVersion).order_by(ApprovedWeightVersion.approved_at.desc()).limit(1)
+    )
+    if latest is None:
+        return ConfigResponse(symbol=symbol, approved_weight_version=None, approved_at=None, params=None)
+    return ConfigResponse(
+        symbol=symbol,
+        approved_weight_version=latest.weight_version,
+        approved_at=latest.approved_at.isoformat() if latest.approved_at else None,
+        params=None,
+    )
+
+
+@router.post("/admin/run-cycle")
+async def run_calibration_cycle(_auth: bool = Depends(verify_api_key)):
+    """
+    v2.11 step 6. Triggers one recalibration cycle: metrics_engine report
+    over the trailing window -> persisted as a CalibrationCycle -> gating
+    decision per weight_version -> promotion card / auto-rollback notice
+    via Telegram. See app/calibration.py:run_cycle for the actual work;
+    this endpoint is deliberately a thin trigger.
+
+    Same X-API-Key auth as /signal and /trade — this endpoint doesn't sit
+    behind Telegram admin auth because the thing calling it isn't a
+    person tapping a button, it's a scheduled job (see
+    .github/workflows/biweekly-recalibration.yml) or a manual curl.
+
+    Free-tier Render web services spin down after 15 minutes idle (see
+    /render.yaml) — an in-process scheduler would never fire on its own
+    while sleeping. This endpoint is designed to be hit from OUTSIDE the
+    service (GitHub Actions cron, or a Render Cron Job) specifically
+    because that also wakes the service back up; it was not built as an
+    in-app APScheduler job for that reason.
+    Deliberately imports app.calibration lazily (inside this handler) rather
+    than at module load time: app.calibration imports tools/gating.py and
+    tools/metrics_engine.py (see that module's docstring for the two
+    supported directory layouts), and if that ever fails to resolve, the
+    failure should take down this one endpoint, not crash-loop the entire
+    service at startup the way a top-level import would.
+    """
+    from app.calibration import run_cycle
+    result = await run_cycle()
+    return result
 
 
 @router.post("/trade/retry-failed")

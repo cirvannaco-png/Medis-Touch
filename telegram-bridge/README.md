@@ -18,6 +18,8 @@ directly with commands like `/positions` or `/performance`.
 - **Bulk retry** – `/retry-failed` endpoint safely resends transiently-failed signals; permanently-failed signals are excluded so they don't retry forever.
 - **Token verification** – On startup, checks if the bot token is valid.
 - **Inbound bot** – `/start`, `/signal`, `/analysis`, `/positions`, `/risk`, `/performance`, `/help`, answered from the same `signals` / `trade_events` tables the outbound side writes to. Runs in Telegram webhook mode (not polling), so it needs no second process — see [Inbound bot](#inbound-bot) below.
+- **Trade tagging** – every signal and every resolved outcome carries structured regime/session/sweep-grade/HTF-alignment/weight-version tags (`signals` + `signal_outcomes` tables) — see [Trade tagging & recalibration](#trade-tagging--recalibration).
+- **Tap-to-approve recalibration** – a scheduled cycle computes coverage/expectancy stats with confidence intervals, decides PROMOTE/HOLD/ROLLBACK per weight version, and only a genuine promotion candidate waits on a Telegram button tap — a contradiction between cycles auto-rolls-back and is never silently reconciled.
 
 ## Quick Start
 
@@ -35,6 +37,9 @@ directly with commands like `/positions` or `/performance`.
 | POST   | `/trade`            | Yes           | Receive and forward a trade lifecycle event               |
 | POST   | `/retry-failed`     | Yes           | Resend up to 5 transiently-failed signals                |
 | POST   | `/trade/retry-failed` | Yes         | Resend up to 5 transiently-failed trade events             |
+| POST   | `/outcome`          | Yes           | Receive a resolved (or no-fill) setup outcome from the EA's OutcomeTracker — see [Trade tagging & recalibration](#trade-tagging--recalibration) |
+| GET    | `/config/{symbol}`  | Yes           | Polled by `ConfigSync.mqh` — reports the most recently approved weight_version, if any. Dormant: null until a real promotion happens |
+| POST   | `/admin/run-cycle`  | Yes           | Trigger one recalibration cycle (metrics → gating decision → Telegram card / auto-rollback). Meant to be called by a scheduler, not a person — see [Scheduling](#scheduling-the-recalibration-cycle) |
 | POST   | `/telegram/webhook` | Telegram only | Inbound updates from Telegram (verified via secret token) |
 
 All endpoints except `GET /` and `POST /telegram/webhook` require the header `X-API-Key: <your SECRET_KEY>`.
@@ -49,7 +54,7 @@ Commands, registered with Telegram on startup via `setMyCommands`:
 |----------------|-------------------------------------------------------------------------------|
 | `/start`       | Confirms the bot is online                                                    |
 | `/help`        | Lists commands                                                                |
-| `/signal`      | Last 5 signals from the `signals` table                                      |
+| `/signal`      | Last 5 signals from the `signals` table — add a symbol to filter, e.g. `/signal XAUUSD` |
 | `/analysis`    | Reasons/confidence behind the most recent signal                             |
 | `/positions`   | Trades whose latest event isn't a close (`closed_tp1/tp2/sl/manual`)         |
 | `/risk`        | Open position count, symbols exposed, total lot volume — *not* account equity or margin, which only exist inside the MT5 terminal |
@@ -66,6 +71,8 @@ Commands, registered with Telegram on startup via `setMyCommands`:
 | `/version`     | Reports the running bridge version                                           |
 
 All commands are restricted to `ADMIN_CHAT_ID` — a message from any other chat, including the `CHAT_ID` signal group, is silently ignored.
+
+**Tap-to-approve promotion cards** aren't commands — they're inline-keyboard buttons (✅ Approve / ❌ Reject) attached to a recalibration cycle's Telegram summary when that cycle's decision is `PROMOTE`. Same `ADMIN_CHAT_ID`-only authorization as the commands above, enforced in `app/bot_promotions.py` rather than the `_authorized_only` decorator (a callback-query update carries the tapping user differently than a message update does). A `ROLLBACK` decision never shows buttons — per the recalibration spec, a genuine contradiction between cycles auto-executes and is only ever flagged, never gated behind a tap. See [Trade tagging & recalibration](#trade-tagging--recalibration).
 
 `/mute`, `/unmute`, and `/pause`/`/resume` are backed by a small `bot_settings` key/value
 table (see `app/settings_store.py`) so the state survives a Render redeploy. `POST /signal`
@@ -113,6 +120,104 @@ warning and the rest of the service starts normally — outbound signal/trade de
 > comfortably under your EA's `WebRequest` timeout. If the EA times out first it will resend
 > under a new `signal_id` while the bridge is still retrying the original.
 
+## Trade tagging & recalibration
+
+Every signal is tagged at creation with `regime`, `session`, `sweep_grade`, `htf_ob_aligned`,
+and `weight_version` (promoted out of the free-form `extra` JSON into indexed columns —
+see `app/models.py:Signal`). Every setup the EA's `OutcomeTracker` simulator resolves — win,
+loss, scratch, or no-fill — is posted back via `POST /outcome` into `signal_outcomes`, carrying
+the same tags plus realized R / MFE / MAE. Before this existed, a resolved outcome only ever
+reached a local CSV on the MT5 terminal; "why did we lose" was a CSV grep, not a query.
+
+On top of that table, `tools/` (not part of the deployed image except where noted below) provides:
+
+| Script                        | What it answers                                                                 |
+|--------------------------------|----------------------------------------------------------------------------------|
+| `tools/metrics_engine.py`      | Coverage vs. expectancy, reported as two separate tracks, never blended — plus `--regime-matrix` for the Symbol × Session × Volatility breakdown (trades, win %, avg R, profit factor, max drawdown) |
+| `tools/calibration_matrix.py`  | Per-tag 4-week-baseline vs. 2-week-recent expectancy delta, with a sample-size-aware `Keep / Investigate / Reduce confidence / Insufficient` action column |
+| `tools/stats.py`               | Wilson CI (win rate), AUC + Hanley-McNeil CI (does confidence discriminate win/loss), Pearson r + Fisher z CI (confidence vs. realized R) — no numpy/scipy |
+| `tools/gating.py`              | Turns a *history* of cycle reports into a PROMOTE / HOLD / ROLLBACK decision: overlapping confidence intervals across consecutive cycles means "no significant change, don't act"; promotion requires the same direction to persist across `MIN_PERSISTENCE` (default 2) consecutive cycles; a genuine contradiction auto-rolls-back rather than being reconciled |
+| `tools/generate_synthetic_cycles.py` | Fabricates cycle reports in `gating.py`'s exact input shape, tagged `source: synthetic`, so the gating logic can be rehearsed before any live data exists |
+
+**Why "dummy data now, real data later" is safe, not a hack:** every cycle is tagged
+`source: "live"` or `"synthetic"`. `gating.py` hard-refuses to compute a decision from a
+history that mixes the two — there's no flag to flip once real cycles start arriving; a
+synthetic cycle simply can never satisfy the source-purity check a real decision requires.
+
+In production these three pieces run inside the deployed bridge, not by hand:
+
+- `app/calibration.py` computes a `metrics_engine` report over the trailing window, persists it
+  to the `calibration_cycles` table (the Postgres replacement for `tools/cycle_store.py`'s local
+  JSON files — full audit trail, not just current state), and runs `tools/gating.py`'s decision
+  logic against each weight version's `calibration_cycles` history.
+- A `PROMOTE` decision creates a `pending` row in `promotion_requests` and posts a Telegram
+  summary — decision, reasoning, and every gated metric's prior/latest confidence interval — to
+  `ADMIN_CHAT_ID` with inline **✅ Approve** / **❌ Reject** buttons. `app/bot_promotions.py`
+  handles the tap: idempotent (a second tap after the request is already decided just says so),
+  edits the original message in place with the verdict and who made it, and on approval inserts
+  the weight version into `approved_weight_versions`.
+- A `ROLLBACK` decision (a genuine contradiction between cycles) executes immediately —
+  `auto_executed` in `promotion_requests`, no buttons — and only ever *notifies*, per the rule
+  that a contradiction is never silently reconciled.
+- `HOLD` / `INSUFFICIENT_DATA` decisions are logged but don't message anyone — a cycle with
+  nothing actionable shouldn't page you.
+
+`approved_weight_versions` is an **approval log**, not a live config registry — approving a
+weight version here doesn't push anything to a running EA on its own. What DOES read it:
+`GET /config/{symbol}`, polled by each EA instance's `ConfigSync.mqh` (opt-in via
+`InpConfigSyncEndpoint`) on a timer. It's observation-only by design — it detects and logs
+drift ("bridge says X is approved, this instance is compiled with Y") but never auto-applies
+anything, because there is still no numeric-parameter-proposal engine that would say WHAT
+values a candidate weight_version actually corresponds to (`ConfigResponse.params` is always
+null today). Dormant until both a real promotion happens and an EA instance is polling; the
+same code activates automatically the moment both are true, no redeploy needed for that part.
+
+## Walk-forward validation (step 3)
+
+`tools/walk_forward.py` splits an already-elapsed reference window (default 4 weeks) into an
+older TRAIN portion and the most-recent HOLDOUT portion (default the last 1 week), and compares
+win-rate confidence intervals between them for a given `weight_version`. This satisfies "reuse
+the actual EA's closed-bar signal logic, not a reimplementation" by construction — it only ever
+reads `signal_outcomes`, which `OutcomeTracker.mqh` populates by running the EA's own production
+decision code live, bar by bar. There is no separate Python backtester to keep in sync with the
+real signal logic, because there isn't a separate one at all.
+
+What this deliberately does NOT do: validate against a deeper historical window than the EA has
+actually been live for (e.g. two years of XAUUSD history compressed into one run). That would
+need to drive MT5's Strategy Tester, which has no environment to test against here — writing
+that automation blind, unlike everything else in this system, would mean shipping unverified
+code. `tools/walk_forward.py:ingest_tester_csv()` is left as an explicit stub for that path,
+to be written against a real Tester CSV export's actual column layout rather than a guess.
+
+## Scheduling the recalibration cycle
+
+`POST /admin/run-cycle` (same `X-API-Key` auth as `/signal` and `/trade`) triggers one cycle.
+It is **not** run by an in-process scheduler: this service is on Render's free web tier, which
+spins down after 15 minutes idle (see `/render.yaml`), so nothing running inside the process
+could reliably wake itself up on a biweekly schedule.
+
+Instead, `.github/workflows/biweekly-recalibration.yml` runs on GitHub's infrastructure every
+Saturday at 06:00 UTC (safely inside the weekend market-closed window), parity-checks the date
+so it only actually fires every *other* Saturday, and `curl`s the endpoint — which conveniently
+also wakes the sleeping service, since the wake-up call and the trigger are the same request.
+A manual "Run workflow" dispatch always runs regardless of parity, for an on-demand cycle.
+
+Requires two repository secrets (GitHub → Settings → Secrets and variables → Actions):
+
+| Secret            | Value                                                        |
+|--------------------|--------------------------------------------------------------|
+| `BRIDGE_BASE_URL`  | e.g. `https://medis-touch-telegram.onrender.com`             |
+| `BRIDGE_API_KEY`   | Same value as this service's `SECRET_KEY` env var            |
+
+No new bridge-side environment variables are needed — `/admin/run-cycle` reuses `SECRET_KEY`
+and `ADMIN_CHAT_ID`, both already required above.
+
+Because `app/calibration.py` imports `tools/gating.py` and `tools/metrics_engine.py` directly
+(one source of truth for the stats/decision logic, shared with the scripts you can also run by
+hand against production data), `telegram-bridge/Dockerfile` copies `tools/` into the image
+alongside `app/` — if you ever restructure the Dockerfile, keep that `COPY tools/ ./tools/`
+line, or `/admin/run-cycle` will 500 on every call in production while working fine locally.
+
 ## Deployment on Render
 
 The `render.yaml` is pre-configured for Render's Docker runtime. Add the environment variables
@@ -138,9 +243,52 @@ If you ever scale to multiple workers or instances, move the limiter to Redis (`
   "tp2": 1.09100,
   "confidence": 78,
   "reasons": ["SMC bullish OB on H4", "RSI divergence on M15"],
-  "timeframe": "H1"
+  "timeframe": "H1",
+  "regime": "Normal",
+  "session": "London",
+  "sweep_grade": "B",
+  "htf_ob_aligned": true,
+  "weight_version": "v2.11-baseline"
 }
 ```
 
 Valid timeframes: `M1 M5 M15 M30 H1 H4 D1 W1 MN`
+
+The five fields after `timeframe` are all optional (a pre-v2.11 EA build's payload validates
+exactly as before, just without them) — see [Trade tagging & recalibration](#trade-tagging--recalibration)
+for what reads them.
+
+## Outcome Payload
+
+`POST /outcome` — what `OutcomeTracker.mqh` posts once a setup resolves (win/loss/scratch) or
+is abandoned unfilled (no-fill). `signal_id` should match the signal this outcome belongs to,
+but doesn't have to — an outcome with no matching `signals` row still records fine, since
+`signal_outcomes` carries its own full copy of the tags rather than requiring a join.
+
+```json
+{
+  "signal_id": "MT#1234567890",
+  "symbol": "XAUUSD",
+  "direction": "BUY",
+  "outcome": "win",
+  "realized_r": 1.85,
+  "mfe_r": 2.10,
+  "mae_r": 0.30,
+  "bars_held": 14,
+  "bars_to_fill": 2,
+  "filled": true,
+  "regime": "High",
+  "session": "London",
+  "sweep_grade": "A",
+  "htf_ob_aligned": true,
+  "weight_version": "v2.11-baseline",
+  "confidence_at_signal": 82.0,
+  "confidence_decayed": 79.5,
+  "decay_bars": 2
+}
+```
+
+`outcome` is one of `win / loss / scratch / no_fill / ambiguous`. For `no_fill` and `ambiguous`,
+`realized_r`/`mfe_r`/`mae_r` should be sent as `null`, not `0.0` — a real 0.0R scratch and "not
+applicable" are different things and the expectancy metrics need to tell them apart.
 

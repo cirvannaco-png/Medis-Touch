@@ -526,6 +526,21 @@ struct PendingSetup
    double            confidenceAtSignal; // snapshot of setup.confidence at AddSetup() time
    double            confidenceDecayed;  // confidenceAtSignal * decay(decayBars); frozen once filled
    int               decayBars;          // unfilled bars the decay was applied over
+   // --- v2.11 ---
+   // The TradeDecisionRecord.decision_id this setup was ultimately routed
+   // through — same value CSignalPublisher::SignalIdFor() turns into
+   // "MT#<id>", which is the signal_id a Signal row (if any) was created
+   // under. AddSetup() is called for every non-ignored setup regardless of
+   // what the router later decides (see MedisTouch_v2.8.mq5), but a
+   // decision_id only exists once CDecisionRouter::Decide() has run — so
+   // this defaults to -1 ("no decision minted yet / not linkable") and is
+   // set explicitly by the caller right after Decide() returns, BEFORE
+   // AddSetup() is called. -1 at resolution time means: track this setup's
+   // simulated outcome as always (local CSV, m_stats), but do NOT publish
+   // it to POST /outcome — there is no valid signal_id to attach it to,
+   // and posting a fabricated one would create a phantom join target in
+   // signal_outcomes that can never actually match a signals row.
+   long              decisionId;
   };
 
 #endif

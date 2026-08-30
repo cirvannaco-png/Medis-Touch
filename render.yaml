@@ -56,6 +56,9 @@ services:
         sync: false
       - key: SECRET_KEY
         sync: false
+      # Required — the container refuses to boot without it. Must match
+      # ^[A-Za-z0-9_-]{1,256}$ (Telegram's setWebhook rule): generate with
+      # `openssl rand -hex 32`, or run the render-secrets workflow.
       - key: WEBHOOK_SECRET_TOKEN
         sync: false
 
