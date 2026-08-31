@@ -164,6 +164,27 @@ input int    InpReversionLiqRecencyBars = 10;      // how far back a confirming 
 input int    InpReversionTrendConflictRecencyBars = 10; // how far back an opposing BOS still counts as live conflict
 input double InpReversionTrendConflictMinStrength = 0.5; // BOSEvent.strength threshold to flag TREND_CONFLICT
 
+input group "Key-Level Reaction Diagnostics (v2.14) - measured, NOT acted on"
+// Same discipline as the groups above. See Strategies/KeyLevelReaction.mqh.
+// Strategy module #3 of the multi-strategy architecture. Not wired in
+// this pass: previous week high/low, session high/low, psychological
+// levels — see docs/CHANGELOG.md v2.14 entry.
+input int    InpKeyLevelLookbackBars = 5;          // closed bars examined for the reaction pattern
+input double InpKeyLevelSearchATRMax = 3.0;        // max distance, in ATR, for a level to count as "in range"
+input double InpKeyLevelTouchToleranceATRMult = 0.15; // how close a candle's range must come to the level, in ATR, to count as a touch
+input int    InpKeyLevelAbsorptionMinTouches = 3;  // touches required, with no break/rejection, to call it ABSORPTION
+input double InpKeyLevelWickRejectionRatio = 0.55; // wick/range ratio required to call a candle a rejection
+
+input group "Strategy Selection (v2.15) - measured, NOT acted on"
+// FOURTH AND LAST LAYER added in this batch. See
+// Strategies/StrategySelector.mqh. Compares the three strategy modules'
+// scores above against the live SMC engine's own confidence, per
+// regime, and records what WOULD have been selected — never sums
+// scores, never touches setup.confidence, never gates a trade. Nothing
+// further is added until v2.12-v2.15 have compiled and been
+// forward-tested as one unit; see docs/CHANGELOG.md v2.15 entry.
+input double InpMinSelectionScore = 60.0;          // a challenger strategy must clear this AND beat SMC confidence to be selected
+
 input group "Logging"
 input bool   InpLogSignals = true;
 input bool   InpTrackOutcomes = true;
@@ -333,6 +354,10 @@ int OnInit()
    g_scoring.ConfigureMeanReversionDiagnostics(InpReversionMinStretchATR, InpReversionSRZoneATRTolerance,
                                                InpReversionWickRejectionRatio, InpReversionLiqRecencyBars,
                                                InpReversionTrendConflictRecencyBars, InpReversionTrendConflictMinStrength);
+   g_scoring.ConfigureKeyLevelDiagnostics(InpKeyLevelLookbackBars, InpKeyLevelSearchATRMax,
+                                          InpKeyLevelTouchToleranceATRMult, InpKeyLevelAbsorptionMinTouches,
+                                          InpKeyLevelWickRejectionRatio);
+   g_scoring.ConfigureStrategySelection(InpMinSelectionScore);
    g_decision.Init(&g_chartCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, InpSLBufferATR, InpMinStopSpreadMult);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);

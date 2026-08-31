@@ -1,5 +1,141 @@
 # Changelog
 
+## v2.15 — Strategy Selection (fourth and last layer of this batch, diagnostic only)
+
+**This is the final layer added before compiling and forward-testing
+v2.12 through v2.15 as one unit** — per explicit agreement to stop here.
+Nothing further gets built until that happens.
+
+This is the doc's "four different questions, keep them separate" idea,
+specifically implementing its strongest warning: never sum every
+strategy's score into one number and call the total a confidence. This
+class compares; it never sums.
+
+### Added
+- **`Strategies/StrategySelector.mqh`** (facade:
+  `includes/StrategySelector.mqh`) — `CStrategySelector` has no engine
+  dependencies at all; it only reads values `CRegimeDetector`,
+  `CMomentumBreakoutEngine`, `CMeanReversionEngine`, and `CKeyLevelEngine`
+  already computed on the same `SetupReasons`, called last in
+  `PopulateStrategyDiagnostics()`. Selection rule:
+  - The live SMC engine's own `confidence` is always the baseline
+    candidate — it's the only strategy actually trading today.
+  - Regime picks the ONE challenger compared against it:
+    `REGIME_TRENDING` → best of `momentum_score`/`breakout_score`;
+    `REGIME_RANGING` → `reversion_score` (unless `reversion_class ==
+    REVERSION_TREND_CONFLICT`, in which case no challenger is
+    considered at all — the doc's "should not fight a strong trend"
+    rule enforced here, not just noted); `REGIME_TRANSITION` →
+    `keylevel_score` (unless `keylevel_reaction == REACTION_NONE`);
+    `REGIME_UNDEFINED` → no challenger, fail closed.
+  - The challenger only wins if it clears `InpMinSelectionScore` AND
+    outright beats SMC confidence.
+- **Stated plainly, not left implicit**: this is a genuine first-cut
+  rule — one challenger per regime compared against the baseline — not
+  the doc's full cross-regime free-for-all where every strategy
+  competes regardless of regime. It was checked against the doc's own
+  worked examples (Market A/B/C) and produces the same winner in each,
+  which is why this shape was chosen over a more elaborate one.
+- `SetupReasons.selected_strategy` / `selected_strategy_score`
+  (`Core/Config.mqh`) — written last, after every other v2.1x field on
+  the same struct. Still never read by `CalculateConfidence()`,
+  `CDecisionEngine`, or order sizing — recording a selection is not the
+  same as acting on it.
+- `PopulateStrategyDiagnostics()` signature changed to take `confidence`
+  as a parameter (same pattern `PopulateConfidenceDiagnostics()` already
+  used) — both call sites in `Trading/TradeZone.mqh` updated to pass
+  `setup.confidence`.
+- EA input group **"Strategy Selection (v2.15)"**: `InpMinSelectionScore`
+  — CSV-only in effect.
+- Signals CSV and Outcomes CSV both gain `SelectedStrategy`,
+  `SelectedStrategyScore`, appended after the v2.14 columns. Header/row
+  argument counts verified to match exactly (46 args including `handle`
+  on the Signals write, 48 on the Outcomes write).
+
+### What happens next (not started, by agreement)
+Compile v2.12-v2.15 in MetaEditor and forward-test as one unit before
+anything further is added. Once that's done: the forward-test harness
+that runs every strategy simultaneously (only meaningful with all four
+scores populated the way they now are), the numeric-parameter-proposal
+engine, and `ingest_tester_csv` remain exactly where the v2.12 entry
+left them.
+
+## v2.14 — Key-Level Reaction (strategy module #3, diagnostic only)
+
+Module #3 of the multi-strategy architecture (see v2.12/v2.13 for
+modules #1/#2). Same discipline as every `v2.1x` release before it:
+nothing here can change a trading decision.
+
+### Added
+- **`Strategies/KeyLevelReaction.mqh`** (facade:
+  `includes/KeyLevelReaction.mqh`) — `CKeyLevelEngine` finds the nearest
+  key level to price across four reused sources (no source-type
+  priority — nearest wins):
+  - `LEVEL_SR` — `CSupportResistance` zones
+  - `LEVEL_ORDER_BLOCK` — `COrderBlock` demand/supply zones (`dir ==
+    FVG_BULL`/`FVG_BEAR` picks which side each zone acts on)
+  - `LEVEL_VALUE_AREA` — `CValueAreaEngine`'s VAH/VAL
+  - `LEVEL_LIQUIDITY_POOL` — `CLiquidity` events flagged `external`,
+    which that struct's own comment already defines as "D1 high/low
+    sweep" — directly reused as the doc's "previous day high/low"
+    rather than recomputed
+  Then classifies what price did there, examining the last
+  `InpKeyLevelLookbackBars` closed bars: `REACTION_ACCEPTANCE` (2+
+  recent closes on the far side — the level flipped role),
+  `REACTION_BREAK` (only the latest close is on the far side — fresh,
+  unconfirmed), `REACTION_RETEST` (broke earlier in the window, has come
+  back without re-crossing), `REACTION_FAILED_BREAK` (broke earlier,
+  closed back on the hold side), `REACTION_REJECTION` (touched, closed
+  back with a rejection wick through the level), `REACTION_ABSORPTION`
+  (repeated touches, no break, no strong wick), `REACTION_NONE` (no
+  level in range, or none of the above fit).
+- **Honest limit, stated in the file header, not buried**:
+  `keylevel_score` is a **fixed per-classification conviction weight**
+  (90/75/70/60/65/40/0), not a computed composite like
+  `momentum_score`/`breakout_score`/`reversion_score` in v2.12/v2.13.
+  The underlying signal here is categorical — "what happened" — and
+  forcing a fake continuous score onto it to look consistent with the
+  other two modules would misrepresent what's actually being measured.
+- `SetupReasons.keylevel_source` / `keylevel_reaction` / `keylevel_score`
+  (`Core/Config.mqh`) — always populated, never consulted.
+- `CScoringEngine::ConfigureKeyLevelDiagnostics()` — called from the
+  same `PopulateStrategyDiagnostics()` as v2.12/v2.13, after the mean
+  reversion call.
+- EA input group **"Key-Level Reaction Diagnostics (v2.14)"**:
+  `InpKeyLevelLookbackBars`, `InpKeyLevelSearchATRMax`,
+  `InpKeyLevelTouchToleranceATRMult`, `InpKeyLevelAbsorptionMinTouches`,
+  `InpKeyLevelWickRejectionRatio` — CSV-only in effect.
+- Signals CSV and Outcomes CSV both gain `KeyLevelSource`,
+  `KeyLevelReaction`, `KeyLevelScore`, appended after the v2.13 columns.
+  Header/row argument counts verified to match exactly (44 args
+  including `handle` on the Signals write, 46 on the Outcomes write).
+
+### Timeframe note (same disclosure pattern as v2.12/v2.13)
+Candles/SR/value-area/order-block here are all the chart-TF context
+(`m_srCtx`) — self-consistent. Order block reuses that context's OWN
+instance (`m_srCtx.orderBlock`), which is a DIFFERENT instance from the
+separate genuinely-higher-timeframe one `OBScore()` uses
+(`m_htfObCtx.orderBlock`) — this module reads chart-TF order blocks,
+not the doc's "HTF support/resistance" in the fully cross-timeframe
+sense. Liquidity reuses whichever timeframe `InpLiquidityTF` is
+configured to, same cross-timeframe caveat v2.12/v2.13 already carry.
+
+### Explicitly NOT in this release
+- **Previous week high/low, session high/low, psychological
+  (round-number) levels** — three of the doc's listed level types. None
+  of the three exist anywhere in this codebase yet. Building three new
+  level detectors in the same pass as the reaction classifier above
+  would have meant a much larger surface of unverified logic than this
+  repo's discipline accepts.
+- **All four strategy modules now exist (SMC baseline + Momentum/
+  Breakout + Mean Reversion + Key-Level Reaction). Strategy selection /
+  portfolio-level allocation is the natural next step** — deciding which
+  module's read matters given the regime — but is still not started.
+  Everything else listed as not-in-this-release in v2.12/v2.13 remains
+  not-in-this-release: the forward-test harness that runs every strategy
+  simultaneously, the numeric-parameter-proposal engine, and
+  `ingest_tester_csv`.
+
 ## v2.13 — Mean Reversion (strategy module #2, diagnostic only)
 
 Module #2 of the multi-strategy architecture (see v2.12 for module #1

@@ -17,6 +17,8 @@
 #include "../Regime/RegimeDetector.mqh"
 #include "../Strategies/MomentumBreakout.mqh"
 #include "../Strategies/MeanReversion.mqh"
+#include "../Strategies/KeyLevelReaction.mqh"
+#include "../Strategies/StrategySelector.mqh"
 
 // v2.1 SCORING MODEL — replaces the old flat weighted sum with the
 // point table from the inducement-engine spec:
@@ -125,6 +127,13 @@ private:
    // market they're measuring, not a possibly-different BOS timeframe.
    CVolatilityRegime        m_volRegimeSR;
    CMeanReversionEngine     m_meanReversionEngine;
+   // v2.14: no new detectors needed — reuses m_srCtx's own sr/valueArea/
+   // orderBlock plus m_liqCtx.liquidity, same reuse pattern as the two
+   // engines above.
+   CKeyLevelEngine          m_keyLevelEngine;
+   // v2.15: no Init() needed — see Strategies/StrategySelector.mqh, this
+   // class only reads values the three engines above already computed.
+   CStrategySelector        m_strategySelector;
 
    double            OBScore(bool forBuy);
 
@@ -255,6 +264,15 @@ public:
                                                         int liqRecencyBars = 10,
                                                         int trendConflictRecencyBars = 10,
                                                         double trendConflictMinStrength = 0.5);
+   // v2.14 addition. Passthrough to CKeyLevelEngine::Configure(); see
+   // that class for what each parameter means.
+   void              ConfigureKeyLevelDiagnostics(int lookbackBars = 5,
+                                                   double levelSearchATRMax = 3.0,
+                                                   double touchToleranceATRMult = 0.15,
+                                                   int absorptionMinTouches = 3,
+                                                   double wickRejectionRatio = 0.55);
+   // v2.15 addition. Passthrough to CStrategySelector::Configure().
+   void              ConfigureStrategySelection(double minSelectionScore = 60.0);
    double            CalculateConfidence(bool forBuy);
    void              EvaluateReasons(bool forBuy, SetupReasons &out);
    // v2.10. Call right after EvaluateReasons() with the confidence the
@@ -269,8 +287,10 @@ public:
    // breakout_class land on the same SetupReasons the rest of the row
    // describes. forBuy must match whatever direction EvaluateReasons()
    // was just called with, or the momentum/breakout read describes the
-   // wrong side of the setup.
-   void              PopulateStrategyDiagnostics(bool forBuy, SetupReasons &out);
+   // wrong side of the setup. confidence is the same value passed to
+   // PopulateConfidenceDiagnostics() — v2.15 needs it to compare against
+   // the three strategy scores computed in this same call.
+   void              PopulateStrategyDiagnostics(bool forBuy, double confidence, SetupReasons &out);
    InducementResult  GetInducement(bool forBuy) { return m_inducement.Validate(forBuy); }
    ENUM_MARKET_PHASE GetPhase() { return m_phase.Detect(); }
   };
@@ -331,6 +351,11 @@ void CScoringEngine::Init(CTFContext* trendCtx, CTFContext* bosCtx, CTFContext* 
       if(m_liqCtx != NULL && m_bosCtx != NULL)
          m_meanReversionEngine.Init(&m_srCtx.candles, &m_srCtx.sr, &m_srCtx.valueArea,
                                     &m_liqCtx.liquidity, &m_volRegimeSR, &m_bosCtx.bos);
+      // v2.14: same chart-TF sr/valueArea/orderBlock, same m_liqCtx
+      // liquidity reuse (same cross-timeframe caveat as above).
+      if(m_liqCtx != NULL)
+         m_keyLevelEngine.Init(&m_srCtx.candles, &m_srCtx.sr, &m_srCtx.valueArea,
+                               &m_liqCtx.liquidity, &m_srCtx.orderBlock);
      }
   }
 //+------------------------------------------------------------------+
@@ -916,6 +941,21 @@ void CScoringEngine::ConfigureMeanReversionDiagnostics(double minStretchATR, dou
                                    liqRecencyBars, trendConflictRecencyBars, trendConflictMinStrength);
   }
 //+------------------------------------------------------------------+
+// v2.14. Passthrough, same shape as the two Configure methods above.
+void CScoringEngine::ConfigureKeyLevelDiagnostics(int lookbackBars, double levelSearchATRMax,
+                                                  double touchToleranceATRMult, int absorptionMinTouches,
+                                                  double wickRejectionRatio)
+  {
+   m_keyLevelEngine.Configure(lookbackBars, levelSearchATRMax, touchToleranceATRMult,
+                              absorptionMinTouches, wickRejectionRatio);
+  }
+//+------------------------------------------------------------------+
+// v2.15. Passthrough, same shape as the three Configure methods above.
+void CScoringEngine::ConfigureStrategySelection(double minSelectionScore)
+  {
+   m_strategySelector.Configure(minSelectionScore);
+  }
+//+------------------------------------------------------------------+
 // v2.12. Deliberately separate from PopulateConfidenceDiagnostics() even
 // though both are called from the same two call sites in
 // Trading/TradeZone.mqh — that one reads fields EvaluateReasons() just
@@ -924,13 +964,22 @@ void CScoringEngine::ConfigureMeanReversionDiagnostics(double minStretchATR, dou
 // means a future change to one can't silently change what the other
 // logs, and matches this class's existing pattern of one method per
 // diagnostic generation added (v2.10 got its own method; this does too).
-void CScoringEngine::PopulateStrategyDiagnostics(bool forBuy, SetupReasons &out)
+void CScoringEngine::PopulateStrategyDiagnostics(bool forBuy, double confidence, SetupReasons &out)
   {
    out.regime = m_regimeDetector.Classify();
    m_momentumEngine.Evaluate(forBuy, out.momentum_score, out.breakout_score, out.breakout_class);
    // v2.13: independent second strategy score, same call site, same
    // "never feeds back" discipline as the momentum/breakout call above.
    m_meanReversionEngine.Evaluate(forBuy, out.reversion_score, out.reversion_class);
+   // v2.14: third independent strategy score, same call site, same
+   // "never feeds back" discipline as the two calls above.
+   m_keyLevelEngine.Evaluate(forBuy, out.keylevel_source, out.keylevel_reaction, out.keylevel_score);
+   // v2.15: runs LAST, after every score above is populated on `out` —
+   // compares them, never sums them. See Strategies/StrategySelector.mqh
+   // for why that distinction is the entire point of this class. Still
+   // never feeds back into `confidence` itself — it only writes to
+   // out.selected_strategy / out.selected_strategy_score.
+   m_strategySelector.Select(out, confidence, out.selected_strategy, out.selected_strategy_score);
   }
 #endif
 //+------------------------------------------------------------------+

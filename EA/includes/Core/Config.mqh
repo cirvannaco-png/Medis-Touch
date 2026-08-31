@@ -167,6 +167,47 @@ enum ENUM_REVERSION_CLASS
    REVERSION_TREND_CONFLICT    // a fade setup exists, but a recent strong opposing BOS says the move it's fading is still structurally confirmed — the doc's explicit "do not fight a strong trend" case
   };
 
+// v2.14 addition — Strategies/KeyLevelReaction.mqh's identification of
+// which kind of level price reacted to. See that file's header comment
+// for the reuse rationale behind each source.
+enum ENUM_KEYLEVEL_SOURCE
+  {
+   LEVEL_NONE,            // no level within the configured search range
+   LEVEL_SR,              // CSupportResistance zone
+   LEVEL_ORDER_BLOCK,     // COrderBlock demand/supply zone
+   LEVEL_VALUE_AREA,      // CValueAreaEngine VAH/VAL
+   LEVEL_LIQUIDITY_POOL   // CLiquidity external (D1 high/low) sweep — the doc's "previous day high/low"
+  };
+
+// v2.14 addition — Strategies/KeyLevelReaction.mqh's classification of
+// what price did at that level. See that file's header comment for the
+// full definitions and the honest note on why reaction_score is a fixed
+// per-classification weight rather than a computed composite.
+enum ENUM_KEYLEVEL_REACTION
+  {
+   REACTION_NONE,          // a level was found, but no pattern below fit cleanly
+   REACTION_REJECTION,     // touched the level, closed back on the hold side with a rejection wick
+   REACTION_BREAK,         // most recent close only is on the far side — fresh, unconfirmed
+   REACTION_RETEST,        // broke earlier in the window, has come back to the level without re-crossing
+   REACTION_FAILED_BREAK,  // broke earlier in the window, then closed back on the hold side
+   REACTION_ACCEPTANCE,    // two or more recent closes on the far side — the level has flipped role
+   REACTION_ABSORPTION     // repeated touches, no break, no strong rejection — testing without resolving
+  };
+
+// v2.15 addition — Strategies/StrategySelector.mqh's read of which
+// strategy's diagnostic reading was strongest for the current regime.
+// See that file's header comment for the selection rule. THIS IS STILL
+// DIAGNOSTIC ONLY — see the file header for why this enum existing does
+// not mean strategy selection is live.
+enum ENUM_SELECTED_STRATEGY
+  {
+   STRATEGY_NONE,               // regime undefined, or no candidate cleared the minimum score — no selection made
+   STRATEGY_SMC,                // the baseline SMC engine's own confidence was the best (or only) candidate — this is what's actually live
+   STRATEGY_MOMENTUM_BREAKOUT,  // TRENDING regime, momentum/breakout score beat SMC confidence
+   STRATEGY_MEAN_REVERSION,     // RANGING regime, reversion score beat SMC confidence (and wasn't vetoed by REVERSION_TREND_CONFLICT)
+   STRATEGY_KEY_LEVEL           // TRANSITION regime, key-level reaction score beat SMC confidence
+  };
+
 // v2.9 addition — Inducement.mqh's sweep-quality classification. A
 // boolean sweepFound treats a 1-tick liquidity poke and a violent
 // displacement-sweep-rejection identically; this doesn't. See
@@ -463,6 +504,20 @@ struct SetupReasons
    // ONLY convention as the block above. See Strategies/MeanReversion.mqh.
    double               reversion_score;     // 0-100: value-area-stretch/SR-rejection/sweep/volatility composite, see MeanReversion.mqh
    ENUM_REVERSION_CLASS reversion_class;     // classification of that read, including the trend-conflict override
+   // --- v2.14 strategy diagnostics - Key-Level Reaction. Same
+   // DIAGNOSTIC ONLY convention. See Strategies/KeyLevelReaction.mqh.
+   ENUM_KEYLEVEL_SOURCE   keylevel_source;   // which kind of level was nearest
+   ENUM_KEYLEVEL_REACTION keylevel_reaction; // what price did there
+   double                 keylevel_score;    // fixed per-classification conviction weight, NOT a computed composite — see file header
+   // --- v2.15 strategy diagnostics - Strategy Selection. STILL
+   // DIAGNOSTIC ONLY: this field records what the selector WOULD have
+   // picked. It is never read by CalculateConfidence(), CDecisionEngine,
+   // order sizing, or setup.confidence itself. See
+   // Strategies/StrategySelector.mqh for the full rationale, including
+   // why this class exists specifically to avoid the "total=115, BUY"
+   // failure mode of blending every score into one number.
+   ENUM_SELECTED_STRATEGY selected_strategy;       // which strategy's read was strongest for this regime
+   double                 selected_strategy_score;  // that strategy's own score, on its own scale (0-100 for all five candidates)
   };
 
 struct TradeSetup

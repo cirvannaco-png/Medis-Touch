@@ -137,7 +137,7 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    m_scoring.PopulateConfidenceDiagnostics(setup.reasons, setup.confidence);
    // v2.12: regime + momentum/breakout diagnostics. Same discipline —
    // never fed back into setup.confidence or anything upstream of this line.
-   m_scoring.PopulateStrategyDiagnostics(true, setup.reasons);
+   m_scoring.PopulateStrategyDiagnostics(true, setup.confidence, setup.reasons);
    m_lastSetup = setup;
    return setup;
   }
@@ -172,7 +172,7 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    m_scoring.PopulateConfidenceDiagnostics(setup.reasons, setup.confidence);
    // v2.12: regime + momentum/breakout diagnostics. Same discipline —
    // never fed back into setup.confidence or anything upstream of this line.
-   m_scoring.PopulateStrategyDiagnostics(false, setup.reasons);
+   m_scoring.PopulateStrategyDiagnostics(false, setup.confidence, setup.reasons);
    m_lastSetup = setup;
    return setup;
   }

@@ -32,6 +32,9 @@ private:
    string            RegimeLabel(ENUM_MARKET_REGIME r);       // v2.12
    string            BreakoutClassLabel(ENUM_BREAKOUT_CLASS c); // v2.12
    string            ReversionClassLabel(ENUM_REVERSION_CLASS c); // v2.13
+   string            KeyLevelSourceLabel(ENUM_KEYLEVEL_SOURCE s);     // v2.14
+   string            KeyLevelReactionLabel(ENUM_KEYLEVEL_REACTION r); // v2.14
+   string            SelectedStrategyLabel(ENUM_SELECTED_STRATEGY s); // v2.15
 
 public:
                      CSignalLogger();
@@ -179,6 +182,47 @@ string CSignalLogger::ReversionClassLabel(ENUM_REVERSION_CLASS c)
      }
   }
 //+------------------------------------------------------------------+
+// v2.14
+string CSignalLogger::KeyLevelSourceLabel(ENUM_KEYLEVEL_SOURCE s)
+  {
+   switch(s)
+     {
+      case LEVEL_SR:              return "SR";
+      case LEVEL_ORDER_BLOCK:      return "OrderBlock";
+      case LEVEL_VALUE_AREA:       return "ValueArea";
+      case LEVEL_LIQUIDITY_POOL:   return "LiquidityPool";
+      default:                     return "None";
+     }
+  }
+//+------------------------------------------------------------------+
+// v2.14
+string CSignalLogger::KeyLevelReactionLabel(ENUM_KEYLEVEL_REACTION r)
+  {
+   switch(r)
+     {
+      case REACTION_REJECTION:     return "Rejection";
+      case REACTION_BREAK:         return "Break";
+      case REACTION_RETEST:        return "Retest";
+      case REACTION_FAILED_BREAK:  return "FailedBreak";
+      case REACTION_ACCEPTANCE:    return "Acceptance";
+      case REACTION_ABSORPTION:    return "Absorption";
+      default:                     return "None";
+     }
+  }
+//+------------------------------------------------------------------+
+// v2.15
+string CSignalLogger::SelectedStrategyLabel(ENUM_SELECTED_STRATEGY s)
+  {
+   switch(s)
+     {
+      case STRATEGY_SMC:                return "SMC";
+      case STRATEGY_MOMENTUM_BREAKOUT:   return "MomentumBreakout";
+      case STRATEGY_MEAN_REVERSION:      return "MeanReversion";
+      case STRATEGY_KEY_LEVEL:           return "KeyLevel";
+      default:                           return "None";
+     }
+  }
+//+------------------------------------------------------------------+
 string CSignalLogger::VAZoneLabel(ENUM_VALUE_AREA_ZONE z)
   {
    switch(z)
@@ -233,7 +277,11 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
                // v2.12 diagnostics — same append-only discipline.
                "Regime", "MomentumScore", "BreakoutScore", "BreakoutClass",
                // v2.13 diagnostics — same append-only discipline.
-               "ReversionScore", "ReversionClass");
+               "ReversionScore", "ReversionClass",
+               // v2.14 diagnostics — same append-only discipline.
+               "KeyLevelSource", "KeyLevelReaction", "KeyLevelScore",
+               // v2.15 diagnostics — same append-only discipline.
+               "SelectedStrategy", "SelectedStrategyScore");
       m_headerWritten = true;
      }
 
@@ -269,7 +317,12 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
             DoubleToString(setup.reasons.breakout_score, 1),
             BreakoutClassLabel(setup.reasons.breakout_class),
             DoubleToString(setup.reasons.reversion_score, 1),
-            ReversionClassLabel(setup.reasons.reversion_class));
+            ReversionClassLabel(setup.reasons.reversion_class),
+            KeyLevelSourceLabel(setup.reasons.keylevel_source),
+            KeyLevelReactionLabel(setup.reasons.keylevel_reaction),
+            DoubleToString(setup.reasons.keylevel_score, 1),
+            SelectedStrategyLabel(setup.reasons.selected_strategy),
+            DoubleToString(setup.reasons.selected_strategy_score, 1));
 
    FileClose(handle);
    return true;
@@ -303,7 +356,11 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
                // v2.12 — same "repeated from the signal row" rationale.
                "Regime", "MomentumScore", "BreakoutScore", "BreakoutClass",
                // v2.13 — same rationale.
-               "ReversionScore", "ReversionClass");
+               "ReversionScore", "ReversionClass",
+               // v2.14 — same rationale.
+               "KeyLevelSource", "KeyLevelReaction", "KeyLevelScore",
+               // v2.15 — same rationale.
+               "SelectedStrategy", "SelectedStrategyScore");
       m_outcomeHeaderWritten = true;
      }
 
@@ -361,7 +418,12 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
             DoubleToString(p.setup.reasons.breakout_score, 1),
             BreakoutClassLabel(p.setup.reasons.breakout_class),
             DoubleToString(p.setup.reasons.reversion_score, 1),
-            ReversionClassLabel(p.setup.reasons.reversion_class));
+            ReversionClassLabel(p.setup.reasons.reversion_class),
+            KeyLevelSourceLabel(p.setup.reasons.keylevel_source),
+            KeyLevelReactionLabel(p.setup.reasons.keylevel_reaction),
+            DoubleToString(p.setup.reasons.keylevel_score, 1),
+            SelectedStrategyLabel(p.setup.reasons.selected_strategy),
+            DoubleToString(p.setup.reasons.selected_strategy_score, 1));
 
    FileClose(handle);
    return true;
