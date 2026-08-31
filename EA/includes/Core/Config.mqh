@@ -176,7 +176,13 @@ enum ENUM_KEYLEVEL_SOURCE
    LEVEL_SR,              // CSupportResistance zone
    LEVEL_ORDER_BLOCK,     // COrderBlock demand/supply zone
    LEVEL_VALUE_AREA,      // CValueAreaEngine VAH/VAL
-   LEVEL_LIQUIDITY_POOL   // CLiquidity external (D1 high/low) sweep — the doc's "previous day high/low"
+   LEVEL_LIQUIDITY_POOL,  // CLiquidity external (D1 high/low) sweep — the doc's "previous day high/low"
+   // v2.17 addition — the three sources v2.14's header explicitly left
+   // unwired ("None of the three exist anywhere in the codebase yet").
+   // See SmartMoney/ExtendedKeyLevels.mqh for CExtendedKeyLevels.
+   LEVEL_PREV_WEEK,       // previous week's high or low (most recently CLOSED W1 bar)
+   LEVEL_SESSION,         // current session's high or low so far (CSessionFilter-bounded)
+   LEVEL_PSYCHOLOGICAL    // nearest round-number level at InpKeyLevelRoundStep spacing
   };
 
 // v2.14 addition — Strategies/KeyLevelReaction.mqh's classification of

@@ -11,7 +11,8 @@
 //
 // Wiring reference (see Analysis/Scoring.mqh):
 //   m_keyLevelEngine.Init(&m_srCtx.candles, &m_srCtx.sr, &m_srCtx.valueArea,
-//                         &m_liqCtx.liquidity, &m_srCtx.orderBlock);
+//                         &m_liqCtx.liquidity, &m_srCtx.orderBlock,
+//                         &m_extendedKeyLevels, &m_sessionFilter);   // v2.17: last two args
 #ifndef KEYLEVELREACTION_FACADE_MQH
 #define KEYLEVELREACTION_FACADE_MQH
 

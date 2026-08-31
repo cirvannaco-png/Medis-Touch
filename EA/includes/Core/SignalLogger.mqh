@@ -182,7 +182,11 @@ string CSignalLogger::ReversionClassLabel(ENUM_REVERSION_CLASS c)
      }
   }
 //+------------------------------------------------------------------+
-// v2.14
+// v2.14. v2.17: added the three sources that pass added — see
+// Core/Config.mqh's ENUM_KEYLEVEL_SOURCE and SmartMoney/ExtendedKeyLevels.mqh.
+// Without these three cases here, LEVEL_PREV_WEEK/LEVEL_SESSION/
+// LEVEL_PSYCHOLOGICAL would silently fall through to "None" in the CSV —
+// a level WAS found and acted on, but the log would say otherwise.
 string CSignalLogger::KeyLevelSourceLabel(ENUM_KEYLEVEL_SOURCE s)
   {
    switch(s)
@@ -191,6 +195,9 @@ string CSignalLogger::KeyLevelSourceLabel(ENUM_KEYLEVEL_SOURCE s)
       case LEVEL_ORDER_BLOCK:      return "OrderBlock";
       case LEVEL_VALUE_AREA:       return "ValueArea";
       case LEVEL_LIQUIDITY_POOL:   return "LiquidityPool";
+      case LEVEL_PREV_WEEK:        return "PrevWeek";
+      case LEVEL_SESSION:          return "Session";
+      case LEVEL_PSYCHOLOGICAL:    return "Psychological";
       default:                     return "None";
      }
   }

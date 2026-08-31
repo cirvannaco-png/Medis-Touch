@@ -6,10 +6,12 @@
 
 #include "../Core/Config.mqh"
 #include "../Core/CandleData.mqh"
+#include "../Core/SessionFilter.mqh"
 #include "../SmartMoney/SupportResistance.mqh"
 #include "../SmartMoney/ValueAreaEngine.mqh"
 #include "../SmartMoney/Liquidity.mqh"
 #include "../SmartMoney/OrderBlock.mqh"
+#include "../SmartMoney/ExtendedKeyLevels.mqh"
 
 // v2.14 addition. Strategy module #3 of the multi-strategy architecture
 // (see MomentumBreakout.mqh for module #1 and MeanReversion.mqh for
@@ -30,12 +32,15 @@
 //                          = D1 high/low sweep", which IS the doc's
 //                          "previous day high/low" entry, reused
 //                          directly rather than recomputed.
-// NOT WIRED IN THIS PASS (see docs/CHANGELOG.md v2.14 entry for why):
-// previous WEEK high/low, session high/low, and psychological
-// (round-number) levels. None of the three exist anywhere in this
-// codebase yet — building three new level detectors in the same pass
-// as everything above would be exactly the kind of unverified sprawl
-// this codebase's own discipline argues against elsewhere.
+//   LEVEL_PREV_WEEK       : CExtendedKeyLevels — previous week's high/low
+//                          (v2.17, see that file's header)
+//   LEVEL_SESSION         : CExtendedKeyLevels — current session's
+//                          high/low so far (v2.17)
+//   LEVEL_PSYCHOLOGICAL   : CExtendedKeyLevels — nearest round-number
+//                          level (v2.17)
+// v2.17: the three sources below are now wired in — see
+// SmartMoney/ExtendedKeyLevels.mqh's header for why they were held back
+// from the original v2.14 pass and built as their own pass instead.
 //
 // Of every candidate level across the four sources above, the NEAREST
 // one to current price (within m_levelSearchATRMax) is picked — no
@@ -92,6 +97,8 @@ private:
    CValueAreaEngine*    m_valueArea;
    CLiquidity*          m_liquidity;
    COrderBlock*         m_orderBlock;
+   CExtendedKeyLevels*  m_extLevels;    // v2.17 — prev week / session / psychological
+   CSessionFilter*      m_sessionFilter; // v2.17 — needed by m_extLevels.NearestSessionLevel() only
 
    int                  m_lookbackBars;           // closed bars examined for the reaction pattern (default 5)
    double               m_levelSearchATRMax;       // max distance, in ATR, for a level to count as "in range" (default 3.0)
@@ -106,17 +113,26 @@ private:
 
 public:
                         CKeyLevelEngine() : m_candles(NULL), m_sr(NULL), m_valueArea(NULL), m_liquidity(NULL), m_orderBlock(NULL),
+                                             m_extLevels(NULL), m_sessionFilter(NULL),
                                              m_lookbackBars(5), m_levelSearchATRMax(3.0),
                                              m_touchToleranceATRMult(0.15), m_absorptionMinTouches(3),
                                              m_wickRejectionRatio(0.55) {}
    void                 Init(CCandleData* candles, CSupportResistance* sr, CValueAreaEngine* valueArea,
-                              CLiquidity* liquidity, COrderBlock* orderBlock)
+                              CLiquidity* liquidity, COrderBlock* orderBlock,
+                              CExtendedKeyLevels* extLevels = NULL, CSessionFilter* sessionFilter = NULL)
      {
       m_candles = candles;
       m_sr = sr;
       m_valueArea = valueArea;
       m_liquidity = liquidity;
       m_orderBlock = orderBlock;
+      // v2.17: both optional (default NULL) so existing call sites that
+      // haven't been updated yet keep compiling and behave exactly as
+      // before — FindNearestLevel() below skips these three sources
+      // entirely when m_extLevels is NULL, same NULL-guard pattern
+      // every other source here already follows.
+      m_extLevels = extLevels;
+      m_sessionFilter = sessionFilter;
      }
    // Defaults are starting points, not tuned constants — same
    // discipline note as every other Configure() in this codebase.
@@ -192,6 +208,31 @@ bool CKeyLevelEngine::FindNearestLevel(bool forBuy, double atr, double price, do
          double dist = forBuy ? (price - ev.price) : (ev.price - price);
          if(dist < 0) dist = 0.0;
          if(dist <= bestDist) { bestDist = dist; levelPrice = ev.price; source = LEVEL_LIQUIDITY_POOL; found = true; }
+        }
+     }
+   // v2.17 — the three sources v2.14 left unwired. Each returns its own
+   // nearest-on-the-requested-side candidate already (see
+   // ExtendedKeyLevels.mqh), so this just folds those three single
+   // candidates into the same "nearest wins, no source-type favorites"
+   // comparison every source above already participates in.
+   if(m_extLevels != NULL)
+     {
+      double lvl;
+      if(m_extLevels.NearestPrevWeekLevel(forBuy, price, bestDist, lvl))
+        {
+         double dist = forBuy ? (price - lvl) : (lvl - price);
+         if(dist <= bestDist) { bestDist = dist; levelPrice = lvl; source = LEVEL_PREV_WEEK; found = true; }
+        }
+      if(m_candles != NULL && m_sessionFilter != NULL &&
+         m_extLevels.NearestSessionLevel(forBuy, price, bestDist, lvl, m_candles, m_sessionFilter))
+        {
+         double dist = forBuy ? (price - lvl) : (lvl - price);
+         if(dist <= bestDist) { bestDist = dist; levelPrice = lvl; source = LEVEL_SESSION; found = true; }
+        }
+      if(m_extLevels.NearestRoundLevel(forBuy, price, bestDist, lvl))
+        {
+         double dist = forBuy ? (price - lvl) : (lvl - price);
+         if(dist <= bestDist) { bestDist = dist; levelPrice = lvl; source = LEVEL_PSYCHOLOGICAL; found = true; }
         }
      }
    return found;

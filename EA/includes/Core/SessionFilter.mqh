@@ -46,6 +46,14 @@ public:
    void              Configure(bool enabled, bool allowTokyo = false, bool allowLondon = true,
                                bool allowNewYork = true, bool allowOverlap = true);
    ENUM_TRADING_SESSION CurrentSession();
+   // v2.17 addition — for CExtendedKeyLevels::NearestSessionLevel(),
+   // which needs to know WHEN the current session opened, not just
+   // which one is active. Reuses the exact same DST-aware start-hour
+   // math CurrentSession() already computes, so the two can never
+   // silently disagree about where a session's boundary sits. Returns 0
+   // during SESSION_DEAD — there is no "current session" to report a
+   // start for.
+   datetime          CurrentSessionStartGMT();
    bool              IsAllowed(); // true if gate disabled, or current session is in the allow-list
   };
 //+------------------------------------------------------------------+
@@ -143,6 +151,40 @@ ENUM_TRADING_SESSION CSessionFilter::CurrentSession()
    if(newyork) return SESSION_NEWYORK;
    if(tokyo)   return SESSION_TOKYO;
    return SESSION_DEAD;
+  }
+//+------------------------------------------------------------------+
+// Same start-hour derivation CurrentSession() uses, just returning the
+// GMT timestamp of today's boundary instead of a bool membership test.
+// SESSION_LONDON_NY_OVERLAP starts when the LATER of the two opens (NY,
+// in every real-world case here) — the overlap by definition can't have
+// begun before both sides are open.
+datetime CSessionFilter::CurrentSessionStartGMT()
+  {
+   datetime nowGmt = TimeGMT();
+   MqlDateTime t;
+   TimeToStruct(nowGmt, t);
+
+   bool londonDST = IsEUDST(nowGmt);
+   bool nyDST     = IsUSDST(nowGmt);
+   int londonStart = londonDST ? 7  : 8;
+   int nyStart     = nyDST     ? 12 : 13;
+
+   ENUM_TRADING_SESSION s = CurrentSession();
+   int startHour;
+   switch(s)
+     {
+      case SESSION_LONDON_NY_OVERLAP: startHour = nyStart;     break;
+      case SESSION_LONDON:            startHour = londonStart; break;
+      case SESSION_NEWYORK:           startHour = nyStart;     break;
+      case SESSION_TOKYO:             startHour = 0;           break; // Tokyo doesn't observe DST — fixed window, unaffected
+      default:                        return 0;                       // SESSION_DEAD — no boundary to report
+     }
+
+   MqlDateTime st = t;
+   st.hour = startHour;
+   st.min = 0;
+   st.sec = 0;
+   return StructToTime(st);
   }
 //+------------------------------------------------------------------+
 bool CSessionFilter::IsAllowed()

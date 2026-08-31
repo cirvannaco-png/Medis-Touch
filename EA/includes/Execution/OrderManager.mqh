@@ -125,7 +125,20 @@ bool COrderManager::MarkFilledFromPending(ulong orderTicket, ulong positionTicke
 
       m_trades[i].fsm.SetTicket(positionTicket); // pending-order ticket -> live position ticket
       if(fillPrice > 0.0) m_trades[i].fillPrice = fillPrice; // FIX (#25): capture the real fill for a limit order too, not just market orders
-      return m_trades[i].fsm.Transition(TS_FILLED);
+      bool filled = m_trades[i].fsm.Transition(TS_FILLED);
+      // LATENCY: same reporting Submit() does for market fills, for the
+      // limit-order fill path. No BrokerAdapter round-trip happened here
+      // (MT5 filled the resting order server-side, this call is just us
+      // finding out about it), so there's no broker-latency component to
+      // pass — 0.0 makes that explicit rather than reusing whatever
+      // CBrokerAdapter::LastLatencyMs() happens to hold from an
+      // unrelated, possibly much earlier, call.
+      if(filled && m_monitor != NULL)
+        {
+         double totalMs = m_trades[i].fsm.TotalLatencyMs();
+         if(totalMs >= 0.0) m_monitor.NotifyTradeLatency(totalMs, 0.0);
+        }
+      return filled;
      }
    return false; // no matching pending trade — not ours, or already handled
   }
@@ -211,6 +224,14 @@ bool COrderManager::Submit(const TradeDecisionRecord &decision, double volume, b
          if(MathAbs(slippage) > 0.0)
             PrintFormat("MedisTouch OrderManager: decision #%d filled at %.5f (theoretical entry %.5f, slippage %.5f).",
                         decision.decision_id, fillPrice, entry, slippage);
+         // LATENCY: report the end-to-end DETECTED->FILLED time and the
+         // broker-only slice of it. TotalLatencyMs() can come back -1.0
+         // if TS_DETECTED's stamp was somehow never set (shouldn't
+         // happen — Start() always sets it — but NotifyTradeLatency()
+         // isn't worth calling with a nonsense negative number).
+         double totalMs = m_trades[idx].fsm.TotalLatencyMs();
+         if(m_monitor != NULL && totalMs >= 0.0)
+            m_monitor.NotifyTradeLatency(totalMs, m_broker.LastLatencyMs());
         }
       else
          m_trades[idx].fsm.Transition(TS_REJECTED);

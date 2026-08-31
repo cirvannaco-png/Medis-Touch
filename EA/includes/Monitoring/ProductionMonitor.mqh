@@ -28,11 +28,31 @@ private:
    double            m_maxDrawdownAlertPercent;
    bool              m_drawdownAlertFired;
 
+   // LATENCY: running stats over every TS_DETECTED->TS_FILLED trade this
+   // session. Running sum/count instead of storing every sample — this
+   // runs unattended for weeks, an unbounded array of latency samples is
+   // exactly the kind of thing that quietly bloats memory on a VPS.
+   // "last" is what you want when something feels slow right now;
+   // "avg"/"max" are what you want for a trend.
+   int               m_latencySamples;
+   double            m_latencyTotalSumMs;
+   double            m_latencyTotalMaxMs;
+   double            m_latencyLastTotalMs;
+   double            m_latencyBrokerSumMs;
+   double            m_latencyBrokerMaxMs;
+   double            m_latencyLastBrokerMs;
+
 public:
    void              Init(string symbol, int heartbeatIntervalSec, double maxDrawdownAlertPercent);
    void              OnTickCheck();             // call once per OnTick — cheap, cadence-gated internally
    void              NotifyBrokerReject();       // call when Submit()/BrokerAdapter reports a failed order
    void              NotifyIllegalTransition();  // hook for CTradeStateMachine's illegal-transition log — see note below
+   // LATENCY: call once per fill from COrderManager::Submit(), right
+   // after TS_FILLED. totalMs is TS_DETECTED->TS_FILLED (the number that
+   // matters to you); brokerMs is CBrokerAdapter::LastLatencyMs() (the
+   // slice of totalMs that was actually the broker round-trip, as
+   // opposed to our own code between DETECTED and the order being sent).
+   void              NotifyTradeLatency(double totalMs, double brokerMs);
    string            StatusSummary();
   };
 //+------------------------------------------------------------------+
@@ -48,9 +68,39 @@ void CProductionMonitor::Init(string symbol, int heartbeatIntervalSec, double ma
    m_peakEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    m_maxDrawdownAlertPercent = maxDrawdownAlertPercent;
    m_drawdownAlertFired = false;
+   m_latencySamples = 0;
+   m_latencyTotalSumMs = 0.0;
+   m_latencyTotalMaxMs = 0.0;
+   m_latencyLastTotalMs = -1.0;
+   m_latencyBrokerSumMs = 0.0;
+   m_latencyBrokerMaxMs = 0.0;
+   m_latencyLastBrokerMs = -1.0;
   }
 //+------------------------------------------------------------------+
 void CProductionMonitor::NotifyBrokerReject() { m_brokerRejectCount++; }
+//+------------------------------------------------------------------+
+void CProductionMonitor::NotifyTradeLatency(double totalMs, double brokerMs)
+  {
+   m_latencySamples++;
+   m_latencyLastTotalMs = totalMs;
+   m_latencyTotalSumMs += totalMs;
+   if(totalMs > m_latencyTotalMaxMs) m_latencyTotalMaxMs = totalMs;
+
+   m_latencyLastBrokerMs = brokerMs;
+   m_latencyBrokerSumMs += brokerMs;
+   if(brokerMs > m_latencyBrokerMaxMs) m_latencyBrokerMaxMs = brokerMs;
+
+   // Flag it immediately rather than waiting for the next heartbeat tick
+   // — a single outlier fill is worth knowing about the moment it
+   // happens, not up to m_heartbeatIntervalSec later.
+   if(m_latencySamples > 0)
+     {
+      double avgMs = m_latencyTotalSumMs / m_latencySamples;
+      if(totalMs > avgMs * 3.0 && m_latencySamples > 5)
+         PrintFormat("MedisTouch Monitor: latency outlier — this fill took %.0fms (broker: %.0fms) vs a %.0fms running average.",
+                     totalMs, brokerMs, avgMs);
+     }
+  }
 //+------------------------------------------------------------------+
 // C004 FIX: previously dead — nothing called this. CTradeStateMachine now
 // holds a CProductionMonitor* (bound via BindMonitor(), see
@@ -80,13 +130,20 @@ void CProductionMonitor::OnTickCheck()
    if(now - m_lastHeartbeat < m_heartbeatIntervalSec) return;
    m_lastHeartbeat = now;
 
+   double avgTotalMs = (m_latencySamples > 0) ? m_latencyTotalSumMs / m_latencySamples : 0.0;
+   double avgBrokerMs = (m_latencySamples > 0) ? m_latencyBrokerSumMs / m_latencySamples : 0.0;
+
    int handle = FileOpen(m_heartbeatFile, FILE_WRITE | FILE_TXT);
    if(handle == INVALID_HANDLE) return;
    FileWriteString(handle, StringFormat(
       "symbol=%s\nlast_heartbeat=%s\nuptime_sec=%d\nequity=%.2f\npeak_equity=%.2f\ndrawdown_pct=%.2f\n"
-      "broker_rejects=%d\nillegal_transitions=%d\n",
+      "broker_rejects=%d\nillegal_transitions=%d\n"
+      "latency_samples=%d\nlatency_last_total_ms=%.0f\nlatency_avg_total_ms=%.0f\nlatency_max_total_ms=%.0f\n"
+      "latency_last_broker_ms=%.0f\nlatency_avg_broker_ms=%.0f\nlatency_max_broker_ms=%.0f\n",
       m_symbol, TimeToString(now, TIME_DATE | TIME_SECONDS), (int)(now - m_startTime),
-      equity, m_peakEquity, drawdownPercent, m_brokerRejectCount, m_illegalTransitionCount));
+      equity, m_peakEquity, drawdownPercent, m_brokerRejectCount, m_illegalTransitionCount,
+      m_latencySamples, m_latencyLastTotalMs, avgTotalMs, m_latencyTotalMaxMs,
+      m_latencyLastBrokerMs, avgBrokerMs, m_latencyBrokerMaxMs));
    FileClose(handle);
   }
 //+------------------------------------------------------------------+
@@ -94,9 +151,10 @@ string CProductionMonitor::StatusSummary()
   {
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double drawdownPercent = (m_peakEquity > 0) ? (m_peakEquity - equity) / m_peakEquity * 100.0 : 0.0;
-   return StringFormat("MedisTouch [%s] uptime=%ds equity=%.2f drawdown=%.2f%% rejects=%d illegalTransitions=%d",
+   double avgTotalMs = (m_latencySamples > 0) ? m_latencyTotalSumMs / m_latencySamples : 0.0;
+   return StringFormat("MedisTouch [%s] uptime=%ds equity=%.2f drawdown=%.2f%% rejects=%d illegalTransitions=%d avgFillLatencyMs=%.0f (n=%d)",
                        m_symbol, (int)(TimeCurrent() - m_startTime), equity, drawdownPercent,
-                       m_brokerRejectCount, m_illegalTransitionCount);
+                       m_brokerRejectCount, m_illegalTransitionCount, avgTotalMs, m_latencySamples);
   }
 #endif
 //+------------------------------------------------------------------+

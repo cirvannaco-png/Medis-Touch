@@ -1,5 +1,111 @@
 # Changelog
 
+## v2.17 — Key-Level Reaction: the three sources v2.14 left unwired
+
+Previous week high/low, session high/low, and psychological (round-number)
+levels — the exact three the v2.14 header flagged as "None of the three
+exist anywhere in the codebase yet." Built as their own pass, same
+discipline v2.14 itself argued for.
+
+### Added
+- **`SmartMoney/ExtendedKeyLevels.mqh`** (new file) — `CExtendedKeyLevels`:
+  - `NearestPrevWeekLevel()`: most recently CLOSED W1 bar's high/low
+    (`iHigh`/`iLow(..., PERIOD_W1, 1)`), cached and only recomputed on
+    week rollover. Checks both the high and the low as candidates and
+    keeps whichever is nearer and on the requested side — a broken
+    previous-week high can act as support just as readily as the low
+    can, same "either side can flip role" treatment `FindNearestLevel()`
+    already gives SR zones.
+  - `NearestSessionLevel()`: current session's high/low so far, scanning
+    closed bars on the same chart-TF candle series every other source
+    uses, bounded by a new `CSessionFilter::CurrentSessionStartGMT()`
+    (reuses the exact DST-aware start-hour math `CurrentSession()`
+    already had — the two can't disagree about where a boundary sits).
+    Returns false during `SESSION_DEAD` or before any closed bar has
+    printed since the session opened.
+  - `NearestRoundLevel()`: nearest round-number level at a configurable
+    price-unit spacing (`InpKeyLevelRoundStep`, default 10.0 — whole-$10
+    XAUUSD levels; a price-unit step, not a generic pip count, since
+    this EA is single-symbol).
+- **`Core/SessionFilter.mqh`** — `CurrentSessionStartGMT()`.
+- Three new `ENUM_KEYLEVEL_SOURCE` values: `LEVEL_PREV_WEEK`,
+  `LEVEL_SESSION`, `LEVEL_PSYCHOLOGICAL`.
+- **`Strategies/KeyLevelReaction.mqh`** — `CKeyLevelEngine::Init()` takes
+  two new optional (default `NULL`) pointers, `CExtendedKeyLevels*` and
+  `CSessionFilter*`, so any existing call site not yet updated keeps
+  compiling exactly as before. `FindNearestLevel()` folds the three new
+  sources into the same nearest-wins, no-source-favorites comparison
+  every existing source already participates in.
+- **`Analysis/Scoring.mqh`** — owns the new `CExtendedKeyLevels` member,
+  wires it (with the chart-TF symbol and the existing `m_sessionFilter`)
+  into `m_keyLevelEngine.Init()`, and passes `InpKeyLevelRoundStep`
+  through `ConfigureKeyLevelDiagnostics()`.
+- **`Core/SignalLogger.mqh`** — `KeyLevelSourceLabel()` gained the three
+  new cases. Without this fix the three new sources would have silently
+  logged as `"None"` in the CSV even when a level was found and acted
+  on — caught by grepping every other reference to the enum, not by a
+  compiler, since MQL5 doesn't require exhaustive `switch` coverage.
+- New input: `InpKeyLevelRoundStep` (default 10.0).
+
+### Explicitly not done here
+No change to `LEVEL_LIQUIDITY_POOL`'s existing "previous DAY high/low"
+role — the new `LEVEL_PREV_WEEK` is additive, a different timeframe of
+the same concept, not a replacement.
+
+## v2.16 — Execution latency: measurement + fail-fast retries
+
+Confirmation/execution is fully autonomous (no human-in-the-loop
+Telegram gate) — `TS_DETECTED -> TS_VALIDATED -> TS_PENDING -> TS_FILLED`
+all happen inside one `COrderManager::Submit()` call. Latency here means
+that internal path, not a network round-trip to the bridge. Two gaps
+made it both unmeasurable and needlessly slow:
+
+### Added
+- **`Execution/TradeStateMachine.mqh`** — microsecond-precision stage
+  timestamps (`GetMicrosecondCount()`) captured in `Transition()`
+  alongside the existing second-resolution `m_lastChange`, for the four
+  states on the latency path only (`TS_DETECTED`/`TS_VALIDATED`/
+  `TS_PENDING`/`TS_FILLED`). Four new accessors: `ConfirmationLatencyMs()`
+  (DETECTED->VALIDATED), `SubmitLatencyMs()` (VALIDATED->PENDING),
+  `ExecutionLatencyMs()` (PENDING->FILLED, the broker round-trip),
+  `TotalLatencyMs()` (DETECTED->FILLED). Each returns -1.0 if its stages
+  haven't both happened yet, rather than a misleading 0.0 or an
+  underflowed subtraction of an unset timestamp. `ForceState()`
+  (Recovery) deliberately does NOT stamp — a restored trade didn't just
+  pass through that state, so a timestamp there would be fiction.
+- **`Execution/BrokerAdapter.mqh`** — retry loops in `MarketBuy`/
+  `MarketSell`/`PlaceLimit` now classify the retcode on every failed
+  attempt via `IsRetryable()` instead of always sleeping the full
+  `m_retryDelayMs` and burning all `m_maxRetries`: terminal rejections
+  (invalid stops, no money, trade disabled, market closed, and similar)
+  break immediately with zero further delay, since no amount of
+  retrying changes them. Transient ones (requote, price changed, off
+  quotes) retry at a capped ~50ms via `DelayForRetcode()` instead of the
+  full configured delay, since they just need a fresh quote. Everything
+  else keeps the original delay. New `LastLatencyMs()` exposes wall time
+  spent in the most recently completed call, retries included.
+- **`Monitoring/ProductionMonitor.mqh`** — `NotifyTradeLatency(totalMs,
+  brokerMs)`, called once per fill from `Submit()`. Tracks running
+  count/sum/max (not per-sample storage — this runs unattended for
+  weeks) for both total and broker-only latency, logs immediately if a
+  fill exceeds 3x the running average past the first 5 samples, and adds
+  `latency_*` fields to the heartbeat file and `StatusSummary()`.
+- **`Execution/OrderManager.mqh`** — `Submit()` reports
+  `fsm.TotalLatencyMs()` and `m_broker.LastLatencyMs()` to the monitor
+  right after a market-order fill.
+
+### Explicitly not done here
+No change to `PlaceLimit`'s waiting-for-fill path (`TS_WAITING`/
+`TS_PENDING` for resting orders) — that latency is market-driven (price
+reaching the entry zone), not something retry/backoff tuning affects.
+Limit-order fills still get their `TS_FILLED` timestamp via
+`MarkFilledFromPending()`, which now also reports to
+`NotifyTradeLatency()` (with `brokerMs=0.0` — no `CBrokerAdapter` call
+happens on that path, MT5 fills the resting order server-side), so the
+heartbeat's latency stats cover both fill paths; there's just nothing to
+*reduce* on the limit path the way there is on the market-order retry
+loop.
+
 ## v2.15 — Strategy Selection (fourth and last layer of this batch, diagnostic only)
 
 **This is the final layer added before compiling and forward-testing

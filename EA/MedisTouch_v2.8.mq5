@@ -166,14 +166,15 @@ input double InpReversionTrendConflictMinStrength = 0.5; // BOSEvent.strength th
 
 input group "Key-Level Reaction Diagnostics (v2.14) - measured, NOT acted on"
 // Same discipline as the groups above. See Strategies/KeyLevelReaction.mqh.
-// Strategy module #3 of the multi-strategy architecture. Not wired in
-// this pass: previous week high/low, session high/low, psychological
-// levels — see docs/CHANGELOG.md v2.14 entry.
+// Strategy module #3 of the multi-strategy architecture. v2.17 wired in
+// the three sources v2.14 left out: previous week high/low, session
+// high/low, psychological levels — see docs/CHANGELOG.md v2.17 entry.
 input int    InpKeyLevelLookbackBars = 5;          // closed bars examined for the reaction pattern
 input double InpKeyLevelSearchATRMax = 3.0;        // max distance, in ATR, for a level to count as "in range"
 input double InpKeyLevelTouchToleranceATRMult = 0.15; // how close a candle's range must come to the level, in ATR, to count as a touch
 input int    InpKeyLevelAbsorptionMinTouches = 3;  // touches required, with no break/rejection, to call it ABSORPTION
 input double InpKeyLevelWickRejectionRatio = 0.55; // wick/range ratio required to call a candle a rejection
+input double InpKeyLevelRoundStep = 10.0;          // psychological round-number level spacing, in price units (XAUUSD: 10.0 == whole-$10 levels)
 
 input group "Strategy Selection (v2.15) - measured, NOT acted on"
 // FOURTH AND LAST LAYER added in this batch. See
@@ -356,7 +357,7 @@ int OnInit()
                                                InpReversionTrendConflictRecencyBars, InpReversionTrendConflictMinStrength);
    g_scoring.ConfigureKeyLevelDiagnostics(InpKeyLevelLookbackBars, InpKeyLevelSearchATRMax,
                                           InpKeyLevelTouchToleranceATRMult, InpKeyLevelAbsorptionMinTouches,
-                                          InpKeyLevelWickRejectionRatio);
+                                          InpKeyLevelWickRejectionRatio, InpKeyLevelRoundStep);
    g_scoring.ConfigureStrategySelection(InpMinSelectionScore);
    g_decision.Init(&g_chartCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, InpSLBufferATR, InpMinStopSpreadMult);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);

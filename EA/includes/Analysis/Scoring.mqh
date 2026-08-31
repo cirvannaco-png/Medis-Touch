@@ -129,8 +129,11 @@ private:
    CMeanReversionEngine     m_meanReversionEngine;
    // v2.14: no new detectors needed — reuses m_srCtx's own sr/valueArea/
    // orderBlock plus m_liqCtx.liquidity, same reuse pattern as the two
-   // engines above.
+   // engines above. v2.17: now also wired to m_extendedKeyLevels below
+   // and m_sessionFilter (already a member, above) for the three
+   // previously-unwired sources.
    CKeyLevelEngine          m_keyLevelEngine;
+   CExtendedKeyLevels       m_extendedKeyLevels; // v2.17 — prev week / session / psychological levels
    // v2.15: no Init() needed — see Strategies/StrategySelector.mqh, this
    // class only reads values the three engines above already computed.
    CStrategySelector        m_strategySelector;
@@ -265,12 +268,17 @@ public:
                                                         int trendConflictRecencyBars = 10,
                                                         double trendConflictMinStrength = 0.5);
    // v2.14 addition. Passthrough to CKeyLevelEngine::Configure(); see
-   // that class for what each parameter means.
+   // that class for what each parameter means. v2.17: roundStep added —
+   // passthrough to CExtendedKeyLevels::Configure(), default kept
+   // separate from the other four params (own line) since it belongs to
+   // a different underlying object, same separation the Init() wiring
+   // above keeps.
    void              ConfigureKeyLevelDiagnostics(int lookbackBars = 5,
                                                    double levelSearchATRMax = 3.0,
                                                    double touchToleranceATRMult = 0.15,
                                                    int absorptionMinTouches = 3,
-                                                   double wickRejectionRatio = 0.55);
+                                                   double wickRejectionRatio = 0.55,
+                                                   double roundStep = 10.0);
    // v2.15 addition. Passthrough to CStrategySelector::Configure().
    void              ConfigureStrategySelection(double minSelectionScore = 60.0);
    double            CalculateConfidence(bool forBuy);
@@ -353,9 +361,19 @@ void CScoringEngine::Init(CTFContext* trendCtx, CTFContext* bosCtx, CTFContext* 
                                     &m_liqCtx.liquidity, &m_volRegimeSR, &m_bosCtx.bos);
       // v2.14: same chart-TF sr/valueArea/orderBlock, same m_liqCtx
       // liquidity reuse (same cross-timeframe caveat as above).
+      // v2.17: m_extendedKeyLevels.Init() needs a symbol — pulled from
+      // this same chart-TF candle series rather than adding a new
+      // parameter to CScoringEngine::Init(), since it's already the
+      // exact symbol every other source in this engine is scoped to.
+      // m_sessionFilter is already a member (see class declaration) —
+      // passed by address, no separate Init() call needed for it here.
       if(m_liqCtx != NULL)
+        {
+         m_extendedKeyLevels.Init(m_srCtx.candles.Symbol());
          m_keyLevelEngine.Init(&m_srCtx.candles, &m_srCtx.sr, &m_srCtx.valueArea,
-                               &m_liqCtx.liquidity, &m_srCtx.orderBlock);
+                               &m_liqCtx.liquidity, &m_srCtx.orderBlock,
+                               &m_extendedKeyLevels, &m_sessionFilter);
+        }
      }
   }
 //+------------------------------------------------------------------+
@@ -942,12 +960,14 @@ void CScoringEngine::ConfigureMeanReversionDiagnostics(double minStretchATR, dou
   }
 //+------------------------------------------------------------------+
 // v2.14. Passthrough, same shape as the two Configure methods above.
+// v2.17: roundStep passthrough to CExtendedKeyLevels added.
 void CScoringEngine::ConfigureKeyLevelDiagnostics(int lookbackBars, double levelSearchATRMax,
                                                   double touchToleranceATRMult, int absorptionMinTouches,
-                                                  double wickRejectionRatio)
+                                                  double wickRejectionRatio, double roundStep)
   {
    m_keyLevelEngine.Configure(lookbackBars, levelSearchATRMax, touchToleranceATRMult,
                               absorptionMinTouches, wickRejectionRatio);
+   m_extendedKeyLevels.Configure(roundStep);
   }
 //+------------------------------------------------------------------+
 // v2.15. Passthrough, same shape as the three Configure methods above.

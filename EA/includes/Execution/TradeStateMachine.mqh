@@ -55,7 +55,23 @@ private:
    datetime          m_lastChange;
    CProductionMonitor* m_monitor;   // C004 FIX: was permanently NULL — nothing ever bound one. See BindMonitor().
 
+   // LATENCY: datetime (m_lastChange) is second-resolution — useless for
+   // measuring anything inside a single tick. GetMicrosecondCount() gives
+   // a monotonic microsecond counter (wraps at ~71 minutes on a 32-bit
+   // wrap of the underlying uint, which MQL5 handles by returning a
+   // ulong that keeps counting — safe to subtract across a live trade's
+   // lifetime, which is always far shorter than that). Only the four
+   // stage transitions on the confirmation->execution path are stamped;
+   // everything past TS_FILLED (break-even, partials, trailing) isn't
+   // part of "trade confirmation and execution" latency and stays on
+   // m_lastChange only, same as before.
+   ulong             m_usDetected;
+   ulong             m_usValidated;
+   ulong             m_usPending;
+   ulong             m_usFilled;
+
    bool              IsLegal(ENUM_TRADE_STATE from, ENUM_TRADE_STATE to);
+   void              StampStage(ENUM_TRADE_STATE to);
 
 public:
                      CTradeStateMachine();
@@ -82,6 +98,25 @@ public:
    void              SetTicket(ulong ticket) { m_ticket = ticket; }
    ulong             Ticket() const { return m_ticket; }
    datetime          LastChange() const { return m_lastChange; }
+
+   // LATENCY: millisecond breakdowns of the confirmation->execution path.
+   // Returns -1.0 when the relevant stage(s) haven't happened yet (e.g.
+   // querying ConfirmationLatencyMs() before TS_VALIDATED is reached, or
+   // any of these on a signal-only decision that never reaches
+   // TS_PENDING/TS_FILLED) instead of a misleading 0.0 or a huge
+   // underflowed ulong from subtracting an unset (zero) timestamp.
+   //   ConfirmationLatencyMs: TS_DETECTED -> TS_VALIDATED (policy engine's own decision time)
+   //   SubmitLatencyMs:       TS_VALIDATED -> TS_PENDING  (our code, between approval and sending the order)
+   //   ExecutionLatencyMs:    TS_PENDING -> TS_FILLED     (broker round-trip, includes any retries)
+   //   TotalLatencyMs:        TS_DETECTED -> TS_FILLED    (the end-to-end number that actually matters)
+   double            ConfirmationLatencyMs() const
+     { return (m_usDetected > 0 && m_usValidated > 0) ? (double)(m_usValidated - m_usDetected) / 1000.0 : -1.0; }
+   double            SubmitLatencyMs() const
+     { return (m_usValidated > 0 && m_usPending > 0) ? (double)(m_usPending - m_usValidated) / 1000.0 : -1.0; }
+   double            ExecutionLatencyMs() const
+     { return (m_usPending > 0 && m_usFilled > 0) ? (double)(m_usFilled - m_usPending) / 1000.0 : -1.0; }
+   double            TotalLatencyMs() const
+     { return (m_usDetected > 0 && m_usFilled > 0) ? (double)(m_usFilled - m_usDetected) / 1000.0 : -1.0; }
   };
 //+------------------------------------------------------------------+
 CTradeStateMachine::CTradeStateMachine()
@@ -91,6 +126,10 @@ CTradeStateMachine::CTradeStateMachine()
    m_ticket = 0;
    m_lastChange = 0;
    m_monitor = NULL;
+   m_usDetected = 0;
+   m_usValidated = 0;
+   m_usPending = 0;
+   m_usFilled = 0;
   }
 //+------------------------------------------------------------------+
 void CTradeStateMachine::Start(long decisionId)
@@ -99,6 +138,28 @@ void CTradeStateMachine::Start(long decisionId)
    m_state = TS_DETECTED;
    m_ticket = 0;
    m_lastChange = TimeCurrent();
+   m_usDetected = GetMicrosecondCount();
+   m_usValidated = 0;
+   m_usPending = 0;
+   m_usFilled = 0;
+  }
+//+------------------------------------------------------------------+
+// Stamps only the four states latency actually tracks. Deliberately a
+// separate step from the legality check in Transition() — ForceState()
+// (recovery) calls this too, but recovery timestamps are meaningless
+// (the trade didn't just pass through that state, it's being
+// reconstructed from broker-side evidence possibly days later), so
+// ForceState() does NOT call this — see its body below.
+void CTradeStateMachine::StampStage(ENUM_TRADE_STATE to)
+  {
+   ulong now = GetMicrosecondCount();
+   switch(to)
+     {
+      case TS_VALIDATED: m_usValidated = now; break;
+      case TS_PENDING:    m_usPending = now;  break;
+      case TS_FILLED:     m_usFilled = now;   break;
+      default: break; // every other state is outside the latency path
+     }
   }
 //+------------------------------------------------------------------+
 bool CTradeStateMachine::IsLegal(ENUM_TRADE_STATE from, ENUM_TRADE_STATE to)
@@ -129,6 +190,7 @@ bool CTradeStateMachine::Transition(ENUM_TRADE_STATE to)
      }
    m_state = to;
    m_lastChange = TimeCurrent();
+   StampStage(to);
    return true;
   }
 //+------------------------------------------------------------------+
@@ -138,6 +200,7 @@ void CTradeStateMachine::ForceState(ENUM_TRADE_STATE to)
                TradeStateToString(m_state), TradeStateToString(to), m_decisionId);
    m_state = to;
    m_lastChange = TimeCurrent();
+   // No StampStage() here on purpose — see the comment on StampStage().
   }
 #endif
 //+------------------------------------------------------------------+
