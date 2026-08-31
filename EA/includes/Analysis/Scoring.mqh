@@ -14,6 +14,9 @@
 #include "VolatilityRegime.mqh"
 #include "../Core/SessionFilter.mqh"
 #include "../Core/PipCalculator.mqh"
+#include "../Regime/RegimeDetector.mqh"
+#include "../Strategies/MomentumBreakout.mqh"
+#include "../Strategies/MeanReversion.mqh"
 
 // v2.1 SCORING MODEL — replaces the old flat weighted sum with the
 // point table from the inducement-engine spec:
@@ -105,6 +108,23 @@ private:
    double            m_contradictionWeight;  // scales the contradiction count into a 0-1 penalty
    double            m_envWeight;            // 0-1 blend: how much of env_score counts vs. assumed-neutral
    double            m_execWeight;           // 0-1 blend: same for exec_score
+
+   // --- v2.12 strategy diagnostics (Regime/RegimeDetector.mqh,
+   // Strategies/MomentumBreakout.mqh) — owned here rather than as
+   // separate objects wired at the .mq5 level, because everything they
+   // need (m_trendCtx.trend, m_bosCtx.bos, m_liqCtx.liquidity, m_phase,
+   // m_volRegime) already exists on this class. Populated by
+   // PopulateStrategyDiagnostics() only; never consulted by
+   // CalculateConfidence() or anything that gates a trade.
+   CRegimeDetector          m_regimeDetector;
+   CMomentumBreakoutEngine  m_momentumEngine;
+   // v2.13: Mean Reversion needs its own volatility-regime read scoped
+   // to the CHART timeframe (m_srCtx), not the BOS-timeframe instance
+   // (m_volRegime) Momentum/Regime already use above — VA/SR live on
+   // the chart TF, so "controlled volatility" has to describe the same
+   // market they're measuring, not a possibly-different BOS timeframe.
+   CVolatilityRegime        m_volRegimeSR;
+   CMeanReversionEngine     m_meanReversionEngine;
 
    double            OBScore(bool forBuy);
 
@@ -216,6 +236,25 @@ public:
    void              ConfigureLearnedDiagnostics(double contradictionWeight = 0.25,
                                                  double envWeight = 1.0,
                                                  double execWeight = 1.0);
+   // v2.12 addition. Passthrough to CMomentumBreakoutEngine::Configure();
+   // see that class for what each parameter means and why the defaults
+   // are starting points, not tuned constants. The regime detector takes
+   // no separate configuration — it has no tunable thresholds of its own
+   // beyond what CVolatilityRegime/CMarketPhase already expose via their
+   // own Configure calls above.
+   void              ConfigureStrategyDiagnostics(int momentumBreakoutRecencyBars = 10,
+                                                  int liqOverlapBars = 2,
+                                                  int extensionLookbackBars = 15,
+                                                  double exhaustionATRMult = 3.0,
+                                                  int momentumLookbackBars = 10);
+   // v2.13 addition. Passthrough to CMeanReversionEngine::Configure();
+   // see that class for what each parameter means.
+   void              ConfigureMeanReversionDiagnostics(double minStretchATR = 1.0,
+                                                        double srZoneATRTolerance = 0.25,
+                                                        double wickRejectionRatio = 0.55,
+                                                        int liqRecencyBars = 10,
+                                                        int trendConflictRecencyBars = 10,
+                                                        double trendConflictMinStrength = 0.5);
    double            CalculateConfidence(bool forBuy);
    void              EvaluateReasons(bool forBuy, SetupReasons &out);
    // v2.10. Call right after EvaluateReasons() with the confidence the
@@ -224,6 +263,14 @@ public:
    // env_exec_confidence needs a confidence value, and EvaluateReasons()
    // is deliberately allowed to run without one (the dashboard calls it).
    void              PopulateConfidenceDiagnostics(SetupReasons &out, double confidence);
+   // v2.12. Same "call right after the fields it depends on exist"
+   // convention as PopulateConfidenceDiagnostics(): call this after
+   // EvaluateReasons() so out.regime/momentum_score/breakout_score/
+   // breakout_class land on the same SetupReasons the rest of the row
+   // describes. forBuy must match whatever direction EvaluateReasons()
+   // was just called with, or the momentum/breakout read describes the
+   // wrong side of the setup.
+   void              PopulateStrategyDiagnostics(bool forBuy, SetupReasons &out);
    InducementResult  GetInducement(bool forBuy) { return m_inducement.Validate(forBuy); }
    ENUM_MARKET_PHASE GetPhase() { return m_phase.Detect(); }
   };
@@ -264,6 +311,27 @@ void CScoringEngine::Init(CTFContext* trendCtx, CTFContext* bosCtx, CTFContext* 
      }
    if(m_bosCtx != NULL)
       m_volRegime.Init(&m_bosCtx.candles); // defaults: 100-bar lookback, 25th/75th pct bands
+   // v2.12: regime detector needs all three reads; momentum/breakout
+   // engine needs the BOS-timeframe's own candles/BOS/liquidity so its
+   // bar_index comparisons stay on one timeframe's series (mixing BOS
+   // events from one TF with liquidity events from another would make
+   // HasNearbyLiquidityEvent's bar_index gap meaningless).
+   if(m_trendCtx != NULL && m_bosCtx != NULL)
+      m_regimeDetector.Init(&m_trendCtx.trend, &m_volRegime, &m_phase);
+   if(m_bosCtx != NULL && m_liqCtx != NULL)
+      m_momentumEngine.Init(&m_bosCtx.candles, &m_bosCtx.bos, &m_liqCtx.liquidity, &m_volRegime);
+   // v2.13: chart-TF vol regime, deliberately separate instance from
+   // m_volRegime above (see the member declaration comment for why).
+   // Mean Reversion's candles/SR/valueArea all come from m_srCtx (chart
+   // TF); liquidity/BOS reuse m_liqCtx/m_bosCtx same as Momentum does,
+   // carrying the same cross-timeframe caveat documented there.
+   if(m_srCtx != NULL)
+     {
+      m_volRegimeSR.Init(&m_srCtx.candles);
+      if(m_liqCtx != NULL && m_bosCtx != NULL)
+         m_meanReversionEngine.Init(&m_srCtx.candles, &m_srCtx.sr, &m_srCtx.valueArea,
+                                    &m_liqCtx.liquidity, &m_volRegimeSR, &m_bosCtx.bos);
+     }
   }
 //+------------------------------------------------------------------+
 void CScoringEngine::ConfigureInducement(int lookbackBars, double impulseATRMult, double impulseBodyRatio,
@@ -829,6 +897,40 @@ void CScoringEngine::PopulateConfidenceDiagnostics(SetupReasons &out, double con
    out.exec_score = ExecutionScore(out);
    double c = MathMin(MathMax(confidence, 0.0), 100.0);
    out.env_exec_confidence = c * out.env_score * out.exec_score * (1.0 - out.contradiction_penalty);
+  }
+//+------------------------------------------------------------------+
+void CScoringEngine::ConfigureStrategyDiagnostics(int momentumBreakoutRecencyBars, int liqOverlapBars,
+                                                  int extensionLookbackBars, double exhaustionATRMult,
+                                                  int momentumLookbackBars)
+  {
+   m_momentumEngine.Configure(momentumBreakoutRecencyBars, liqOverlapBars, extensionLookbackBars,
+                              exhaustionATRMult, momentumLookbackBars);
+  }
+//+------------------------------------------------------------------+
+// v2.13. Passthrough, same shape as ConfigureStrategyDiagnostics above.
+void CScoringEngine::ConfigureMeanReversionDiagnostics(double minStretchATR, double srZoneATRTolerance,
+                                                       double wickRejectionRatio, int liqRecencyBars,
+                                                       int trendConflictRecencyBars, double trendConflictMinStrength)
+  {
+   m_meanReversionEngine.Configure(minStretchATR, srZoneATRTolerance, wickRejectionRatio,
+                                   liqRecencyBars, trendConflictRecencyBars, trendConflictMinStrength);
+  }
+//+------------------------------------------------------------------+
+// v2.12. Deliberately separate from PopulateConfidenceDiagnostics() even
+// though both are called from the same two call sites in
+// Trading/TradeZone.mqh — that one reads fields EvaluateReasons() just
+// set, this one runs two independent engines. Keeping them as two
+// methods (rather than folding this into PopulateConfidenceDiagnostics)
+// means a future change to one can't silently change what the other
+// logs, and matches this class's existing pattern of one method per
+// diagnostic generation added (v2.10 got its own method; this does too).
+void CScoringEngine::PopulateStrategyDiagnostics(bool forBuy, SetupReasons &out)
+  {
+   out.regime = m_regimeDetector.Classify();
+   m_momentumEngine.Evaluate(forBuy, out.momentum_score, out.breakout_score, out.breakout_class);
+   // v2.13: independent second strategy score, same call site, same
+   // "never feeds back" discipline as the momentum/breakout call above.
+   m_meanReversionEngine.Evaluate(forBuy, out.reversion_score, out.reversion_class);
   }
 #endif
 //+------------------------------------------------------------------+

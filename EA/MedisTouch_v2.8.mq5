@@ -140,6 +140,30 @@ input double InpDiagEnvWeight = 1.0;               // 0..1 blend of the environm
 input double InpDiagExecWeight = 1.0;              // 0..1 blend of the execution component toward neutral (0 = ignore it)
 input double InpDiagDecayHalfLifeBars = 12.0;      // half-life, in UNFILLED bars, of the logged confidence decay (<=0 = no decay)
 
+input group "Strategy Diagnostics (v2.12) - measured, NOT acted on"
+// Same discipline as the v2.10 group above: every input here affects
+// CSV columns (Regime, MomentumScore, BreakoutScore, BreakoutClass) and
+// nothing else. See Regime/RegimeDetector.mqh and
+// Strategies/MomentumBreakout.mqh. Strategy module #1 of the
+// multi-strategy architecture — Mean Reversion and the Key-Level Price
+// Action engine are not built yet; see docs/CHANGELOG.md v2.12 entry.
+input int    InpMomentumBreakoutRecencyBars = 10;  // a BOS older than this many bars no longer counts as a live breakout read
+input int    InpBreakoutLiqOverlapBars = 2;        // BOS/liquidity-sweep bar_index gap allowed before calling it a LIQUIDITY breakout
+input int    InpBreakoutExtensionLookbackBars = 15; // window checked BEFORE the break bar for pre-existing extension
+input double InpBreakoutExhaustionATRMult = 3.0;   // pre-break run, in ATR, above which a break is classified EXHAUSTION not EXPANSION
+input int    InpMomentumLookbackBars = 10;         // window for the independent momentum score
+
+input group "Mean Reversion Diagnostics (v2.13) - measured, NOT acted on"
+// Same discipline as the v2.12 group above. See Strategies/MeanReversion.mqh.
+// Strategy module #2 of the multi-strategy architecture — Key-Level
+// Price Action is next, not built yet; see docs/CHANGELOG.md v2.13 entry.
+input double InpReversionMinStretchATR = 1.0;      // value-area-edge stretch, in ATR, required for the stronger VALUE_FADE path
+input double InpReversionSRZoneATRTolerance = 0.25; // how close price must be to an SR zone edge, in ATR, to count as "at" it
+input double InpReversionWickRejectionRatio = 0.55; // wick length / total range required to call a candle a rejection
+input int    InpReversionLiqRecencyBars = 10;      // how far back a confirming sweep still counts
+input int    InpReversionTrendConflictRecencyBars = 10; // how far back an opposing BOS still counts as live conflict
+input double InpReversionTrendConflictMinStrength = 0.5; // BOSEvent.strength threshold to flag TREND_CONFLICT
+
 input group "Logging"
 input bool   InpLogSignals = true;
 input bool   InpTrackOutcomes = true;
@@ -303,6 +327,12 @@ int OnInit()
    g_scoring.ConfigureChaseFilter(InpRequireChaseFilter, InpMaxChaseDistATR);
    g_scoring.ConfigureFVGProximity(InpFVGMaxDistATR);
    g_scoring.ConfigureLearnedDiagnostics(InpDiagContradictionWeight, InpDiagEnvWeight, InpDiagExecWeight);
+   g_scoring.ConfigureStrategyDiagnostics(InpMomentumBreakoutRecencyBars, InpBreakoutLiqOverlapBars,
+                                          InpBreakoutExtensionLookbackBars, InpBreakoutExhaustionATRMult,
+                                          InpMomentumLookbackBars);
+   g_scoring.ConfigureMeanReversionDiagnostics(InpReversionMinStretchATR, InpReversionSRZoneATRTolerance,
+                                               InpReversionWickRejectionRatio, InpReversionLiqRecencyBars,
+                                               InpReversionTrendConflictRecencyBars, InpReversionTrendConflictMinStrength);
    g_decision.Init(&g_chartCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, InpSLBufferATR, InpMinStopSpreadMult);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);

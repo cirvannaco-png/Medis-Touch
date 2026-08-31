@@ -131,6 +131,42 @@ enum ENUM_TRADING_SESSION
    SESSION_LONDON_NY_OVERLAP
   };
 
+// v2.12 addition — Regime/RegimeDetector.mqh. Combines the trend read
+// (Analysis/TrendEngine.mqh), the volatility-percentile read
+// (Analysis/VolatilityRegime.mqh) and the range-compression read
+// (SmartMoney/MarketPhase.mqh) into one classification. DIAGNOSTIC ONLY —
+// see Strategies/MomentumBreakout.mqh's header comment for why nothing
+// downstream of this consumes it yet.
+enum ENUM_MARKET_REGIME
+  {
+   REGIME_UNDEFINED,    // any of trend/volatility/phase is itself undefined — fail closed, same convention as VOL_REGIME_UNDEFINED
+   REGIME_TRENDING,     // confirmed directional structure (BOS-backed higher-high/higher-low or the bearish mirror) in normal-or-expanding volatility
+   REGIME_RANGING,      // compressed range (CMarketPhase ACCUMULATION) with no confirmed directional structure
+   REGIME_TRANSITION    // neither of the above cleanly applies — a recent sweep/displacement (MANIPULATION/DISTRIBUTION) or a weak, BOS-unconfirmed trend read
+  };
+
+// v2.12 addition — Strategies/MomentumBreakout.mqh's classification of
+// the most recent BOS event. See that file's header comment for the
+// definitions; this only names them for SetupReasons/CSV use.
+enum ENUM_BREAKOUT_CLASS
+  {
+   BREAKOUT_NONE,        // no BOS within the configured recency window
+   BREAKOUT_EXPANSION,   // strong displacement + volume, still within its expected follow-through window
+   BREAKOUT_LIQUIDITY,   // the BOS coincides with a liquidity sweep (see SmartMoney/Liquidity.mqh) — overlaps the SMC engine by design, see file header
+   BREAKOUT_FAILED,      // price has since closed back on the wrong side of the broken level
+   BREAKOUT_EXHAUSTION   // displacement occurred, but only after price was already extended far beyond the break — chase risk, not continuation
+  };
+
+// v2.13 addition — Strategies/MeanReversion.mqh's classification of a
+// fade setup. See that file's header comment for the full definitions.
+enum ENUM_REVERSION_CLASS
+  {
+   REVERSION_NONE,             // neither a value-area stretch nor an SR-zone touch qualified
+   REVERSION_VALUE_FADE,       // price stretched beyond the value area edge, with rejection/sweep confirmation — the stronger of the two paths
+   REVERSION_LEVEL_REJECTION,  // rejected at a plain SR zone without value-area stretch — the weaker path
+   REVERSION_TREND_CONFLICT    // a fade setup exists, but a recent strong opposing BOS says the move it's fading is still structurally confirmed — the doc's explicit "do not fight a strong trend" case
+  };
+
 // v2.9 addition — Inducement.mqh's sweep-quality classification. A
 // boolean sweepFound treats a 1-tick liquidity poke and a violent
 // displacement-sweep-rejection identically; this doesn't. See
@@ -411,6 +447,22 @@ struct SetupReasons
    double            env_score;              // 0-1: market-suitability component (regime, session, news)
    double            exec_score;             // 0-1: entry-quality component (sweep grade, BOS strength, freshness, chase)
    double            env_exec_confidence;    // diagnostic alt score: confidence * env_score * exec_score * (1 - contradiction_penalty)
+   // --- v2.12 strategy diagnostics - regime classification + the
+   // Momentum/Breakout engine's read. DIAGNOSTIC ONLY, same convention as
+   // the v2.10 block above: always populated, never consulted. Nothing
+   // here feeds CalculateConfidence(), CDecisionEngine, or order sizing.
+   // This is step one of the multi-strategy architecture (see
+   // Regime/RegimeDetector.mqh and Strategies/MomentumBreakout.mqh) —
+   // Mean Reversion and the Key-Level Price Action engine are the next
+   // two modules, not yet built; see docs/CHANGELOG.md v2.12 entry.
+   ENUM_MARKET_REGIME   regime;              // regime read at setup creation
+   double               momentum_score;      // 0-100: directional persistence + BOS strength composite, see MomentumBreakout.mqh
+   double               breakout_score;      // 0-100: quality of the most recent BOS as a breakout, independent of momentum_score
+   ENUM_BREAKOUT_CLASS  breakout_class;      // classification of that same BOS event
+   // --- v2.13 strategy diagnostics - Mean Reversion. Same DIAGNOSTIC
+   // ONLY convention as the block above. See Strategies/MeanReversion.mqh.
+   double               reversion_score;     // 0-100: value-area-stretch/SR-rejection/sweep/volatility composite, see MeanReversion.mqh
+   ENUM_REVERSION_CLASS reversion_class;     // classification of that read, including the trend-conflict override
   };
 
 struct TradeSetup

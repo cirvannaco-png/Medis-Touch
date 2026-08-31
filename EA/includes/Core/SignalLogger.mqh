@@ -29,6 +29,9 @@ private:
    string            VAZoneLabel(ENUM_VALUE_AREA_ZONE z);
    string            VolRegimeLabel(ENUM_VOL_REGIME v);
    string            OBStateLabel(ENUM_OB_STATE s);
+   string            RegimeLabel(ENUM_MARKET_REGIME r);       // v2.12
+   string            BreakoutClassLabel(ENUM_BREAKOUT_CLASS c); // v2.12
+   string            ReversionClassLabel(ENUM_REVERSION_CLASS c); // v2.13
 
 public:
                      CSignalLogger();
@@ -139,6 +142,43 @@ string CSignalLogger::OBStateLabel(ENUM_OB_STATE s)
      }
   }
 //+------------------------------------------------------------------+
+// v2.12
+string CSignalLogger::RegimeLabel(ENUM_MARKET_REGIME r)
+  {
+   switch(r)
+     {
+      case REGIME_TRENDING:    return "Trending";
+      case REGIME_RANGING:     return "Ranging";
+      case REGIME_TRANSITION:  return "Transition";
+      default:                 return "Undefined";
+     }
+  }
+//+------------------------------------------------------------------+
+// v2.12
+string CSignalLogger::BreakoutClassLabel(ENUM_BREAKOUT_CLASS c)
+  {
+   switch(c)
+     {
+      case BREAKOUT_EXPANSION:  return "Expansion";
+      case BREAKOUT_LIQUIDITY:  return "Liquidity";
+      case BREAKOUT_FAILED:     return "Failed";
+      case BREAKOUT_EXHAUSTION: return "Exhaustion";
+      default:                  return "None";
+     }
+  }
+//+------------------------------------------------------------------+
+// v2.13
+string CSignalLogger::ReversionClassLabel(ENUM_REVERSION_CLASS c)
+  {
+   switch(c)
+     {
+      case REVERSION_VALUE_FADE:      return "ValueFade";
+      case REVERSION_LEVEL_REJECTION: return "LevelRejection";
+      case REVERSION_TREND_CONFLICT:  return "TrendConflict";
+      default:                        return "None";
+     }
+  }
+//+------------------------------------------------------------------+
 string CSignalLogger::VAZoneLabel(ENUM_VALUE_AREA_ZONE z)
   {
    switch(z)
@@ -189,7 +229,11 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
                "HtfOBConfluence", "HtfOBState", "VolRegime", "SessionOK",
                // v2.10 diagnostics. Appended, never inserted: parsers keyed
                // on column position keep working.
-               "ContradictionPenalty", "EnvScore", "ExecScore", "EnvExecConfidence");
+               "ContradictionPenalty", "EnvScore", "ExecScore", "EnvExecConfidence",
+               // v2.12 diagnostics — same append-only discipline.
+               "Regime", "MomentumScore", "BreakoutScore", "BreakoutClass",
+               // v2.13 diagnostics — same append-only discipline.
+               "ReversionScore", "ReversionClass");
       m_headerWritten = true;
      }
 
@@ -219,7 +263,13 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
             DoubleToString(setup.reasons.contradiction_penalty, 3),
             DoubleToString(setup.reasons.env_score, 3),
             DoubleToString(setup.reasons.exec_score, 3),
-            DoubleToString(setup.reasons.env_exec_confidence, 1));
+            DoubleToString(setup.reasons.env_exec_confidence, 1),
+            RegimeLabel(setup.reasons.regime),
+            DoubleToString(setup.reasons.momentum_score, 1),
+            DoubleToString(setup.reasons.breakout_score, 1),
+            BreakoutClassLabel(setup.reasons.breakout_class),
+            DoubleToString(setup.reasons.reversion_score, 1),
+            ReversionClassLabel(setup.reasons.reversion_class));
 
    FileClose(handle);
    return true;
@@ -249,7 +299,11 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
                "ConfidenceAtSignal", "ConfidenceDecayed", "DecayBars",
                // Repeated from the signal row so an outcomes file is
                // self-sufficient for fitting the multiplicative model.
-               "ContradictionPenalty", "EnvScore", "ExecScore", "EnvExecConfidence");
+               "ContradictionPenalty", "EnvScore", "ExecScore", "EnvExecConfidence",
+               // v2.12 — same "repeated from the signal row" rationale.
+               "Regime", "MomentumScore", "BreakoutScore", "BreakoutClass",
+               // v2.13 — same rationale.
+               "ReversionScore", "ReversionClass");
       m_outcomeHeaderWritten = true;
      }
 
@@ -301,7 +355,13 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
             DoubleToString(p.setup.reasons.contradiction_penalty, 3),
             DoubleToString(p.setup.reasons.env_score, 3),
             DoubleToString(p.setup.reasons.exec_score, 3),
-            DoubleToString(p.setup.reasons.env_exec_confidence, 1));
+            DoubleToString(p.setup.reasons.env_exec_confidence, 1),
+            RegimeLabel(p.setup.reasons.regime),
+            DoubleToString(p.setup.reasons.momentum_score, 1),
+            DoubleToString(p.setup.reasons.breakout_score, 1),
+            BreakoutClassLabel(p.setup.reasons.breakout_class),
+            DoubleToString(p.setup.reasons.reversion_score, 1),
+            ReversionClassLabel(p.setup.reasons.reversion_class));
 
    FileClose(handle);
    return true;

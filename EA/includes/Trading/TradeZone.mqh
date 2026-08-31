@@ -135,6 +135,9 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    // v2.10: diagnostic-only contradiction/env/exec fields. Deliberately
    // AFTER setup.confidence is assigned, and never fed back into it.
    m_scoring.PopulateConfidenceDiagnostics(setup.reasons, setup.confidence);
+   // v2.12: regime + momentum/breakout diagnostics. Same discipline —
+   // never fed back into setup.confidence or anything upstream of this line.
+   m_scoring.PopulateStrategyDiagnostics(true, setup.reasons);
    m_lastSetup = setup;
    return setup;
   }
@@ -167,6 +170,9 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    // v2.10: diagnostic-only contradiction/env/exec fields. Deliberately
    // AFTER setup.confidence is assigned, and never fed back into it.
    m_scoring.PopulateConfidenceDiagnostics(setup.reasons, setup.confidence);
+   // v2.12: regime + momentum/breakout diagnostics. Same discipline —
+   // never fed back into setup.confidence or anything upstream of this line.
+   m_scoring.PopulateStrategyDiagnostics(false, setup.reasons);
    m_lastSetup = setup;
    return setup;
   }

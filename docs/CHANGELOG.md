@@ -1,5 +1,166 @@
 # Changelog
 
+## v2.13 — Mean Reversion (strategy module #2, diagnostic only)
+
+Module #2 of the multi-strategy architecture (see v2.12 for module #1
+and the reasoning for building one at a time). Nothing in this release
+can change a trading decision — same discipline as every `v2.1x`
+release before it.
+
+### Added
+- **`Strategies/MeanReversion.mqh`** (facade: `includes/MeanReversion.mqh`)
+  — `CMeanReversionEngine` scores a fade setup along two paths:
+  - `REVERSION_VALUE_FADE` — price stretched beyond a `CValueAreaEngine`
+    edge (`VAH()`/`VAL()`) by a configurable ATR multiple, with a
+    rejection wick or a confirming `CLiquidity` sweep. The stronger of
+    the two paths.
+  - `REVERSION_LEVEL_REJECTION` — rejected at a plain `CSupportResistance`
+    zone with a rejection wick, no value-area stretch required. Weaker,
+    scored lower.
+  - `REVERSION_TREND_CONFLICT` — **overrides** either path above: a
+    recent opposing `BOSEvent` (reusing `CBOS`'s already-computed
+    `strength`, same reuse precedent as v2.12) above a configurable
+    threshold means the move being faded is still structurally
+    confirmed. Directly implements the spec's explicit warning —
+    "mean reversion should not fight a strong trend merely because
+    price looks expensive." The score is left as computed rather than
+    zeroed, so the CSV shows *why* a setup that looked like a fade was
+    flagged risky.
+  - `REVERSION_NONE` — neither qualifying path's minimum bar is met.
+  "Controlled volatility" is a soft component (adds to the score when
+  volatility isn't `VOL_REGIME_HIGH`), not a hard veto — a single
+  percentile read shouldn't unilaterally disqualify an otherwise
+  well-formed setup.
+- Rejection-wick detection reads **shift 1** (the last fully closed
+  bar), not shift 0 — same "final, not still-forming" convention as
+  `Scoring.mqh`'s existing RVOL check (FIX #16), since a wick on a
+  still-printing bar isn't evidence of anything yet.
+- `Analysis/Scoring.mqh` gains a **second, chart-TF-scoped
+  `CVolatilityRegime` instance** (`m_volRegimeSR`), deliberately separate
+  from the BOS-TF instance Momentum/Regime use — value area and SR live
+  on the chart timeframe, so "controlled volatility" needs to describe
+  that same market, not a possibly-different BOS timeframe.
+- `SetupReasons.reversion_score` / `reversion_class` (`Core/Config.mqh`)
+  — always populated, never consulted, same convention as every prior
+  diagnostic block.
+- `CScoringEngine::ConfigureMeanReversionDiagnostics()` — called from the
+  same `PopulateStrategyDiagnostics()` used by v2.12, immediately after
+  the momentum/breakout call, same "independent scores computed at the
+  same call site" pattern.
+- EA input group **"Mean Reversion Diagnostics (v2.13)"**:
+  `InpReversionMinStretchATR`, `InpReversionSRZoneATRTolerance`,
+  `InpReversionWickRejectionRatio`, `InpReversionLiqRecencyBars`,
+  `InpReversionTrendConflictRecencyBars`,
+  `InpReversionTrendConflictMinStrength` — CSV-only in effect.
+- Signals CSV and Outcomes CSV both gain `ReversionScore`,
+  `ReversionClass`, appended after the v2.12 columns. Header/row argument
+  counts verified to match exactly (41 args including `handle` on the
+  Signals write, 43 on the Outcomes write).
+
+### Timeframe note (disclosed, not hidden)
+Mean Reversion's candles/SR/value-area come from the chart-TF context
+(self-consistent). Its liquidity and BOS reads reuse whichever
+timeframes `InpLiquidityTF`/`InpBOSTF` are configured to — the same
+cross-timeframe caveat `MomentumBreakout.mqh` already carries from v2.12,
+not a new one introduced here.
+
+### Explicitly NOT in this release
+- **Key-Level Price Action / Reaction Engine** — strategy module #3, not
+  started.
+- **Strategy selection / portfolio-level allocation** — still meaningless
+  until all planned strategies exist.
+- Everything else listed as not-in-this-release in the v2.12 entry below
+  remains not-in-this-release: the forward-test harness that runs every
+  strategy simultaneously, the numeric-parameter-proposal engine, and
+  `ingest_tester_csv` (still blocked on a real CSV export, not on design
+  work).
+
+## v2.12 — Regime Detector + Momentum/Breakout (strategy module #1, diagnostic only)
+
+Step one of the multi-strategy architecture: separate regime detection
+from a per-strategy score, and separate that score from the SMC engine's
+own confidence — as opposed to folding everything into one additive
+sum. Nothing in this release can change a trading decision. Both new
+engines reuse existing detectors (`CTrendEngine`, `CVolatilityRegime`,
+`CMarketPhase`, `CBOS`'s stored `BOSEvent.strength`, `CLiquidity`'s event
+list) rather than reimplementing them, and are read only by CSV logging.
+
+### Added
+- **`Regime/RegimeDetector.mqh`** (facade: `includes/RegimeDetector.mqh`)
+  — `CRegimeDetector` classifies the current bar into `REGIME_TRENDING` /
+  `REGIME_RANGING` / `REGIME_TRANSITION` / `REGIME_UNDEFINED` by combining
+  `CTrendEngine.GetCurrentTrend()`, `CVolatilityRegime.Classify()` and
+  `CMarketPhase.Detect()`. `REGIME_TRANSITION` is the deliberate catch-all
+  for everything that isn't a clean trend or a clean range — `CMarketPhase`
+  itself already documents its own phase read as a heuristic, not a proven
+  detector, and this class inherits that honesty rather than forcing a
+  weak signal into a stronger-sounding bucket.
+- **`Strategies/MomentumBreakout.mqh`** (facade:
+  `includes/MomentumBreakout.mqh`) — `CMomentumBreakoutEngine` scans the
+  most recent same-direction `BOSEvent` and classifies it:
+  - `BREAKOUT_FAILED` — price has since closed back on the wrong side of
+    the broken level (checked first; overrides every other label).
+  - `BREAKOUT_LIQUIDITY` — the BOS bar coincides with a liquidity-sweep
+    event (`CLiquidity`'s own event list) — overlaps the SMC engine by
+    design, per the spec this module is built from.
+  - `BREAKOUT_EXHAUSTION` — price was already extended, in ATR, over the
+    configured lookback *before* the break bar — "do not chase", per the
+    spec, not a green light despite a strong displacement score.
+  - `BREAKOUT_EXPANSION` — none of the above: fresh, displacement-and-
+    volume backed (reuses `BOSEvent.strength`, already computed by
+    `CBOS::Detect()`), not sweep-driven, not already extended.
+  - `BREAKOUT_NONE` — no BOS in the setup direction within the recency
+    window.
+  Also produces an independent `momentum_score` (net directional
+  close-to-close movement over a configurable window, scaled by that
+  window's own average ATR) — a plain rate-of-change-over-volatility
+  heuristic, stated as such rather than oversold as a proprietary
+  indicator.
+- `SetupReasons.regime` / `momentum_score` / `breakout_score` /
+  `breakout_class` (`Core/Config.mqh`) — always populated, never
+  consulted, same convention as the v2.10 diagnostic block.
+- `CScoringEngine::ConfigureStrategyDiagnostics()` /
+  `PopulateStrategyDiagnostics()` (`Analysis/Scoring.mqh`) — owns both new
+  engines as members (everything they need — `m_trendCtx.trend`,
+  `m_bosCtx.bos`, `m_liqCtx.liquidity`, `m_phase`, `m_volRegime` — already
+  existed on this class, so no new object graph was needed at the `.mq5`
+  level). Called from `Trading/TradeZone.mqh`'s `GenerateBuySetup()`/
+  `GenerateSellSetup()` immediately after `PopulateConfidenceDiagnostics()`,
+  same "deliberately after, never feeds back" placement as v2.10.
+- EA input group **"Strategy Diagnostics (v2.12)"**:
+  `InpMomentumBreakoutRecencyBars`, `InpBreakoutLiqOverlapBars`,
+  `InpBreakoutExtensionLookbackBars`, `InpBreakoutExhaustionATRMult`,
+  `InpMomentumLookbackBars` — all CSV-only in effect, defaults are
+  starting points from the spec's own reasoning, not tuned constants.
+- Signals CSV and Outcomes CSV both gain `Regime`, `MomentumScore`,
+  `BreakoutScore`, `BreakoutClass`. Columns are **appended**, so
+  position-based parsers keep working — header/row argument counts
+  verified to match exactly (39 args including `handle` on the Signals
+  write, 41 on the Outcomes write).
+
+### Explicitly NOT in this release
+- **Mean Reversion** and the **Key-Level Price Action / Reaction Engine**
+  — the next two strategy modules in the architecture this doc follows.
+  Not started. Building four untested MQL5 modules in one pass, with no
+  compiler available in this environment, would have meant a much larger
+  surface of unverified logic than this repo's existing discipline
+  accepts (see `tools/walk_forward.py`'s `ingest_tester_csv` stub for the
+  same reasoning applied elsewhere).
+- **Strategy selection / portfolio-level allocation** — meaningless until
+  more than one strategy exists to select between.
+- **Forward-test harness that runs every strategy simultaneously** — the
+  literal ask from the architecture doc requires the strategies above to
+  exist first. What exists today that's adjacent to it: v2.10's additive
+  vs. multiplicative confidence models are already logged side by side,
+  unread by anything — that pairing could be shadow-scored today without
+  waiting on Mean Reversion / Price Action.
+- **Numeric-parameter-proposal engine** — `ConfigResponse.params` in the
+  telegram-bridge is still always `null`; still nothing correct to
+  compute for it yet.
+- **`ingest_tester_csv`** — still an intentional `NotImplementedError`;
+  still blocked on one real Strategy Tester CSV export, not on more
+  design work.
+
 ## v2.10 — Confidence Engine Upgrade (diagnostic only)
 
 Nothing in this release can change a trading decision. Every number added is
