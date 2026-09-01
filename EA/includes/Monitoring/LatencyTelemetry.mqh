@@ -12,6 +12,7 @@ private:
    long    m_decisionId;
    string  m_symbol;
    bool    m_active;
+   bool    m_waitingForFill;
 
    double Ms(ulong a, ulong b) const
      { return (a > 0 && b >= a) ? (double)(b - a) / 1000.0 : -1.0; }
@@ -44,18 +45,27 @@ private:
       FileClose(h);
      }
 
-public:
-   CLatencyTelemetry() : m_t0(0), m_t1(0), m_t2(0), m_t3(0), m_t4(0), m_t5(0), m_t6(0), m_t7(0),
-                              m_decisionId(0), m_symbol(""), m_active(false) {}
-
-   void BeginIfInactive(string symbol)
+   void Reset(string symbol)
      {
-      if(m_active) return;
       m_symbol = symbol;
       m_decisionId = 0;
       m_t0 = GetMicrosecondCount();
       m_t1 = m_t2 = m_t3 = m_t4 = m_t5 = m_t6 = m_t7 = 0;
+      m_waitingForFill = false;
       m_active = true;
+     }
+
+public:
+   CLatencyTelemetry() : m_t0(0), m_t1(0), m_t2(0), m_t3(0), m_t4(0), m_t5(0), m_t6(0), m_t7(0),
+                              m_decisionId(0), m_symbol(""), m_active(false), m_waitingForFill(false) {}
+
+   // Buy and sell setup generation happen back-to-back on one decision
+   // cycle. Once T1 exists, a later cycle may start a fresh record unless
+   // the previous record is intentionally waiting for an asynchronous fill.
+   void BeginIfInactive(string symbol)
+     {
+      if(!m_active) { Reset(symbol); return; }
+      if(!m_waitingForFill && m_t1 > 0) { Reset(symbol); }
      }
 
    void SetDecisionId(long id) { m_decisionId = id; }
@@ -75,9 +85,10 @@ public:
       if(requireFill && m_t7 == 0) return;
       WriteRow();
       m_active = false;
+      m_waitingForFill = false;
      }
 
-   void KeepPending() { /* T7 will be stamped by the transaction event. */ }
+   void KeepPending() { if(m_active) m_waitingForFill = true; }
   };
 
 CLatencyTelemetry g_latency;
