@@ -1,0 +1,64 @@
+databases:
+  - name: medis-touch-db
+    plan: free
+    databaseName: medis_touch
+    user: medis_touch
+services:
+  - type: web
+    name: medis-touch-telegram
+    runtime: docker
+    dockerfilePath: ./telegram-bridge/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: medis-touch-db
+          property: connectionString
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHAT_ID
+        sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
+      - key: ADMIN_USER_ID
+        sync: false
+      - key: GROUP_CHAT_ID
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: WEBHOOK_SECRET_TOKEN
+        sync: false
+      - key: PAYMENT_WEBHOOK_SECRET
+        sync: false
+      - key: DEFAULT_PLAN_PRICE
+        value: "0"
+      - key: DEFAULT_CURRENCY
+        value: "KES"
+      - key: DEFAULT_PLAN_DAYS
+        value: "30"
+      - key: PLAN_MONTHLY_PRICE
+        value: "0"
+      - key: PLAN_MONTHLY_DAYS
+        value: "30"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: "5"
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
+      - key: MAX_REQUEST_BODY_SIZE
+        value: "10240"
+      - key: ALLOWED_ORIGINS
+        value: ""
+      - key: TELEGRAM_TIMEOUT_SECONDS
+        value: "8"
+      - key: TELEGRAM_MAX_RETRIES
+        value: "3"
+      - key: TELEGRAM_RETRY_MAX_WAIT_SECONDS
+        value: "4"
+      - key: PENDING_STALE_SECONDS
+        value: "120"
