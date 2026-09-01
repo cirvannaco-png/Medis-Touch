@@ -103,8 +103,6 @@ bool COrderManager::MarkFilledFromPending(ulong orderTicket, ulong positionTicke
       bool filled = m_trades[i].fsm.Transition(TS_FILLED);
       if(filled)
         {
-         // T7 for a resting order: broker acknowledgement happened when
-         // PlaceLimit returned; fill is observed asynchronously here.
          if(g_latency.Active() && g_latency.DecisionId() == m_trades[i].decision.decision_id)
            {
             g_latency.MarkFillObserved();
@@ -137,8 +135,7 @@ bool COrderManager::Submit(const TradeDecisionRecord &decision, double volume, b
      }
    if(FindByDecisionId(decision.decision_id) >= 0) return false;
 
-   // T4: risk/portfolio sizing has completed before Submit() is entered.
-   g_latency.MarkRisk();
+   g_latency.MarkRisk(); // T4
 
    double entry = ResolveExecutionEntry(decision.setup);
    if(useMarket && maxEntryDeviation > 0.0)
@@ -177,21 +174,18 @@ bool COrderManager::Submit(const TradeDecisionRecord &decision, double volume, b
    if(useMarket)
      {
       m_trades[idx].fsm.Transition(TS_PENDING);
+      g_latency.MarkSubmission(); // T5: immediately before the broker request
       if(decision.setup.type == ORDER_TYPE_BUY)
          ok = m_broker.MarketBuy(decision.symbol, volume, sl, tp, ticket, fillPrice, tag);
       else
          ok = m_broker.MarketSell(decision.symbol, volume, sl, tp, ticket, fillPrice, tag);
 
-      // BrokerAdapter returns only after the synchronous trade request has
-      // been acknowledged. For market execution, the returned deal price
-      // is also the best local observation of the fill boundary; T6/T7 may
-      // therefore legitimately be nearly identical.
       if(g_latency.Active() && g_latency.DecisionId() == decision.decision_id)
         {
-         g_latency.MarkBrokerAck();
+         g_latency.MarkBrokerAck(); // T6
          if(ok)
            {
-            g_latency.MarkFillObserved();
+            g_latency.MarkFillObserved(); // T7: fill observed with the synchronous result
             g_latency.Finalize(true);
            }
          else
@@ -219,14 +213,13 @@ bool COrderManager::Submit(const TradeDecisionRecord &decision, double volume, b
       m_trades[idx].fsm.Transition(TS_WAITING);
       m_trades[idx].fsm.Transition(TS_PENDING);
       ENUM_ORDER_TYPE limitType = (decision.setup.type == ORDER_TYPE_BUY) ? ORDER_TYPE_BUY_LIMIT : ORDER_TYPE_SELL_LIMIT;
+      g_latency.MarkSubmission(); // T5
       ok = m_broker.PlaceLimit(decision.symbol, limitType, volume, entry, sl, tp, ticket, tag);
       if(g_latency.Active() && g_latency.DecisionId() == decision.decision_id)
         {
-         g_latency.MarkBrokerAck();
-         // Do not finalize: T7 will be stamped by OnTradeTransaction via
-         // MarkFilledFromPending().
-         g_latency.KeepPending();
-      }
+         g_latency.MarkBrokerAck(); // T6
+         g_latency.KeepPending();   // T7 is asynchronous
+        }
       if(ok)
          m_trades[idx].fsm.SetTicket(ticket);
       else
