@@ -1,0 +1,73 @@
+name: EA compile (Windows)
+
+on:
+  push:
+    paths:
+      - 'EA/**'
+      - '.github/workflows/ea-compile-windows.yml'
+  pull_request:
+    paths:
+      - 'EA/**'
+      - '.github/workflows/ea-compile-windows.yml'
+  workflow_dispatch:
+
+jobs:
+  compile-mql5:
+    name: Compile Medis Touch EA with the real MQL5 compiler
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download MQL5 64-bit compiler
+        shell: pwsh
+        run: |
+          $compiler = Join-Path $env:RUNNER_TEMP 'mql64.exe'
+          Invoke-WebRequest `
+            -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mql64.exe' `
+            -OutFile $compiler
+          if (!(Test-Path $compiler)) {
+            throw 'MQL5 compiler download failed.'
+          }
+          Write-Host "Compiler: $compiler"
+
+      - name: Compile EA
+        shell: pwsh
+        run: |
+          $compiler = Join-Path $env:RUNNER_TEMP 'mql64.exe'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'EA\MedisTouch_v2.8.mq5'
+          $include = Join-Path $env:GITHUB_WORKSPACE 'EA'
+
+          if (!(Test-Path $source)) { throw "EA source not found: $source" }
+          if (!(Test-Path $include)) { throw "EA include root not found: $include" }
+
+          Write-Host "Compiling: $source"
+          Write-Host "Include root: $include"
+          & $compiler $source "/i:$include"
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            throw "MQL5 compiler failed with exit code $code"
+          }
+
+      - name: Assert no compiler error log
+        shell: pwsh
+        run: |
+          $logs = Get-ChildItem -Path "$env:GITHUB_WORKSPACE\EA" -Filter '*.log' -Recurse -ErrorAction SilentlyContinue
+          foreach ($log in $logs) {
+            $text = Get-Content $log.FullName -Raw
+            if ($text -match '(?i)error') {
+              Write-Host $text
+              throw "Compiler log contains an error: $($log.FullName)"
+            }
+          }
+
+      - name: Publish compile artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: medis-touch-ea-compile
+          path: |
+            EA/**/*.ex5
+            EA/**/*.log
+          if-no-files-found: error
