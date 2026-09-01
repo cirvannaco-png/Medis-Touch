@@ -1,7 +1,5 @@
 //+------------------------------------------------------------------+
 //|                                      Decision/DecisionEngine.mqh |
-//|  The analysis -> action router: turns a validated TradeSetup into  |
-//|  an explicit, ID'd, auditable TradeDecisionRecord.                |
 //+------------------------------------------------------------------+
 #ifndef DECISIONENGINE_MQH
 #define DECISIONENGINE_MQH
@@ -24,12 +22,12 @@ private:
    double            CurrentSpreadPoints() const;
 
 public:
-   CDecisionEngine();
-   void Init(const string symbol, bool enableExecution, bool enableSignals,
-             double minConfidenceExecute, double minConfidenceSignal,
-             double fullRiskConfidence, int maxSpreadPoints);
-   void SeedNextId(long nextId);
-   long PeekNextId() const { return m_nextId; }
+                     CDecisionEngine();
+   void              Init(const string symbol, bool enableExecution, bool enableSignals,
+                          double minConfidenceExecute, double minConfidenceSignal,
+                          double fullRiskConfidence, int maxSpreadPoints);
+   void              SeedNextId(long nextId);
+   long              PeekNextId() const { return m_nextId; }
    TradeDecisionRecord Decide(const TradeSetup &setup);
   };
 //+------------------------------------------------------------------+
@@ -77,8 +75,7 @@ TradeDecisionRecord CDecisionEngine::Decide(const TradeSetup &setup)
    rec.valid = false;
    rec.spread_points = CurrentSpreadPoints();
 
-   // T2 = confidence/calibration stage has completed before policy is
-   // evaluated. T3 is stamped at the actual decision boundary below.
+   // T2 = confidence/calibration stage has completed before policy is evaluated.
    g_latency.MarkConfidence();
 
    if(!setup.active)
@@ -89,6 +86,8 @@ TradeDecisionRecord CDecisionEngine::Decide(const TradeSetup &setup)
    bool canExecute = m_enableExecution && setup.confidence >= m_minConfidenceExecute;
    bool canSignal  = m_enableSignals  && setup.confidence >= m_minConfidenceSignal;
 
+   // Spread gate applies to execution only. A wide spread makes the fill bad;
+   // it does not make the analysis wrong, so subscribers can still receive it.
    if(canExecute && m_maxSpreadPoints > 0 && rec.spread_points > (double)m_maxSpreadPoints)
      {
       canExecute = false;
@@ -115,6 +114,12 @@ TradeDecisionRecord CDecisionEngine::Decide(const TradeSetup &setup)
 
    g_latency.SetDecisionId(rec.decision_id);
    g_latency.MarkDecision(); // T3
+
+   // No broker/risk stage exists for signal-only decisions; persist the
+   // partial trace now rather than leaving it alive until another tick.
+   if(rec.action == POLICY_SIGNAL_ONLY)
+      g_latency.Finalize(false);
+
    return rec;
   }
 #endif
