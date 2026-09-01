@@ -59,13 +59,16 @@ public:
    CLatencyTelemetry() : m_t0(0), m_t1(0), m_t2(0), m_t3(0), m_t4(0), m_t5(0), m_t6(0), m_t7(0),
                               m_decisionId(0), m_symbol(""), m_active(false), m_waitingForFill(false) {}
 
-   // Buy and sell setup generation happen back-to-back on one decision
-   // cycle. Once T1 exists, a later cycle may start a fresh record unless
-   // the previous record is intentionally waiting for an asynchronous fill.
    void BeginIfInactive(string symbol)
      {
       if(!m_active) { Reset(symbol); return; }
-      if(!m_waitingForFill && m_t1 > 0) { Reset(symbol); }
+      if(!m_waitingForFill && m_t1 > 0)
+        {
+         // Preserve partial traces (including ignored/risk-blocked setups)
+         // before starting the next decision cycle.
+         Finalize(false);
+         Reset(symbol);
+        }
      }
 
    void SetDecisionId(long id) { m_decisionId = id; }
