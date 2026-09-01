@@ -46,6 +46,19 @@ private:
    bool              IsRetryable(uint retcode);
    int               DelayForRetcode(uint retcode);
 
+   // G6 FIX: audit of Execution/Portfolio/Trading found magic-number
+   // order attribution here, but ZERO checks anywhere for broker
+   // stop-distance/freeze-level, connection loss, or market-closed —
+   // all three mandatory for a live-trading EA. Before this, the only
+   // defense against any of the three was reacting to whatever retcode
+   // the broker happened to send back AFTER a doomed request round-trip
+   // — no local pre-check ever stopped one from being sent in the
+   // first place. Centralized here since every execution call already
+   // routes through this class.
+   bool              IsConnected();
+   bool              IsMarketOpenForTrading(string symbol, bool requireFullOpen);
+   bool              ValidateStopDistance(string symbol, double refPrice, double sl, double tp, bool isBuy, string action);
+
 public:
    void              Init(ulong magic, int maxRetries = 3, int retryDelayMs = 300);
    // LATENCY: milliseconds spent inside the most recently completed
@@ -132,6 +145,110 @@ int CBrokerAdapter::DelayForRetcode(uint retcode)
      }
   }
 //+------------------------------------------------------------------+
+// G6 FIX. TERMINAL_CONNECTED is the local terminal's link to the trade
+// server — separate from, and checked BEFORE, the retry loop's own
+// TRADE_RETCODE_CONNECTION handling (that one reacts to a request that
+// WAS sent and failed server-side; this one avoids sending a request at
+// all when the terminal already knows it has nothing to send it to). Not
+// looped into the retry logic on purpose: a retry loop spinning for a
+// few hundred ms within one tick cannot fix a genuinely dead connection
+// — OnTick() will get another chance on the next tick regardless.
+bool CBrokerAdapter::IsConnected()
+  {
+   if(TerminalInfoInteger(TERMINAL_CONNECTED)) return true;
+   Print("MedisTouch BrokerAdapter: terminal not connected to the trade server — refusing to submit, not retrying (a retry loop can't fix a dead connection within one tick).");
+   return false;
+  }
+//+------------------------------------------------------------------+
+// G6 FIX. SYMBOL_TRADE_MODE_DISABLED means no trading at all on this
+// symbol right now (exchange holiday, broker maintenance, delisting).
+// SYMBOL_TRADE_MODE_CLOSEONLY means new positions/orders are refused
+// but existing ones can still be closed or modified — requireFullOpen
+// lets closes/modifies past a close-only market while still blocking
+// new opens. This is a distinct condition from TRADE_RETCODE_MARKET_CLOSED
+// (which is a broker's post-hoc rejection of a request already sent);
+// this check catches it beforehand instead of spending a round-trip to
+// learn what SymbolInfoInteger already knows locally.
+bool CBrokerAdapter::IsMarketOpenForTrading(string symbol, bool requireFullOpen)
+  {
+   long mode = (long)SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE);
+   if(mode == SYMBOL_TRADE_MODE_DISABLED)
+     {
+      PrintFormat("MedisTouch BrokerAdapter: %s trading is disabled on this symbol right now (SYMBOL_TRADE_MODE_DISABLED) — refusing.", symbol);
+      return false;
+     }
+   if(requireFullOpen && mode == SYMBOL_TRADE_MODE_CLOSEONLY)
+     {
+      PrintFormat("MedisTouch BrokerAdapter: %s is close-only right now (SYMBOL_TRADE_MODE_CLOSEONLY) — refusing to open a new position/order.", symbol);
+      return false;
+     }
+   return true;
+  }
+//+------------------------------------------------------------------+
+// G6 FIX. Two separate broker-imposed minimums, both expressed in
+// points and both meaning "SL/TP must sit at least this far from the
+// reference price or the broker will reject it": SYMBOL_TRADE_STOPS_LEVEL
+// (minimum distance for placing/modifying a stop) and
+// SYMBOL_TRADE_FREEZE_LEVEL (minimum distance within which an order/
+// position can't be touched at all, on brokers that impose one).
+// MathMax of the two, since either can independently cause a broker
+// rejection — some brokers set STOPS_LEVEL, others FREEZE_LEVEL, some
+// both, some (real ECN accounts) neither, which is why 0 is left as 0
+// rather than defaulted to something nonzero: genuinely means "no
+// broker-imposed minimum," not "not configured."
+// Also checks SL/TP land on the correct side of the reference price —
+// catches a wiring bug elsewhere in this codebase before it reaches the
+// broker as a confusing generic rejection, not just a broker-limit
+// violation.
+bool CBrokerAdapter::ValidateStopDistance(string symbol, double refPrice, double sl, double tp, bool isBuy, string action)
+  {
+   if(refPrice <= 0.0)
+     {
+      PrintFormat("MedisTouch BrokerAdapter: %s refused — reference price is %.5f (stale/zero quote), can't validate stop distance against it.", action, refPrice);
+      return false;
+     }
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   if(point <= 0.0) return true; // can't validate without a point size -- a symbol-info failure unrelated to stops shouldn't block the trade
+
+   long stopsLevelPts  = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   long freezeLevelPts = SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   double minDist = MathMax(stopsLevelPts, freezeLevelPts) * point;
+
+   if(sl > 0.0)
+     {
+      bool wrongSide = isBuy ? (sl >= refPrice) : (sl <= refPrice);
+      if(wrongSide)
+        {
+         PrintFormat("MedisTouch BrokerAdapter: %s refused — SL %.5f is on the wrong side of reference %.5f for a %s.",
+                     action, sl, refPrice, isBuy ? "buy" : "sell");
+         return false;
+        }
+      if(minDist > 0.0 && MathAbs(refPrice - sl) < minDist)
+        {
+         PrintFormat("MedisTouch BrokerAdapter: %s refused — SL %.5f is %.1f points from reference %.5f, broker requires >= %.1f (stops level %d, freeze level %d).",
+                     action, sl, MathAbs(refPrice - sl) / point, refPrice, minDist / point, stopsLevelPts, freezeLevelPts);
+         return false;
+        }
+     }
+   if(tp > 0.0)
+     {
+      bool wrongSide = isBuy ? (tp <= refPrice) : (tp >= refPrice);
+      if(wrongSide)
+        {
+         PrintFormat("MedisTouch BrokerAdapter: %s refused — TP %.5f is on the wrong side of reference %.5f for a %s.",
+                     action, tp, refPrice, isBuy ? "buy" : "sell");
+         return false;
+        }
+      if(minDist > 0.0 && MathAbs(refPrice - tp) < minDist)
+        {
+         PrintFormat("MedisTouch BrokerAdapter: %s refused — TP %.5f is %.1f points from reference %.5f, broker requires >= %.1f (stops level %d, freeze level %d).",
+                     action, tp, MathAbs(refPrice - tp) / point, refPrice, minDist / point, stopsLevelPts, freezeLevelPts);
+         return false;
+        }
+     }
+   return true;
+  }
+//+------------------------------------------------------------------+
 bool CBrokerAdapter::LastRequestOk(string action)
   {
    uint code = m_trade.ResultRetcode();
@@ -175,8 +292,17 @@ ulong CBrokerAdapter::ResolvePositionTicket()
 //+------------------------------------------------------------------+
 bool CBrokerAdapter::MarketBuy(string symbol, double volume, double sl, double tp, ulong &ticketOut, double &fillPriceOut, string comment)
   {
-   ulong t0 = GetMicrosecondCount();
    fillPriceOut = 0.0;
+   // G6 FIX: zero out m_lastLatencyUs on every early refusal below —
+   // otherwise LastLatencyMs() would report whatever the PREVIOUS
+   // successful/failed broker call took, misleadingly attributed to
+   // this call, which never actually reached the broker.
+   if(!IsConnected()) { m_lastLatencyUs = 0; return false; }
+   if(!IsMarketOpenForTrading(symbol, true)) { m_lastLatencyUs = 0; return false; }
+   double refPrice = SymbolInfoDouble(symbol, SYMBOL_ASK); // a market buy fills near the ask
+   if(!ValidateStopDistance(symbol, refPrice, sl, tp, true, "MarketBuy")) { m_lastLatencyUs = 0; return false; }
+
+   ulong t0 = GetMicrosecondCount();
    for(int i = 0; i < m_maxRetries; i++)
      {
       if(m_trade.Buy(volume, symbol, 0.0, sl, tp, comment) && LastRequestOk("MarketBuy"))
@@ -196,8 +322,13 @@ bool CBrokerAdapter::MarketBuy(string symbol, double volume, double sl, double t
 //+------------------------------------------------------------------+
 bool CBrokerAdapter::MarketSell(string symbol, double volume, double sl, double tp, ulong &ticketOut, double &fillPriceOut, string comment)
   {
-   ulong t0 = GetMicrosecondCount();
    fillPriceOut = 0.0;
+   if(!IsConnected()) { m_lastLatencyUs = 0; return false; }
+   if(!IsMarketOpenForTrading(symbol, true)) { m_lastLatencyUs = 0; return false; }
+   double refPrice = SymbolInfoDouble(symbol, SYMBOL_BID); // a market sell fills near the bid
+   if(!ValidateStopDistance(symbol, refPrice, sl, tp, false, "MarketSell")) { m_lastLatencyUs = 0; return false; }
+
+   ulong t0 = GetMicrosecondCount();
    for(int i = 0; i < m_maxRetries; i++)
      {
       if(m_trade.Sell(volume, symbol, 0.0, sl, tp, comment) && LastRequestOk("MarketSell"))
@@ -223,6 +354,14 @@ bool CBrokerAdapter::PlaceLimit(string symbol, ENUM_ORDER_TYPE type, double volu
       Print("MedisTouch BrokerAdapter: PlaceLimit called with a non-limit order type");
       return false;
      }
+   bool isBuy = (type == ORDER_TYPE_BUY_LIMIT);
+   if(!IsConnected()) { m_lastLatencyUs = 0; return false; }
+   if(!IsMarketOpenForTrading(symbol, true)) { m_lastLatencyUs = 0; return false; }
+   // Distance validated against the resting order's OWN price, not the
+   // current market price — that's what the broker measures a pending
+   // order's stop distance from.
+   if(!ValidateStopDistance(symbol, price, sl, tp, isBuy, "PlaceLimit")) { m_lastLatencyUs = 0; return false; }
+
    ulong t0 = GetMicrosecondCount();
    for(int i = 0; i < m_maxRetries; i++)
      {
@@ -245,6 +384,7 @@ bool CBrokerAdapter::PlaceLimit(string symbol, ENUM_ORDER_TYPE type, double volu
 //+------------------------------------------------------------------+
 bool CBrokerAdapter::CancelOrder(ulong ticket)
   {
+   if(!IsConnected()) return false; // G6 FIX
    if(m_trade.OrderDelete(ticket)) return true;
    LastRequestOk("CancelOrder");
    return false;
@@ -252,6 +392,23 @@ bool CBrokerAdapter::CancelOrder(ulong ticket)
 //+------------------------------------------------------------------+
 bool CBrokerAdapter::ModifySLTP(ulong ticket, double sl, double tp)
   {
+   if(!IsConnected()) return false; // G6 FIX
+   // G6 FIX: this is exactly where SYMBOL_TRADE_FREEZE_LEVEL bites
+   // hardest in practice — moving a stop while price sits inside the
+   // freeze zone around it is the single most common cause of a
+   // real-money break-even/trailing-stop rejection. Needs the
+   // position's own symbol and direction to validate against, which
+   // this call didn't previously look up at all.
+   if(!PositionSelectByTicket(ticket))
+     {
+      PrintFormat("MedisTouch BrokerAdapter: ModifySLTP refused — position #%d not found/selectable.", ticket);
+      return false;
+     }
+   string symbol = PositionGetString(POSITION_SYMBOL);
+   bool isBuy = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+   double refPrice = isBuy ? SymbolInfoDouble(symbol, SYMBOL_BID) : SymbolInfoDouble(symbol, SYMBOL_ASK); // the price a close would fill at
+   if(!ValidateStopDistance(symbol, refPrice, sl, tp, isBuy, "ModifySLTP")) return false;
+
    if(m_trade.PositionModify(ticket, sl, tp)) return true;
    LastRequestOk("ModifySLTP");
    return false;
@@ -259,6 +416,13 @@ bool CBrokerAdapter::ModifySLTP(ulong ticket, double sl, double tp)
 //+------------------------------------------------------------------+
 bool CBrokerAdapter::ClosePartial(ulong ticket, double volume)
   {
+   if(!IsConnected()) return false; // G6 FIX
+   if(!PositionSelectByTicket(ticket))
+     {
+      PrintFormat("MedisTouch BrokerAdapter: ClosePartial refused — position #%d not found/selectable.", ticket);
+      return false;
+     }
+   if(!IsMarketOpenForTrading(PositionGetString(POSITION_SYMBOL), false)) return false; // requireFullOpen=false -- CLOSEONLY is fine for a close, DISABLED still isn't
    if(m_trade.PositionClosePartial(ticket, volume)) return true;
    LastRequestOk("ClosePartial");
    return false;
@@ -266,6 +430,13 @@ bool CBrokerAdapter::ClosePartial(ulong ticket, double volume)
 //+------------------------------------------------------------------+
 bool CBrokerAdapter::CloseFull(ulong ticket)
   {
+   if(!IsConnected()) return false; // G6 FIX
+   if(!PositionSelectByTicket(ticket))
+     {
+      PrintFormat("MedisTouch BrokerAdapter: CloseFull refused — position #%d not found/selectable.", ticket);
+      return false;
+     }
+   if(!IsMarketOpenForTrading(PositionGetString(POSITION_SYMBOL), false)) return false;
    if(m_trade.PositionClose(ticket)) return true;
    LastRequestOk("CloseFull");
    return false;

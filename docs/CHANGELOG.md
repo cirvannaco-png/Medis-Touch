@@ -1,5 +1,87 @@
 # Changelog
 
+## v2.18 — G6: broker-side safety checks + first tests for tools/
+
+Two unrelated real gaps found by audit, fixed together since both were
+flagged in the same pass.
+
+### Fixed (G6, blocking)
+Grepping `EA/includes/{Execution,Portfolio,Trading}` turned up
+magic-number order attribution but ZERO checks for broker stop-distance/
+freeze-level validation or connection-loss/market-closed handling —
+both mandatory for a live-trading EA. Before this, the only defense
+against any of the three was reacting to whatever retcode the broker
+sent back AFTER a doomed request round-trip; nothing ever stopped one
+from being sent in the first place.
+- **`Execution/BrokerAdapter.mqh`** — three new checks, run before every
+  broker call:
+  - `IsConnected()` — `TERMINAL_CONNECTED`, checked once up front rather
+    than folded into the retry loop (a retry loop spinning for a few
+    hundred ms within one tick can't fix a genuinely dead connection).
+  - `IsMarketOpenForTrading()` — `SYMBOL_TRADE_MODE_DISABLED` blocks
+    everything including closes; `SYMBOL_TRADE_MODE_CLOSEONLY` blocks
+    new opens only (closes/modifies still permitted).
+  - `ValidateStopDistance()` — `SYMBOL_TRADE_STOPS_LEVEL` and
+    `SYMBOL_TRADE_FREEZE_LEVEL` (whichever is larger; either can
+    independently cause a broker rejection), plus a same-side sanity
+    check (SL on the losing side, TP on the winning side) that catches
+    a wiring bug elsewhere before it reaches the broker as a confusing
+    generic rejection.
+  Wired into `MarketBuy`/`MarketSell`/`PlaceLimit` (pre-send) and
+  `ModifySLTP` (pre-modify — this is where `FREEZE_LEVEL` bites hardest
+  in practice: a break-even/trailing move rejected because price sits
+  inside the freeze zone). `ClosePartial`/`CloseFull` get the connection
+  + close-only-vs-disabled check but not stop-distance (not applicable
+  to a close). `m_lastLatencyUs` explicitly zeroed on every early
+  refusal so `LastLatencyMs()` (v2.16) can't misleadingly report a
+  previous call's latency for a request that never reached the broker.
+  Every existing caller (`OrderManager`, `PositionManager`) already
+  guards these calls with `if(...)`, so a new local refusal behaves
+  exactly like an existing broker rejection from the caller's
+  perspective — no control-flow changes needed there.
+
+### Added
+- **`tools/tests/`** (new) — first dedicated tests for `walk_forward.py`,
+  `metrics_engine.py`, and `gating.py`, all of which had zero coverage.
+  40 tests, all passing (`cd tools && python -m pytest`):
+  - `test_stats.py` (14) — the shared CI math these three tools all
+    build on: empty samples, single-class AUC, n<4 Pearson, zero
+    variance, overlap/direction edge cases.
+  - `test_gating.py` (10) — `_validate_cycles()`'s three raise
+    conditions (empty history, mixed live/synthetic, missing
+    source/cycle_id tags) and `decide()`'s four actions
+    (`INSUFFICIENT_DATA`/`HOLD`/`PROMOTE`/`ROLLBACK`), including the
+    contradiction case specifically (must `ROLLBACK`, never average
+    itself into a `HOLD`).
+  - `test_metrics_engine.py` (9) — no_fill/ambiguous correctly excluded
+    from expectancy but not coverage, directional bias, decile bucket
+    boundaries, and `compute_regime_matrix()`'s profit-factor/
+    max-drawdown arithmetic checked against a hand-computed 5-trade
+    sequence.
+  - `test_walk_forward.py` (7) — `split_train_holdout()`'s window
+    boundary placement, all three `compute_walk_forward_report()`
+    verdicts (`insufficient_data`/`consistent`/`diverged`), and that
+    `ingest_tester_csv()` fails as a documented `NotImplementedError`
+    stub rather than silently.
+  `conftest.py` sets the same env vars `telegram-bridge/tests/conftest.py`
+  does (needed before `app.config.Settings()` — a module-level
+  singleton — is first constructed by `metrics_engine`/`walk_forward`'s
+  imports) and provides a `FakeOutcome` dataclass + `make_outcome`
+  fixture standing in for `app.models.SignalOutcome` — none of the
+  functions under test touch the database, they only do attribute
+  access on whatever rows they're handed, so a real ORM instance (which
+  would need a live session to construct) buys nothing.
+- New `tools/pytest.ini`, same shape as `telegram-bridge/pytest.ini`.
+
+### Explicitly not done here
+`telegram-bridge/tests/` untouched — confirmed via `git diff --stat` on
+that directory (empty). Installed `pytest`, `sqlalchemy[asyncio]`,
+`aiosqlite`, `pydantic-settings` in this environment only to actually
+run the new suite (all 40 pass) rather than author it blind — same
+discipline as running `tools/validate_mql5.py` on every MQL5 change.
+`fastapi` was not installed, so the bridge's own suite was not re-run
+here; it wasn't touched, so there was nothing to verify against it.
+
 ## v2.17 — Key-Level Reaction: the three sources v2.14 left unwired
 
 Previous week high/low, session high/low, and psychological (round-number)
