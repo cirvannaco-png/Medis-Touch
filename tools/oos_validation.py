@@ -7,7 +7,7 @@ have a passing holdout before strict gating can approve it.
 """
 from __future__ import annotations
 
-from tools.stats import wilson_ci
+from stats import wilson_ci
 
 RESOLVED = {"win", "loss", "scratch"}
 
@@ -38,11 +38,6 @@ def validate_temporal_holdout(rows, weight_version: str, train_fraction: float =
     avg_r = (sum(avg_r_values) / len(avg_r_values)) if avg_r_values else None
     ci = wilson_ci(wins, len(holdout))
 
-    # Conservative pass: holdout must have enough observations, positive
-    # average realized R, and a win-rate point estimate above 50%.
-    # We do not require the lower CI bound to exceed 50% here because that
-    # would be unrealistically strict for a 15-50 trade holdout; strict
-    # gating separately enforces the minimum effect and persistence rules.
     passed = (
         len(holdout) >= min_test
         and avg_r is not None
