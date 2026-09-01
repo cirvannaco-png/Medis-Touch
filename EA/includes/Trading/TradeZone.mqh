@@ -80,10 +80,6 @@ bool CTradeDecision::FindEntryFVG(ENUM_FVG_DIR dir, FVGZone &out)
 //+------------------------------------------------------------------+
 TradeSetup CTradeDecision::GenerateBuySetup()
   {
-   // T0 is the earliest LOCAL observation boundary: the EA has begun
-   // evaluating the current market for a candidate. It is not a magical
-   // timestamp for when the market "became valid" (that is unknowable
-   // retrospectively); T0 is the first observable point available to the EA.
    g_latency.BeginIfInactive(m_priceRef != NULL ? m_priceRef.Symbol() : _Symbol);
 
    TradeSetup setup;
@@ -117,10 +113,14 @@ TradeSetup CTradeDecision::GenerateBuySetup()
 //+------------------------------------------------------------------+
 TradeSetup CTradeDecision::GenerateSellSetup()
   {
-   if(m_priceRef == NULL || m_fvgCtx == NULL || m_scoring == NULL) return TradeSetup();
-
    TradeSetup setup;
    ZeroMemory(setup);
+   if(m_priceRef == NULL || m_fvgCtx == NULL || m_scoring == NULL)
+     {
+      g_latency.MarkDetection();
+      return setup;
+     }
+
    double conf = m_scoring.CalculateConfidence(false);
    if(conf >= 60.0)
      {
@@ -148,8 +148,6 @@ TradeSetup CTradeDecision::GenerateSellSetup()
      }
 
    // T1 = detector has finished evaluating both directional candidates.
-   // T2 is intentionally marked later, after the chosen setup's empirical
-   // calibration value has been attached by the EA.
    g_latency.MarkDetection();
    return setup;
   }
