@@ -3,17 +3,12 @@
 //|  The analysis -> action router: turns a validated TradeSetup into  |
 //|  an explicit, ID'd, auditable TradeDecisionRecord.                |
 //+------------------------------------------------------------------+
-// Why this exists as its own layer instead of the EA calling
-// COrderManager directly: "should we act on this setup at all, and how"
-// is policy, not execution. Keeping it here means execution, signalling
-// and persistence all receive the SAME immutable record, so the order
-// that gets placed, the message subscribers receive, and the row Recovery
-// later reads can never disagree about entry/SL/TP/confidence.
 #ifndef DECISIONENGINE_MQH
 #define DECISIONENGINE_MQH
 
 #include "../Core/Config.mqh"
 #include "TradeDecision.mqh"
+#include "../Monitoring/LatencyTelemetry.mqh"
 
 class CDecisionEngine
   {
@@ -24,20 +19,17 @@ private:
    double            m_minConfidenceExecute;
    double            m_minConfidenceSignal;
    double            m_fullRiskConfidence;
-   int               m_maxSpreadPoints;      // 0 = no spread gate
+   int               m_maxSpreadPoints;
    long              m_nextId;
-
    double            CurrentSpreadPoints() const;
 
 public:
-                     CDecisionEngine();
-   void              Init(const string symbol, bool enableExecution, bool enableSignals,
-                          double minConfidenceExecute, double minConfidenceSignal,
-                          double fullRiskConfidence, int maxSpreadPoints);
-   // Recovery/restart safety: decision IDs are the matching key baked into
-   // broker order comments, so a fresh instance must never reissue one.
-   void              SeedNextId(long nextId);
-   long              PeekNextId() const { return m_nextId; }
+   CDecisionEngine();
+   void Init(const string symbol, bool enableExecution, bool enableSignals,
+             double minConfidenceExecute, double minConfidenceSignal,
+             double fullRiskConfidence, int maxSpreadPoints);
+   void SeedNextId(long nextId);
+   long PeekNextId() const { return m_nextId; }
    TradeDecisionRecord Decide(const TradeSetup &setup);
   };
 //+------------------------------------------------------------------+
@@ -59,19 +51,12 @@ void CDecisionEngine::Init(const string symbol, bool enableExecution, bool enabl
   }
 //+------------------------------------------------------------------+
 void CDecisionEngine::SeedNextId(long nextId)
-  {
-   if(nextId > m_nextId) m_nextId = nextId;
-  }
+  { if(nextId > m_nextId) m_nextId = nextId; }
 //+------------------------------------------------------------------+
 double CDecisionEngine::CurrentSpreadPoints() const
   {
-   // SYMBOL_SPREAD is already in points. It can legitimately be 0 on a
-   // symbol the broker quotes with a floating spread while the market is
-   // closed - fall back to the raw ask/bid difference in that case so the
-   // gate isn't silently bypassed at weekend/rollover.
    long spread = SymbolInfoInteger(m_symbol, SYMBOL_SPREAD);
    if(spread > 0) return (double)spread;
-
    double point = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
    if(point <= 0) return 0.0;
    double ask = SymbolInfoDouble(m_symbol, SYMBOL_ASK);
@@ -80,10 +65,6 @@ double CDecisionEngine::CurrentSpreadPoints() const
    return (ask - bid) / point;
   }
 //+------------------------------------------------------------------+
-// Returns a record with valid=false / POLICY_IGNORE for anything that
-// should not be acted on. It never throws away the reason - the caller
-// (and the CSV store) keeps it, because "why did the EA not take that
-// setup" is the single most common question in production.
 TradeDecisionRecord CDecisionEngine::Decide(const TradeSetup &setup)
   {
    TradeDecisionRecord rec;
@@ -96,23 +77,18 @@ TradeDecisionRecord CDecisionEngine::Decide(const TradeSetup &setup)
    rec.valid = false;
    rec.spread_points = CurrentSpreadPoints();
 
+   // T2 = confidence/calibration stage has completed before policy is
+   // evaluated. T3 is stamped at the actual decision boundary below.
+   g_latency.MarkConfidence();
+
    if(!setup.active)
-     {
-      rec.reason = "setup inactive";
-      return rec;
-     }
+     { rec.reason = "setup inactive"; return rec; }
    if(!m_enableExecution && !m_enableSignals)
-     {
-      rec.reason = "execution and signals both disabled";
-      return rec;
-     }
+     { rec.reason = "execution and signals both disabled"; return rec; }
 
    bool canExecute = m_enableExecution && setup.confidence >= m_minConfidenceExecute;
    bool canSignal  = m_enableSignals  && setup.confidence >= m_minConfidenceSignal;
 
-   // Spread gate applies to EXECUTION only. A wide spread makes the fill
-   // bad; it does not make the analysis wrong, so subscribers still get
-   // the signal (they may be on a different broker entirely).
    if(canExecute && m_maxSpreadPoints > 0 && rec.spread_points > (double)m_maxSpreadPoints)
      {
       canExecute = false;
@@ -131,14 +107,14 @@ TradeDecisionRecord CDecisionEngine::Decide(const TradeSetup &setup)
       return rec;
      }
 
-   // Below the "full risk" confidence the setup is still tradable, just
-   // not at full size - CRiskEngine::CalculateLotSize() halves it when
-   // reduce_risk is set.
    rec.reduce_risk = (setup.confidence < m_fullRiskConfidence);
    rec.valid = true;
    rec.decision_id = m_nextId++;
    rec.reason += StringFormat("%s at confidence %.1f%s", TradePolicyToString(rec.action),
                               setup.confidence, rec.reduce_risk ? " (reduced risk)" : "");
+
+   g_latency.SetDecisionId(rec.decision_id);
+   g_latency.MarkDecision(); // T3
    return rec;
   }
 #endif
