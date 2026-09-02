@@ -1,0 +1,19 @@
+[project]
+name = "medis-touch-handbook"
+version = "0.1.0"
+description = "Handbook reference implementation: trade setup contract, lifecycle, copy-trading gates, payments, calibration"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx==0.28.1",
+    "cryptography==44.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.0",
+    "bandit==1.8.0",
+]
+
+[tool.ruff]
+line-length = 110

@@ -1,0 +1,52 @@
+name: medis-touch handbook CI
+
+# Lints, security-scans and tests the handbook reference implementation
+# (medis_touch/). Separate from telegram-bridge CI: this package has its own
+# dependency set (httpx + cryptography only) and no database/Telegram config.
+on:
+  push:
+    paths:
+      - "medis_touch/**"
+      - ".github/workflows/medis-touch-ci.yml"
+  pull_request:
+    paths:
+      - "medis_touch/**"
+      - ".github/workflows/medis-touch-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: medis-touch-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: medis_touch
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            medis_touch/requirements.txt
+            medis_touch/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check app/ tests/
+
+      - name: Security scan (bandit)
+        run: bandit -r app/ -q
+
+      - name: Test (pytest)
+        run: pytest -v
