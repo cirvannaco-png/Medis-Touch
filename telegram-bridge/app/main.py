@@ -6,6 +6,7 @@ from starlette.responses import JSONResponse, Response
 
 from app.bot import init_bot, shutdown_bot
 from app.config import APP_VERSION, settings
+from app.config_routes import router as config_router
 from app.logger import logger
 from app.routes import router
 from app.telegram import check_bot_token, close_http_client, init_http_client
@@ -16,12 +17,7 @@ class RequestBodyTooLarge(Exception):
 
 
 class MaxBodySizeMiddleware:
-    """
-    Raw ASGI middleware. Rejects on Content-Length first (cheap, catches the
-    common case), and also enforces the limit against the actual bytes
-    streamed in - a Content-Length header is caller-supplied and can be
-    absent (chunked transfer) or simply wrong, so it can't be trusted alone.
-    """
+    """Reject oversized HTTP bodies before they reach application handlers."""
 
     def __init__(self, app, max_size: int):
         self.app = app
@@ -77,18 +73,13 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="Medis Touch Telegram Bridge", version=APP_VERSION, lifespan=lifespan)
 
-    # CORS is only relevant for browser clients; the EA talks to this API
-    # directly and isn't subject to it. Wildcard origins + credentials is an
-    # invalid combination (rejected by browsers per spec) and was never
-    # actually enforceable as written before - if you need a browser
-    # dashboard hitting this API, set ALLOWED_ORIGINS to explicit origins.
     allowed_origins = settings.allowed_origins_list
     if allowed_origins:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=allowed_origins,
             allow_credentials=True,
-            allow_methods=["POST", "GET"],
+            allow_methods=["POST", "GET", "PATCH"],
             allow_headers=["X-API-Key", "Content-Type"],
         )
 
@@ -98,8 +89,10 @@ def create_app() -> FastAPI:
     async def body_too_large_handler(request, exc):
         return JSONResponse(status_code=413, content={"detail": "Request body too large"})
 
+    # Configuration router is registered first so the production registry-backed
+    # /config/{symbol} contract wins over the legacy observation-only handler.
+    app.include_router(config_router)
     app.include_router(router)
-
     return app
 
 
