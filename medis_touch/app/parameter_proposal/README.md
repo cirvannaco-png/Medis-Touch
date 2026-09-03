@@ -31,6 +31,27 @@ Required evaluator interface:
     evaluate(parameter_set) -> Evaluation
     evaluate_neighbors(parameter_set) -> iterable[Evaluation]
 
+The production implementation is `app.parameter_proposal.evaluator.OutcomeEvaluator`.
+It accepts real `SignalOutcome`-shaped records and a required replay callback.
+The callback must run the actual EA decision logic on historical bars/data for
+the requested `ParameterSet` and return the resulting realized outcomes. The
+evaluator refuses empty data, incomplete resolved outcomes, and replays with no
+resolved results. It never copies the baseline score to a candidate and it
+does not generate synthetic outcomes.
+
+Example wiring from the bridge:
+
+```python
+rows = await load_signal_outcomes_from_postgres()
+evaluator = OutcomeEvaluator(rows, replay=run_medistouch_replay)
+engine = ParameterProposalEngine(evaluator)
+```
+
+`run_medistouch_replay` is intentionally an integration boundary: it must use
+the EA's own decision/replay toolchain, not a second Python implementation of
+the strategy. Until that callback is wired to real historical data, the system
+must not instantiate the proposer for live recommendations.
+
 ## Production release gates
 - Implement the evaluator against real Medis Touch outcome data and exact
   EA decision semantics.

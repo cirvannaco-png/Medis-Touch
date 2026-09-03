@@ -12,6 +12,23 @@ class ParameterProposalEngine:
     def __init__(self, evaluator):
         self.evaluator = evaluator
 
+    def propose_live(self, current):
+        """Build proposals only from a real, replay-backed evaluator.
+
+        ``propose`` remains useful for offline tests and tooling, but live
+        callers must use this explicit entry point so a fake or baseline-only
+        evaluator cannot accidentally create deployable recommendations.
+        """
+        if not (
+            getattr(self.evaluator, "is_real_outcome_evaluator", False)
+            and getattr(self.evaluator, "replay_backed", False)
+        ):
+            raise RuntimeError(
+                "live proposals require OutcomeEvaluator backed by real "
+                "outcomes and the actual EA replay"
+            )
+        return self.propose(current)
+
     def propose(self, current):
         baseline = self.evaluator.evaluate(current)
         proposals = []
