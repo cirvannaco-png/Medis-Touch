@@ -1,7 +1,7 @@
 """Persistent registry for validated configurations and deployment ACKs."""
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Index, Integer, JSON, String
+from sqlalchemy import Column, DateTime, Index, Integer, JSON, String
 
 from app.database import Base
 
@@ -19,9 +19,7 @@ class ParameterConfiguration(Base):
 
 class ParameterDeployment(Base):
     __tablename__ = "parameter_deployments"
-    __table_args__ = (
-        Index("ix_parameter_deployments_symbol_state", "symbol", "state"),
-    )
+    __table_args__ = (Index("ix_parameter_deployments_symbol_state", "symbol", "state"),)
     id = Column(Integer, primary_key=True, autoincrement=True)
     config_hash = Column(String(64), nullable=False, index=True)
     symbol = Column(String(20), nullable=False)
@@ -35,9 +33,7 @@ class ParameterDeployment(Base):
 
 class ParameterDeploymentAck(Base):
     __tablename__ = "parameter_deployment_acks"
-    __table_args__ = (
-        Index("ix_parameter_deployment_acks_config_symbol", "config_hash", "symbol"),
-    )
+    __table_args__ = (Index("ix_parameter_deployment_acks_config_symbol", "config_hash", "symbol"),)
     id = Column(Integer, primary_key=True, autoincrement=True)
     config_hash = Column(String(64), nullable=False)
     symbol = Column(String(20), nullable=False)
