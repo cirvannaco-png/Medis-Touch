@@ -2,7 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
+
+
+class DeploymentState(StrEnum):
+    GENERATED = "GENERATED"
+    VALIDATED = "VALIDATED"
+    TESTED = "TESTED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    APPROVED = "APPROVED"
+    SCHEDULED = "SCHEDULED"
+    ACTIVE = "ACTIVE"
+    RETIRED = "RETIRED"
+    ROLLED_BACK = "ROLLED_BACK"
 
 
 @dataclass(frozen=True)
@@ -62,3 +75,8 @@ class Proposal:
     gates_passed: tuple[str, ...]
     gates_failed: tuple[str, ...]
     status: str
+    config_hash: str | None = None
+    validation_state: DeploymentState = DeploymentState.GENERATED
+    holdout_improvement: float | None = None
+    paired_p_value: float | None = None
+    search_rank: int | None = None
