@@ -1,14 +1,7 @@
-"""Read-only Telegram control-plane views for Medis Touch.
-
-This module deliberately exposes observations only. It does not approve,
-activate, rollback, stop, flatten, or otherwise mutate trading state.
-Live portfolio risk remains authoritative inside the EA; the bridge only
-reports data that has actually reached its database.
-"""
+"""Read-only Telegram control-plane views for Medis Touch."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from functools import wraps
 
 from sqlalchemy import select
@@ -16,17 +9,10 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from app.config import settings
+from app.config_registry import ParameterConfiguration, ParameterDeployment, ParameterDeploymentAck
 from app.database import async_session
 from app.logger import logger
-from app.models import (
-    ParameterConfiguration,
-    ParameterDeployment,
-    ParameterDeploymentAck,
-    PromotionRequest,
-    Signal,
-    TradeEvent,
-    TradeEventType,
-)
+from app.models import PromotionRequest, TradeEvent, TradeEventType
 
 _CLOSE_EVENTS = {
     TradeEventType.CLOSED_TP1,
@@ -77,7 +63,11 @@ async def portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Open positions: {len(open_trades)}",
         f"Symbols: {', '.join(symbols) if symbols else '—'}",
         f"Open volume: {total_volume:.2f} lots",
-        f"Last reported equity: {latest_equity:.2f}" if latest_equity is not None else "Last reported equity: —",
+        (
+            f"Last reported equity: {latest_equity:.2f}"
+            if latest_equity is not None
+            else "Last reported equity: —"
+        ),
         "",
         "Live portfolio risk, correlation, factor exposure and heat remain authoritative in the EA.",
     ]
@@ -87,8 +77,11 @@ async def portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 @_authorized_only
 async def portfolio_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = getattr(context, "args", None) or []
-    detail = args[0].lower() if args else "risk"
+    if not args:
+        await portfolio(update, context)
+        return
 
+    detail = args[0].lower()
     if detail not in {"risk", "exposure", "correlation", "heat"}:
         await update.message.reply_text("Usage: /portfolio risk|exposure|correlation|heat")
         return
@@ -124,7 +117,11 @@ async def config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             deployments = (
                 await session.execute(
                     select(ParameterDeployment)
-                    .where(ParameterDeployment.state.in_(["SCHEDULED", "EA_VALIDATED", "EA_ACKNOWLEDGED", "ACTIVE"]))
+                    .where(
+                        ParameterDeployment.state.in_(
+                            ["SCHEDULED", "EA_VALIDATED", "EA_ACKNOWLEDGED", "ACTIVE"]
+                        )
+                    )
                     .order_by(ParameterDeployment.created_at.desc())
                     .limit(20)
                 )
@@ -133,27 +130,28 @@ async def config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if not deployments:
                 lines.append("No deployable configurations reported.")
             else:
-                for deployment in deployments:
-                    lines.append(
-                        f"{deployment.symbol}: {deployment.state} {deployment.config_hash[:12]}…"
-                    )
+                lines.extend(
+                    f"{deployment.symbol}: {deployment.state} {deployment.config_hash[:12]}…"
+                    for deployment in deployments
+                )
         elif action == "pending":
             rows = (
                 await session.execute(
                     select(ParameterConfiguration)
-                    .where(ParameterConfiguration.validation_state.in_(["PENDING_APPROVAL", "APPROVED"]))
+                    .where(
+                        ParameterConfiguration.validation_state.in_(["PENDING_APPROVAL", "APPROVED"])
+                    )
                     .order_by(ParameterConfiguration.created_at.desc())
                     .limit(10)
                 )
             ).scalars().all()
             lines = ["🕒 Configuration candidates", ""]
+            lines.extend(
+                f"{row.validation_state}: {row.config_hash} (parent {row.parent_version})"
+                for row in rows
+            )
             if not rows:
                 lines.append("No pending configuration candidates.")
-            else:
-                lines.extend(
-                    f"{row.validation_state}: {row.config_hash} (parent {row.parent_version})"
-                    for row in rows
-                )
         elif action == "history":
             rows = (
                 await session.execute(
@@ -163,13 +161,12 @@ async def config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
             ).scalars().all()
             lines = ["📚 Configuration history", ""]
+            lines.extend(
+                f"{row.validation_state}: {row.config_hash[:16]}… ← {row.parent_version}"
+                for row in rows
+            )
             if not rows:
                 lines.append("No configurations recorded.")
-            else:
-                lines.extend(
-                    f"{row.validation_state}: {row.config_hash[:16]}… ← {row.parent_version}"
-                    for row in rows
-                )
         elif action == "show" and len(args) >= 2:
             row = await session.scalar(
                 select(ParameterConfiguration).where(ParameterConfiguration.config_hash == args[1])
@@ -209,7 +206,6 @@ async def ea(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             latest: dict[str, ParameterDeployment] = {}
             for deployment in deployments:
                 latest.setdefault(deployment.symbol, deployment)
-
             lines = ["🤖 EA status — reported bridge state", ""]
             if not latest:
                 lines.append("No EA deployment state reported.")
@@ -217,7 +213,8 @@ async def ea(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 lines.extend(f"{symbol}: {row.state}" for symbol, row in sorted(latest.items()))
         elif action == "symbols":
             rows = (await session.execute(select(ParameterDeployment.symbol).distinct())).all()
-            lines = ["🤖 EA symbols", "", ", ".join(sorted(row[0] for row in rows)) or "No symbols reported."]
+            symbols = sorted(row[0] for row in rows)
+            lines = ["🤖 EA symbols", "", ", ".join(symbols) or "No symbols reported."]
         elif action == "config":
             rows = (
                 await session.execute(
@@ -230,15 +227,23 @@ async def ea(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             lines.extend(
                 f"{row.symbol}: {row.status} {row.config_hash[:12]}… ({row.ea_instance})"
                 for row in rows
-            ) or lines.append("No acknowledgements recorded.")
+            )
+            if not rows:
+                lines.append("No acknowledgements recorded.")
         elif action == "health":
             row = await session.scalar(
-                select(ParameterDeploymentAck).order_by(ParameterDeploymentAck.received_at.desc()).limit(1)
+                select(ParameterDeploymentAck)
+                .order_by(ParameterDeploymentAck.received_at.desc())
+                .limit(1)
             )
             lines = [
                 "🩺 EA health",
                 "",
-                f"Last configuration ACK: {row.received_at.isoformat()}" if row else "Last configuration ACK: never",
+                (
+                    f"Last configuration ACK: {row.received_at.isoformat()}"
+                    if row
+                    else "Last configuration ACK: never"
+                ),
                 f"Last status: {row.status}" if row else "Last status: —",
             ]
         else:
