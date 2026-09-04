@@ -1,13 +1,11 @@
 //+------------------------------------------------------------------+
 //| ConfigSync.mqh                                                    |
-//| Production configuration validation + acknowledgement.            |
-//|                                                                    |
-//| The EA never mutates trading parameters from an HTTP response.     |
-//| It validates the registry payload, acknowledges that validation,   |
-//| and leaves activation to an explicit EA release.                   |
+//| Secure runtime configuration delivery + atomic application.       |
 //+------------------------------------------------------------------+
 #ifndef CONFIGSYNC_MQH
 #define CONFIGSYNC_MQH
+
+#include "../Core/RuntimeParameters.mqh"
 
 class CConfigSync
   {
@@ -18,22 +16,22 @@ private:
    string   m_apiKey;
    string   m_compiledWeightVersion;
    int      m_timeoutMs;
-   string   m_lastSeenHash;
+   string   m_lastAppliedHash;
 
    bool ExtractJsonStringField(const string &json, string field, string &out);
    bool ExtractJsonNumberField(const string &json, string field, double &out);
-   bool ValidateParams(const string &json, string &reason);
+   bool ValidateParams(const string &json, RuntimeParameters &out, string &reason);
    void Ack(const string &configHash, const string &status, const string &reason);
 
 public:
-   CConfigSync(void) : m_timeoutMs(5000), m_lastSeenHash("") {}
+   CConfigSync(void) : m_timeoutMs(1500), m_lastAppliedHash("") {}
 
-   void Init(string symbol, string signalEndpoint, string apiKey, string compiledWeightVersion, int timeoutMs = 5000)
+   void Init(string symbol, string signalEndpoint, string apiKey, string compiledWeightVersion, int timeoutMs = 1500)
      {
       m_symbol = symbol;
       m_apiKey = apiKey;
       m_compiledWeightVersion = compiledWeightVersion;
-      m_timeoutMs = timeoutMs;
+      m_timeoutMs = MathMax(500, timeoutMs);
 
       int pos = StringFind(signalEndpoint, "/signal");
       if(pos < 0)
@@ -48,7 +46,9 @@ public:
       m_ackEndpoint = base + "/config/" + symbol + "/ack";
      }
 
-   void Poll(void);
+   bool Poll(RuntimeParameters &candidate, string &configHash, string &reason);
+   void MarkApplied(const string &configHash) { m_lastAppliedHash = configHash; }
+   string LastAppliedHash() const { return m_lastAppliedHash; }
   };
 
 void CConfigSync::Ack(const string &configHash, const string &status, const string &reason)
@@ -115,28 +115,39 @@ bool CConfigSync::ExtractJsonNumberField(const string &json, string field, doubl
    return MathIsValidNumber(out);
   }
 
-bool CConfigSync::ValidateParams(const string &json, string &reason)
+bool CConfigSync::ValidateParams(const string &json, RuntimeParameters &out, string &reason)
   {
    int paramsPos = StringFind(json, "\"params\":{");
    if(paramsPos < 0) { reason = "params_missing"; return false; }
    string params = StringSubstr(json, paramsPos);
-
    double v;
+
    if(!ExtractJsonNumberField(params, "ensemble_threshold", v) || v < 55 || v > 85) { reason = "ensemble_threshold_out_of_bounds"; return false; }
+   out.ensemble_threshold = (int)MathRound(v);
    if(!ExtractJsonNumberField(params, "smc_threshold", v) || v < 50 || v > 85) { reason = "smc_threshold_out_of_bounds"; return false; }
+   out.smc_threshold = (int)MathRound(v);
    if(!ExtractJsonNumberField(params, "momentum_threshold", v) || v < 50 || v > 85) { reason = "momentum_threshold_out_of_bounds"; return false; }
+   out.momentum_threshold = (int)MathRound(v);
    if(!ExtractJsonNumberField(params, "breakout_threshold", v) || v < 50 || v > 85) { reason = "breakout_threshold_out_of_bounds"; return false; }
+   out.breakout_threshold = (int)MathRound(v);
    if(!ExtractJsonNumberField(params, "mean_reversion_threshold", v) || v < 50 || v > 85) { reason = "mean_reversion_threshold_out_of_bounds"; return false; }
+   out.mean_reversion_threshold = (int)MathRound(v);
    if(!ExtractJsonNumberField(params, "key_level_threshold", v) || v < 50 || v > 85) { reason = "key_level_threshold_out_of_bounds"; return false; }
+   out.key_level_threshold = (int)MathRound(v);
    if(!ExtractJsonNumberField(params, "fvg_proximity_atr", v) || v < 0.05 || v > 1.00) { reason = "fvg_proximity_atr_out_of_bounds"; return false; }
+   out.fvg_proximity_atr = v;
    if(!ExtractJsonNumberField(params, "contradiction_penalty", v) || v < 0.0 || v > 0.50) { reason = "contradiction_penalty_out_of_bounds"; return false; }
+   out.contradiction_penalty = v;
    if(!ExtractJsonNumberField(params, "freshness_bars", v) || v < 3 || v > 30) { reason = "freshness_bars_out_of_bounds"; return false; }
+   out.freshness_bars = (int)MathRound(v);
    return true;
   }
 
-void CConfigSync::Poll(void)
+bool CConfigSync::Poll(RuntimeParameters &candidate, string &configHash, string &reason)
   {
-   if(StringLen(m_endpoint) == 0) return;
+   configHash = "";
+   reason = "";
+   if(StringLen(m_endpoint) == 0) return false;
 
    char data[];
    char result[];
@@ -147,40 +158,35 @@ void CConfigSync::Poll(void)
 
    ResetLastError();
    int status = WebRequest("GET", m_endpoint, headers, m_timeoutMs, data, result, resultHeaders);
-   if(status == -1) return;
-   if(status < 200 || status >= 300) return;
+   if(status == -1 || status < 200 || status >= 300) return false;
 
    string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
-   string configHash;
-   if(!ExtractJsonStringField(body, "config_hash", configHash)) return;
-   if(StringLen(configHash) == 0 || StringLen(configHash) != 64) return;
-   if(configHash == m_lastSeenHash) return;
+   if(!ExtractJsonStringField(body, "config_hash", configHash)) return false;
+   if(StringLen(configHash) != 64 || configHash == m_lastAppliedHash) return false;
+
+   string state;
+   if(!ExtractJsonStringField(body, "state", state)) return false;
+   if(state != "SCHEDULED" && state != "EA_VALIDATED" && state != "ACTIVE") return false;
 
    string parentVersion;
-   if(!ExtractJsonStringField(body, "parent_version", parentVersion)) return;
+   if(!ExtractJsonStringField(body, "parent_version", parentVersion)) return false;
    if(parentVersion != m_compiledWeightVersion)
      {
-      m_lastSeenHash = configHash;
-      PrintFormat("MedisTouch ConfigSync: rejected config %s for %s — parent '%s' does not match compiled weight version '%s'.",
-                  configHash, m_symbol, parentVersion, m_compiledWeightVersion);
-      Ack(configHash, "REJECTED", "parent_version_mismatch");
-      return;
-     }
-
-   string reason;
-   if(!ValidateParams(body, reason))
-     {
-      m_lastSeenHash = configHash;
-      PrintFormat("MedisTouch ConfigSync: rejected config %s for %s: %s", configHash, m_symbol, reason);
+      reason = "parent_version_mismatch";
       Ack(configHash, "REJECTED", reason);
-      return;
+      return false;
      }
 
-   m_lastSeenHash = configHash;
-   // Validation is deliberately separate from activation. This build does
-   // not dynamically mutate compiled strategy parameters. VALIDATED means
-   // only that the EA accepted the registry schema, hash and bounds.
-   Ack(configHash, "VALIDATED", "schema_bounds_and_parent_valid; runtime_application_not_enabled");
+   RuntimeParameters parsed;
+   parsed.Defaults();
+   if(!ValidateParams(body, parsed, reason))
+     {
+      Ack(configHash, "REJECTED", reason);
+      return false;
+     }
+
+   candidate = parsed;
+   return true;
   }
 
 #endif // CONFIGSYNC_MQH
