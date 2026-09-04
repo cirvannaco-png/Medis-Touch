@@ -1,31 +1,10 @@
 """
-telegram-bridge/app/calibration.py — step 6's actual scheduled work, and
-the seam where step 5's Telegram card gets attached to step 4's decision.
+telegram-bridge/app/calibration.py — scheduled calibration work.
 
-run_cycle() is what POST /admin/run-cycle (routes.py) calls. It:
-  1. Pulls tools/metrics_engine.compute_report() over a trailing window
-     (RECENT_WEEKS — matches tools/calibration_matrix.py's own framing:
-     the interesting comparison is "recent vs baseline," not
-     "since the beginning of time").
-  2. Persists it as a CalibrationCycle row (source="live") — this is the
-     Postgres replacement for tools/cycle_store.py's JSON files.
-  3. For every weight_version that cycle's report has expectancy data
-     for, loads that weight_version's live cycle history from Postgres
-     and runs it through tools/gating.decide().
-  4. PROMOTE -> creates a PromotionRequest (status="pending") and posts
-     a tap-to-approve card to the admin chat (bot_promotions.py handles
-     the tap). ROLLBACK -> creates a PromotionRequest
-     (status="auto_executed") immediately and posts a plain notice — per
-     the spec, a genuine contradiction is never gated behind a tap, only
-     flagged. HOLD/INSUFFICIENT_DATA -> logged, not messaged; a cycle
-     with nothing actionable shouldn't page you.
-
-This module deliberately imports tools/metrics_engine.py and
-tools/gating.py rather than re-implementing their logic — see
-telegram-bridge/Dockerfile (tools/ is now copied into the image
-specifically so this import works in production) and
-tools/_pathutil.py (how the two different on-disk layouts, repo
-checkout vs. deployed container, both resolve to the same import).
+This module deliberately imports tools/metrics_engine.py and tools/gating.py
+through the deployment-aware path setup below. The imports are intentionally
+after that path setup so both the deployed container and repository checkout
+resolve the shared tools correctly.
 """
 from __future__ import annotations
 
@@ -42,27 +21,24 @@ from app.database import async_session
 from app.logger import logger
 from app.models import CalibrationCycle, PromotionRequest, SignalOutcome
 
-# See tools/_pathutil.py's docstring for why two candidates are tried.
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 for _candidate in (
-    os.path.normpath(os.path.join(_APP_DIR, "..", "tools")),        # deployed container (app/ and tools/ siblings)
-    os.path.normpath(os.path.join(_APP_DIR, "..", "..", "tools")),  # repo checkout (telegram-bridge/app/../../tools)
+    os.path.normpath(os.path.join(_APP_DIR, "..", "tools")),
+    os.path.normpath(os.path.join(_APP_DIR, "..", "..", "tools")),
 ):
     if os.path.exists(os.path.join(_candidate, "metrics_engine.py")) and _candidate not in sys.path:
         sys.path.insert(0, _candidate)
         break
 else:
     logger.warning(
-        "app.calibration: couldn't locate tools/ (metrics_engine.py/gating.py) "
-        "from either the deployed container layout or a repo checkout — "
-        "POST /admin/run-cycle will fail until this is fixed. See "
-        "telegram-bridge/Dockerfile's COPY tools/ line."
+        "app.calibration: couldn't locate tools/ from either the deployed container "
+        "layout or a repository checkout — POST /admin/run-cycle will fail until fixed."
     )
 
-from gating import GatingError, decide, load_cycles_from_db
-from metrics_engine import compute_report
+from gating import GatingError, decide, load_cycles_from_db  # noqa: E402
+from metrics_engine import compute_report  # noqa: E402
 
-CYCLE_WINDOW_WEEKS = 2  # matches the spec's biweekly cadence
+CYCLE_WINDOW_WEEKS = 2
 
 
 async def _fetch_window_rows(since: datetime) -> list:
@@ -87,13 +63,6 @@ async def _persist_cycle(report: dict) -> CalibrationCycle:
 
 
 def _format_summary(weight_version: str, decision, cycle_report: dict) -> str:
-    """
-    Per the spec: coverage delta, expectancy delta by tag, sample size,
-    confidence interval — not just a verdict. Pulled straight off the
-    gating Decision's metric_verdicts (already the CI objects
-    tools/stats.py produced) so this can't drift from what the decision
-    was actually based on.
-    """
     lines = [
         f"📊 MEDIS TOUCH — Calibration cycle ({weight_version})",
         "",
@@ -108,9 +77,15 @@ def _format_summary(weight_version: str, decision, cycle_report: dict) -> str:
         overlap_label = "no change" if mv.overlap else ("DIVERGED" if mv.overlap is False else "not estimable")
         lines.append(f"{mv.metric}: {overlap_label}")
         if mv.prior.is_estimable:
-            lines.append(f"  prior:  {mv.prior.value:.3f} [{mv.prior.ci_low:.3f}, {mv.prior.ci_high:.3f}] (n={mv.prior.n})")
+            lines.append(
+                f"  prior:  {mv.prior.value:.3f} [{mv.prior.ci_low:.3f}, "
+                f"{mv.prior.ci_high:.3f}] (n={mv.prior.n})"
+            )
         if mv.latest.is_estimable:
-            lines.append(f"  latest: {mv.latest.value:.3f} [{mv.latest.ci_low:.3f}, {mv.latest.ci_high:.3f}] (n={mv.latest.n})")
+            lines.append(
+                f"  latest: {mv.latest.value:.3f} [{mv.latest.ci_low:.3f}, "
+                f"{mv.latest.ci_high:.3f}] (n={mv.latest.n})"
+            )
 
     cov = cycle_report.get("coverage", {})
     no_fill_rate = cov.get("no_fill_rate")
@@ -133,8 +108,10 @@ async def run_cycle() -> dict:
 
     report = compute_report(rows)
     cycle = await _persist_cycle(report)
-    logger.info(f"app.calibration.run_cycle: persisted cycle {cycle.cycle_id} "
-                f"({len(rows)} rows, {report['expectancy']['resolved_count']} resolved).")
+    logger.info(
+        f"app.calibration.run_cycle: persisted cycle {cycle.cycle_id} "
+        f"({len(rows)} rows, {report['expectancy']['resolved_count']} resolved)."
+    )
 
     weight_versions = list(report.get("expectancy", {}).get("by_weight_version_stats", {}).keys())
     decisions = []
@@ -167,8 +144,10 @@ async def run_cycle() -> dict:
 
         summary = _format_summary(wv, decision, report)
         if decision.action == "ROLLBACK":
-            summary += "\n\n⚠️ AUTO-ROLLBACK — this was not gated behind approval; a genuine " \
-                       "contradiction between cycles is never auto-reconciled. Flagging for review."
+            summary += (
+                "\n\n⚠️ AUTO-ROLLBACK — this was not gated behind approval; a genuine "
+                "contradiction between cycles is never auto-reconciled. Flagging for review."
+            )
 
         try:
             if bot_module.application is None or bot_module.application.bot is None:
@@ -183,8 +162,10 @@ async def run_cycle() -> dict:
                     db_promo.telegram_message_id = msg.message_id
                     await session.commit()
         except Exception as e:
-            logger.error(f"app.calibration.run_cycle: failed to send promotion card for {wv} "
-                         f"({type(e).__name__}): {e}")
+            logger.error(
+                f"app.calibration.run_cycle: failed to send promotion card for {wv} "
+                f"({type(e).__name__}): {e}"
+            )
 
     return {
         "status": "ok",
