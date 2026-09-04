@@ -5,9 +5,10 @@ an evaluator/replay callback and never shuffles temporal observations.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any
 
 from .models import Evaluation, ParameterSet
 
@@ -79,18 +80,14 @@ def validate_candidate(
     minimum_median_improvement: float = 0.0,
     maximum_window_degradation: float = 0.25,
 ) -> WalkForwardResult:
-    """Validate a candidate on sequential, purged test windows.
-
-    ``score`` must be the same resolved-outcome metric implementation used by
-    the normal evaluator. The caller supplies it so this layer cannot invent
-    a second definition of expectancy or drawdown.
-    """
+    """Validate a candidate on sequential, purged test windows."""
     windows = windows or make_windows(rows, timestamp_field=timestamp_field)
     if not windows:
         return WalkForwardResult(False, (), (), (), 0.0, 0.0, "insufficient_temporal_history")
 
     train_evals: list[Evaluation] = []
     test_evals: list[Evaluation] = []
+    baseline_test_evals: list[Evaluation] = []
     for window in windows:
         train_rows = _slice(rows, window.train_start, window.train_end, timestamp_field)
         test_rows = _slice(rows, window.test_start, window.test_end, timestamp_field)
@@ -98,7 +95,6 @@ def validate_candidate(
             return WalkForwardResult(False, windows, tuple(train_evals), tuple(test_evals), 0.0, 0.0, "empty_window")
 
         train_candidate = tuple(replay(candidate, train_rows))
-        train_baseline = tuple(replay(baseline, train_rows))
         test_candidate = tuple(replay(candidate, test_rows))
         test_baseline = tuple(replay(baseline, test_rows))
         try:
@@ -110,13 +106,14 @@ def validate_candidate(
         if cand_test.trades < minimum_test_trades:
             return WalkForwardResult(False, windows, tuple(train_evals), tuple(test_evals), 0.0, 0.0, "insufficient_test_trades")
         test_evals.append(cand_test)
+        baseline_test_evals.append(base_test)
         improvement = cand_test.objective - base_test.objective
         if base_test.objective > 0 and improvement / base_test.objective < -maximum_window_degradation:
             return WalkForwardResult(False, windows, tuple(train_evals), tuple(test_evals), 0.0, 0.0, "window_degradation")
 
-    improvements = [cand.objective for cand in test_evals]
-    baseline_objectives = [score(tuple(replay(baseline, _slice(rows, w.test_start, w.test_end, timestamp_field)))).objective for w in windows]
-    deltas = [a - b for a, b in zip(improvements, baseline_objectives)]
+    improvements = [evaluation.objective for evaluation in test_evals]
+    baseline_objectives = [evaluation.objective for evaluation in baseline_test_evals]
+    deltas = [candidate_objective - baseline_objective for candidate_objective, baseline_objective in zip(improvements, baseline_objectives)]
     ordered = sorted(improvements)
     median = ordered[len(ordered) // 2] if ordered else 0.0
     worst = min(improvements) if improvements else 0.0
