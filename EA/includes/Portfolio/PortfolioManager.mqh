@@ -8,9 +8,8 @@
 #include "PortfolioRiskEngine.mqh"
 
 // Account-wide pre-order portfolio gate. Simple hard limits remain here;
-// rolling correlation, directional concentration and factor exposure are
-// delegated to CPortfolioRiskEngine. No learning-plane or network work is
-// permitted on the live tick path.
+// rolling correlation and factor exposure are delegated to the dedicated
+// risk engine. No HTTP, database or optimizer work is permitted here.
 class CPortfolioManager
   {
 private:
@@ -29,8 +28,7 @@ public:
              int maxPositionsPerGroup, ulong magic, CRiskEngine* risk,
              int correlationLookback = 50, double correlationThreshold = 0.70,
              double maxCorrelatedRiskPercent = 1.50, double maxFactorRiskPercent = 2.00);
-   bool AllowNewTrade(string symbol, ENUM_ORDER_TYPE orderType,
-                      double proposedRiskAmount, string &reasonOut);
+   bool AllowNewTrade(string symbol, double proposedRiskAmount, string &reasonOut);
   };
 
 void CPortfolioManager::Init(double maxPortfolioRiskPercent, int maxPositionsPerSymbol,
@@ -70,8 +68,7 @@ double CPortfolioManager::OpenRiskAmount(ulong ticket)
    return m_risk.RiskAmountForLots(symbol, volume, entry, sl);
   }
 
-bool CPortfolioManager::AllowNewTrade(string symbol, ENUM_ORDER_TYPE orderType,
-                                      double proposedRiskAmount, string &reasonOut)
+bool CPortfolioManager::AllowNewTrade(string symbol, double proposedRiskAmount, string &reasonOut)
   {
    reasonOut = "";
    string group = CorrelationGroup(symbol);
@@ -124,7 +121,7 @@ bool CPortfolioManager::AllowNewTrade(string symbol, ENUM_ORDER_TYPE orderType,
 
    PortfolioRiskSnapshot snapshot;
    string advancedReason;
-   if(!m_riskEngine.BuildSnapshot(symbol, orderType, proposedRiskAmount, m_magic, m_risk, snapshot, advancedReason))
+   if(!m_riskEngine.BuildSnapshot(symbol, proposedRiskAmount, m_magic, m_risk, snapshot, advancedReason))
      {
       reasonOut = advancedReason;
       return false;
