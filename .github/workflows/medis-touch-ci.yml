@@ -28,7 +28,6 @@ permissions:
 
 jobs:
   lint-and-test:
-    if: contains(toJson(github.event.commits.*.modified), 'medis_touch/') || github.event_name != 'push'
     runs-on: ubuntu-latest
     defaults:
       run:
