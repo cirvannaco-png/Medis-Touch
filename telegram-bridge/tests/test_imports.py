@@ -11,6 +11,15 @@ def test_application_factory_imports():
 def test_deployment_state_machine_is_local_to_bridge():
     from app.deployment import DeploymentState, transition
 
-    assert transition(DeploymentState.SCHEDULED, DeploymentState.EA_VALIDATED) is DeploymentState.EA_VALIDATED
-    assert transition(DeploymentState.EA_VALIDATED, DeploymentState.EA_ACKNOWLEDGED) is DeploymentState.EA_ACKNOWLEDGED
-    assert transition(DeploymentState.EA_ACKNOWLEDGED, DeploymentState.ACTIVE) is DeploymentState.ACTIVE
+    assert (
+        transition(DeploymentState.SCHEDULED, DeploymentState.EA_VALIDATED)
+        is DeploymentState.EA_VALIDATED
+    )
+    assert (
+        transition(DeploymentState.EA_VALIDATED, DeploymentState.EA_ACKNOWLEDGED)
+        is DeploymentState.EA_ACKNOWLEDGED
+    )
+    assert (
+        transition(DeploymentState.EA_ACKNOWLEDGED, DeploymentState.ACTIVE)
+        is DeploymentState.ACTIVE
+    )
