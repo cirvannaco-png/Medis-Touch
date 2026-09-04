@@ -5,51 +5,48 @@
 #define PORTFOLIOMANAGER_MQH
 
 #include "../Trading/RiskEngine.mqh"
+#include "PortfolioRiskEngine.mqh"
 
-// Exposure and correlation gate, evaluated BEFORE Submit() ever reaches
-// the broker. Deliberately account-wide, not symbol-local: if this EA
-// (same magic number) runs on several charts/symbols at once, each
-// instance's OrderManager only knows about ITS OWN trades — this class
-// is the one place that looks at every open position under this magic
-// number across the whole account before approving one more.
-//
-// SCOPE NOTE: "correlation" here is an asset-class bucket (FX / Metals /
-// Indices / Crypto), not a rolling correlation coefficient computed from
-// price history. A real pairwise correlation matrix is materially bigger
-// infrastructure — its own price-history fetch/cache per symbol pair, a
-// refresh cadence, a decision on window length — and is out of scope
-// here by the same anti-complexity rule the rest of this codebase
-// follows (see RiskEngine). A bucket cap still catches the common
-// failure mode — five EURUSD-cluster BUYs stacked at once — without
-// that machinery. Extend CorrelationGroup() if you need finer buckets.
+// Account-wide pre-order portfolio gate. Simple hard limits remain here;
+// rolling correlation, directional concentration and factor exposure are
+// delegated to CPortfolioRiskEngine. No learning-plane or network work is
+// permitted on the live tick path.
 class CPortfolioManager
   {
 private:
-   double            m_maxPortfolioRiskPercent;
-   int               m_maxPositionsPerSymbol;
-   int               m_maxPositionsPerGroup;
-   ulong             m_magic;
-   CRiskEngine*      m_risk;   // shared with the EA's own g_risk — see OpenRiskAmount() below
+   double               m_maxPortfolioRiskPercent;
+   int                  m_maxPositionsPerSymbol;
+   int                  m_maxPositionsPerGroup;
+   ulong                m_magic;
+   CRiskEngine*         m_risk;
+   CPortfolioRiskEngine m_riskEngine;
 
-   string            CorrelationGroup(string symbol);
-   double            OpenRiskAmount(ulong ticket);
+   string CorrelationGroup(string symbol);
+   double OpenRiskAmount(ulong ticket);
 
 public:
-   void              Init(double maxPortfolioRiskPercent, int maxPositionsPerSymbol,
-                          int maxPositionsPerGroup, ulong magic, CRiskEngine* risk);
-   bool              AllowNewTrade(string symbol, double proposedRiskAmount, string &reasonOut);
+   void Init(double maxPortfolioRiskPercent, int maxPositionsPerSymbol,
+             int maxPositionsPerGroup, ulong magic, CRiskEngine* risk,
+             int correlationLookback = 50, double correlationThreshold = 0.70,
+             double maxCorrelatedRiskPercent = 1.50, double maxFactorRiskPercent = 2.00);
+   bool AllowNewTrade(string symbol, ENUM_ORDER_TYPE orderType,
+                      double proposedRiskAmount, string &reasonOut);
   };
-//+------------------------------------------------------------------+
+
 void CPortfolioManager::Init(double maxPortfolioRiskPercent, int maxPositionsPerSymbol,
-                             int maxPositionsPerGroup, ulong magic, CRiskEngine* risk)
+                             int maxPositionsPerGroup, ulong magic, CRiskEngine* risk,
+                             int correlationLookback, double correlationThreshold,
+                             double maxCorrelatedRiskPercent, double maxFactorRiskPercent)
   {
-   m_maxPortfolioRiskPercent = maxPortfolioRiskPercent;
-   m_maxPositionsPerSymbol = maxPositionsPerSymbol;
-   m_maxPositionsPerGroup = maxPositionsPerGroup;
+   m_maxPortfolioRiskPercent = MathMax(0.0, maxPortfolioRiskPercent);
+   m_maxPositionsPerSymbol = MathMax(0, maxPositionsPerSymbol);
+   m_maxPositionsPerGroup = MathMax(0, maxPositionsPerGroup);
    m_magic = magic;
    m_risk = risk;
+   m_riskEngine.Init(correlationLookback, correlationThreshold,
+                     maxCorrelatedRiskPercent, maxFactorRiskPercent);
   }
-//+------------------------------------------------------------------+
+
 string CPortfolioManager::CorrelationGroup(string symbol)
   {
    if(StringFind(symbol, "BTC") >= 0 || StringFind(symbol, "ETH") >= 0 || StringFind(symbol, "XRP") >= 0)
@@ -61,30 +58,23 @@ string CPortfolioManager::CorrelationGroup(string symbol)
       return "INDICES";
    return "FX";
   }
-//+------------------------------------------------------------------+
-// FIX: this used to reimplement CRiskEngine::RiskAmountForLots' tick-value
-// math inline (tickValue/tickSize * distance * volume) as a second copy
-// living in a second file — exactly the kind of drift risk RiskEngine's
-// own comment on RiskAmountForLots was written to prevent. Now it calls
-// the shared method directly, so a broker-quirk fix or rounding-mode
-// change to that math only ever needs to happen in one place.
+
 double CPortfolioManager::OpenRiskAmount(ulong ticket)
   {
    if(!PositionSelectByTicket(ticket)) return 0.0;
    string symbol = PositionGetString(POSITION_SYMBOL);
-   double entry  = PositionGetDouble(POSITION_PRICE_OPEN);
-   double sl     = PositionGetDouble(POSITION_SL);
+   double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+   double sl = PositionGetDouble(POSITION_SL);
    double volume = PositionGetDouble(POSITION_VOLUME);
-   if(sl == 0) return 0.0; // no stop set — can't quantify; AllowNewTrade treats this as a gap, not zero risk
-
+   if(sl == 0) return 0.0;
    return m_risk.RiskAmountForLots(symbol, volume, entry, sl);
   }
-//+------------------------------------------------------------------+
-bool CPortfolioManager::AllowNewTrade(string symbol, double proposedRiskAmount, string &reasonOut)
+
+bool CPortfolioManager::AllowNewTrade(string symbol, ENUM_ORDER_TYPE orderType,
+                                      double proposedRiskAmount, string &reasonOut)
   {
    reasonOut = "";
    string group = CorrelationGroup(symbol);
-
    double totalRisk = proposedRiskAmount;
    int symbolCount = 0;
    int groupCount = 0;
@@ -125,10 +115,18 @@ bool CPortfolioManager::AllowNewTrade(string symbol, double proposedRiskAmount, 
       reasonOut = "an existing open position under this magic number has no stop loss set — portfolio risk can't be verified, refusing new trades until it's resolved";
       return false;
      }
-   if(totalRisk > maxRiskAmount)
+   if(m_maxPortfolioRiskPercent > 0 && totalRisk > maxRiskAmount)
      {
       reasonOut = StringFormat("adding this trade would bring total open risk to %.2f, above the %.2f%% portfolio cap (%.2f)",
                                totalRisk, m_maxPortfolioRiskPercent, maxRiskAmount);
+      return false;
+     }
+
+   PortfolioRiskSnapshot snapshot;
+   string advancedReason;
+   if(!m_riskEngine.BuildSnapshot(symbol, orderType, proposedRiskAmount, m_magic, m_risk, snapshot, advancedReason))
+     {
+      reasonOut = advancedReason;
       return false;
      }
    return true;
