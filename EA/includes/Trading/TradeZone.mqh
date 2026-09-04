@@ -145,6 +145,15 @@ double CTradeDecision::RuntimeContradictionPenalty(const SetupReasons &r)
 void CTradeDecision::ApplyRuntimeOverlay(TradeSetup &setup)
   {
    if(!m_runtimeEnabled) return;
+
+   bool forBuy = (setup.type == ORDER_TYPE_BUY);
+   InducementResult ind = m_scoring.GetInducement(forBuy);
+   if(!ind.valid || ind.bosBarIndex < 0 || ind.bosBarIndex > m_runtime.freshness_bars)
+     {
+      setup.active = false;
+      return;
+     }
+
    double contradiction = RuntimeContradictionPenalty(setup.reasons);
    setup.confidence *= (1.0 - contradiction);
    double required = RuntimeStrategyThreshold(setup);
