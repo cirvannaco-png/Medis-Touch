@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config_registry import ParameterConfiguration, ParameterDeployment, ParameterDeploymentAck
 from app.database import get_session
+from app.parameter_proposal.deployment import transition
+from app.parameter_proposal.models import DeploymentState
 from app.routes import verify_api_key
 
 router = APIRouter(tags=["configuration"])
@@ -39,15 +41,16 @@ class ConfigAckResponse(BaseModel):
 
 def _advance_ea_validation(deployment: ParameterDeployment | None) -> None:
     """Advance only SCHEDULED deployments after successful EA validation."""
-    if deployment is not None and deployment.state == "SCHEDULED":
-        deployment.state = "EA_VALIDATED"
+    if deployment is not None and deployment.state == DeploymentState.SCHEDULED.value:
+        deployment.state = transition(DeploymentState.SCHEDULED, DeploymentState.EA_VALIDATED).value
 
 
 def _advance_ea_applied(deployment: ParameterDeployment | None) -> None:
     """Activate only after the EA explicitly reports runtime application."""
-    if deployment is not None and deployment.state == "EA_VALIDATED":
-        deployment.state = "EA_ACKNOWLEDGED"
-        deployment.state = "ACTIVE"
+    if deployment is not None and deployment.state == DeploymentState.EA_VALIDATED.value:
+        state = transition(DeploymentState.EA_VALIDATED, DeploymentState.EA_ACKNOWLEDGED)
+        state = transition(state, DeploymentState.ACTIVE)
+        deployment.state = state.value
         deployment.activated_at = datetime.now(timezone.utc)
 
 
