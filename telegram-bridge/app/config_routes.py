@@ -9,8 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config_registry import ParameterConfiguration, ParameterDeployment, ParameterDeploymentAck
 from app.database import get_session
-from app.parameter_proposal.deployment import transition
-from app.parameter_proposal.models import DeploymentState
 from app.routes import verify_api_key
 
 router = APIRouter(tags=["configuration"])
@@ -37,6 +35,12 @@ class ConfigAckResponse(BaseModel):
     status: str
     config_hash: str
     symbol: str
+
+
+def _advance_ea_validation(deployment: ParameterDeployment | None) -> None:
+    """Advance only SCHEDULED deployments; never infer ACTIVE from VALIDATED."""
+    if deployment is not None and deployment.state == "SCHEDULED":
+        deployment.state = "EA_VALIDATED"
 
 
 @router.get("/config/{symbol}", response_model=ConfigResponseV2)
@@ -95,7 +99,7 @@ async def acknowledge_config(
     """Persist an EA acknowledgement and advance a scheduled deployment safely.
 
     VALIDATED means the EA parsed and bounds-checked the payload. It is never
-    treated as APPLIED or ACTIVE. This keeps the backend fail-closed until an
+    treated as APPLIED or ACTIVE. This keeps the bridge fail-closed until an
     EA build explicitly implements runtime parameter application.
     """
     config = await session.scalar(
@@ -125,8 +129,8 @@ async def acknowledge_config(
         )
     )
 
-    if deployment is not None and payload.status == "VALIDATED" and deployment.state == DeploymentState.SCHEDULED.value:
-        deployment.state = transition(DeploymentState.SCHEDULED, DeploymentState.EA_VALIDATED).value
+    if payload.status == "VALIDATED":
+        _advance_ea_validation(deployment)
 
     await session.commit()
     return ConfigAckResponse(status="recorded", config_hash=payload.config_hash, symbol=symbol)
