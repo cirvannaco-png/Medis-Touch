@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.parameter_proposal.bounds import PARAMETERS
 from app.parameter_proposal.config.canonical import canonical_json, config_hash
 from app.parameter_proposal.config.schema import validate_parameter_set
 from app.parameter_proposal.models import ParameterSet
@@ -9,7 +10,6 @@ from app.parameter_proposal.multiple_testing import holm_bonferroni
 from app.parameter_proposal.paired_stats import paired_mean_test
 from app.parameter_proposal.search_budget import SearchBudget
 from app.parameter_proposal.walk_forward import make_windows
-from app.parameter_proposal.bounds import PARAMETERS
 
 
 def parameter_set():
