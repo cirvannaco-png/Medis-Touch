@@ -5,7 +5,7 @@
 #ifndef CONFIGSYNC_MQH
 #define CONFIGSYNC_MQH
 
-#include "../Core/RuntimeParameters.mqh"
+#include "../Core/RuntimeConfigBus.mqh"
 
 class CConfigSync
   {
@@ -46,8 +46,7 @@ public:
       m_ackEndpoint = base + "/config/" + symbol + "/ack";
      }
 
-   bool Poll(RuntimeParameters &candidate, string &configHash, string &reason);
-   void MarkApplied(const string &configHash) { m_lastAppliedHash = configHash; }
+   void Poll(void);
    string LastAppliedHash() const { return m_lastAppliedHash; }
   };
 
@@ -143,11 +142,9 @@ bool CConfigSync::ValidateParams(const string &json, RuntimeParameters &out, str
    return true;
   }
 
-bool CConfigSync::Poll(RuntimeParameters &candidate, string &configHash, string &reason)
+void CConfigSync::Poll(void)
   {
-   configHash = "";
-   reason = "";
-   if(StringLen(m_endpoint) == 0) return false;
+   if(StringLen(m_endpoint) == 0) return;
 
    char data[];
    char result[];
@@ -158,35 +155,49 @@ bool CConfigSync::Poll(RuntimeParameters &candidate, string &configHash, string 
 
    ResetLastError();
    int status = WebRequest("GET", m_endpoint, headers, m_timeoutMs, data, result, resultHeaders);
-   if(status == -1 || status < 200 || status >= 300) return false;
+   if(status == -1 || status < 200 || status >= 300) return;
 
    string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
-   if(!ExtractJsonStringField(body, "config_hash", configHash)) return false;
-   if(StringLen(configHash) != 64 || configHash == m_lastAppliedHash) return false;
+   string configHash;
+   if(!ExtractJsonStringField(body, "config_hash", configHash)) return;
+   if(StringLen(configHash) != 64 || configHash == m_lastAppliedHash) return;
 
    string state;
-   if(!ExtractJsonStringField(body, "state", state)) return false;
-   if(state != "SCHEDULED" && state != "EA_VALIDATED" && state != "ACTIVE") return false;
+   if(!ExtractJsonStringField(body, "state", state)) return;
+   if(state != "SCHEDULED" && state != "EA_VALIDATED" && state != "ACTIVE") return;
 
    string parentVersion;
-   if(!ExtractJsonStringField(body, "parent_version", parentVersion)) return false;
+   if(!ExtractJsonStringField(body, "parent_version", parentVersion)) return;
    if(parentVersion != m_compiledWeightVersion)
      {
-      reason = "parent_version_mismatch";
-      Ack(configHash, "REJECTED", reason);
-      return false;
+      PrintFormat("MedisTouch ConfigSync: rejected config %s — parent '%s' != compiled '%s'.",
+                  configHash, parentVersion, m_compiledWeightVersion);
+      Ack(configHash, "REJECTED", "parent_version_mismatch");
+      return;
      }
 
    RuntimeParameters parsed;
    parsed.Defaults();
+   string reason;
    if(!ValidateParams(body, parsed, reason))
      {
       Ack(configHash, "REJECTED", reason);
-      return false;
+      return;
      }
 
-   candidate = parsed;
-   return true;
+   IRuntimeConfigConsumer *consumer = GetRuntimeConfigConsumer();
+   if(consumer == NULL)
+     {
+      Ack(configHash, "REJECTED", "runtime_consumer_not_bound");
+      return;
+     }
+
+   // All validation happens before application. Application itself is local
+   // scalar/config state and does not perform HTTP, database or statistics.
+   consumer.ApplyRuntimeParameters(parsed);
+   m_lastAppliedHash = configHash;
+   Ack(configHash, "APPLIED", "runtime_parameters_applied_atomically");
+   PrintFormat("MedisTouch ConfigSync: applied config %s to %s.", configHash, m_symbol);
   }
 
 #endif // CONFIGSYNC_MQH
