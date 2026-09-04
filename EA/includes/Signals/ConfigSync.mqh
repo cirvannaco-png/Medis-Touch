@@ -2,11 +2,9 @@
 //| ConfigSync.mqh                                                    |
 //| Production configuration validation + acknowledgement.            |
 //|                                                                    |
-//| IMPORTANT: this class NEVER mutates trading parameters. The live   |
-//| tick path continues to use locally compiled/cached state. A config |
-//| is acknowledged only after its schema, hash shape, and parameter  |
-//| bounds are validated. Runtime parameter application remains an     |
-//| explicit EA release concern, not an HTTP side effect.              |
+//| The EA never mutates trading parameters from an HTTP response.     |
+//| It validates the registry payload, acknowledges that validation,   |
+//| and leaves activation to an explicit EA release.                   |
 //+------------------------------------------------------------------+
 #ifndef CONFIGSYNC_MQH
 #define CONFIGSYNC_MQH
@@ -21,7 +19,6 @@ private:
    string   m_compiledWeightVersion;
    int      m_timeoutMs;
    string   m_lastSeenHash;
-   bool     m_everWarned;
 
    bool ExtractJsonStringField(const string &json, string field, string &out);
    bool ExtractJsonNumberField(const string &json, string field, double &out);
@@ -29,7 +26,7 @@ private:
    void Ack(const string &configHash, const string &status, const string &reason);
 
 public:
-            CConfigSync(void) : m_timeoutMs(5000), m_lastSeenHash(""), m_everWarned(false) {}
+   CConfigSync(void) : m_timeoutMs(5000), m_lastSeenHash("") {}
 
    void Init(string symbol, string signalEndpoint, string apiKey, string compiledWeightVersion, int timeoutMs = 5000)
      {
@@ -156,32 +153,34 @@ void CConfigSync::Poll(void)
    string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
    string configHash;
    if(!ExtractJsonStringField(body, "config_hash", configHash)) return;
-   if(StringLen(configHash) == 0) return;
+   if(StringLen(configHash) == 0 || StringLen(configHash) != 64) return;
    if(configHash == m_lastSeenHash) return;
-   m_lastSeenHash = configHash;
+
+   string parentVersion;
+   if(!ExtractJsonStringField(body, "parent_version", parentVersion)) return;
+   if(parentVersion != m_compiledWeightVersion)
+     {
+      m_lastSeenHash = configHash;
+      PrintFormat("MedisTouch ConfigSync: rejected config %s for %s — parent '%s' does not match compiled weight version '%s'.",
+                  configHash, m_symbol, parentVersion, m_compiledWeightVersion);
+      Ack(configHash, "REJECTED", "parent_version_mismatch");
+      return;
+     }
 
    string reason;
    if(!ValidateParams(body, reason))
      {
+      m_lastSeenHash = configHash;
       PrintFormat("MedisTouch ConfigSync: rejected config %s for %s: %s", configHash, m_symbol, reason);
       Ack(configHash, "REJECTED", reason);
       return;
      }
 
-   // Validation is deliberately separate from activation. This EA build
-   // does not dynamically mutate its compiled strategy parameters; it can
-   // prove a registry config is safe to parse, then report that fact. The
-   // deployment controller must not interpret VALIDATED as APPLIED.
-   Ack(configHash, "VALIDATED", "schema_and_bounds_valid; runtime_application_not_enabled_in_this_build");
-
-   string parentVersion;
-   ExtractJsonStringField(body, "parent_version", parentVersion);
-   if(parentVersion != m_compiledWeightVersion && !m_everWarned)
-     {
-      PrintFormat("MedisTouch ConfigSync: config %s is validated but targets parent '%s'; compiled weight version is '%s'. No live parameters were changed.",
-                  configHash, parentVersion, m_compiledWeightVersion);
-      m_everWarned = true;
-     }
+   m_lastSeenHash = configHash;
+   // Validation is deliberately separate from activation. This build does
+   // not dynamically mutate compiled strategy parameters. VALIDATED means
+   // only that the EA accepted the registry schema, hash and bounds.
+   Ack(configHash, "VALIDATED", "schema_bounds_and_parent_valid; runtime_application_not_enabled");
   }
 
 #endif // CONFIGSYNC_MQH
