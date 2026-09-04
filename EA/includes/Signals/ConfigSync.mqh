@@ -21,7 +21,7 @@ private:
    bool ExtractJsonStringField(const string &json, string field, string &out);
    bool ExtractJsonNumberField(const string &json, string field, double &out);
    bool ValidateParams(const string &json, RuntimeParameters &out, string &reason);
-   void Ack(const string &configHash, const string &status, const string &reason);
+   bool Ack(const string &configHash, const string &status, const string &reason);
 
 public:
    CConfigSync(void) : m_timeoutMs(1500), m_lastAppliedHash("") {}
@@ -50,9 +50,9 @@ public:
    string LastAppliedHash() const { return m_lastAppliedHash; }
   };
 
-void CConfigSync::Ack(const string &configHash, const string &status, const string &reason)
+bool CConfigSync::Ack(const string configHash, const string status, const string reason)
   {
-   if(StringLen(m_ackEndpoint) == 0 || StringLen(configHash) != 64) return;
+   if(StringLen(m_ackEndpoint) == 0 || StringLen(configHash) != 64) return false;
 
    string escapedReason = reason;
    StringReplace(escapedReason, "\\", "\\\\");
@@ -75,7 +75,11 @@ void CConfigSync::Ack(const string &configHash, const string &status, const stri
    ResetLastError();
    int statusCode = WebRequest("POST", m_ackEndpoint, headers, m_timeoutMs, data, result, resultHeaders);
    if(statusCode < 200 || statusCode >= 300)
+     {
       PrintFormat("MedisTouch ConfigSync: ACK failed for %s (HTTP %d, err %d).", configHash, statusCode, GetLastError());
+      return false;
+     }
+   return true;
   }
 
 bool CConfigSync::ExtractJsonStringField(const string &json, string field, string &out)
@@ -192,11 +196,22 @@ void CConfigSync::Poll(void)
       return;
      }
 
-   // All validation happens before application. Application itself is local
-   // scalar/config state and does not perform HTTP, database or statistics.
+   // SCHEDULED -> EA_VALIDATED is deliberately a separate acknowledgement.
+   // This prevents the backend from activating a configuration merely because
+   // the EA could parse it. The APPLIED acknowledgement is sent only after the
+   // local runtime object has accepted the complete validated parameter set.
+   if(state == "SCHEDULED" && !Ack(configHash, "VALIDATED", "runtime_parameters_validated"))
+      return;
+
    consumer.ApplyRuntimeParameters(parsed);
+
+   // If this acknowledgement fails, do not advance m_lastAppliedHash. The
+   // next poll retries the APPLIED handshake while re-applying the same
+   // idempotent local configuration.
+   if(!Ack(configHash, "APPLIED", "runtime_parameters_applied_atomically"))
+      return;
+
    m_lastAppliedHash = configHash;
-   Ack(configHash, "APPLIED", "runtime_parameters_applied_atomically");
    PrintFormat("MedisTouch ConfigSync: applied config %s to %s.", configHash, m_symbol);
   }
 
