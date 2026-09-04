@@ -1,16 +1,21 @@
 name: medis-touch handbook CI
 
 # Lints, security-scans and tests the handbook reference implementation
-# (medis_touch/). Separate from telegram-bridge CI: this package has its own
-# dependency set (httpx + cryptography only) and no database/Telegram config.
+# (medis_touch/). The MQL5 tree is validated by a separate fast static job;
+# MetaEditor is terminal/Windows-bound and is therefore not available on the
+# Ubuntu runner.
 on:
   push:
     paths:
       - "medis_touch/**"
+      - "EA/**"
+      - "tools/validate_mql5_structure.py"
       - ".github/workflows/medis-touch-ci.yml"
   pull_request:
     paths:
       - "medis_touch/**"
+      - "EA/**"
+      - "tools/validate_mql5_structure.py"
       - ".github/workflows/medis-touch-ci.yml"
   workflow_dispatch:
 
@@ -21,13 +26,13 @@ concurrency:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: medis_touch
-
 jobs:
   lint-and-test:
+    if: contains(toJson(github.event.commits.*.modified), 'medis_touch/') || github.event_name != 'push'
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: medis_touch
     steps:
       - uses: actions/checkout@v4
 
@@ -50,3 +55,15 @@ jobs:
 
       - name: Test (pytest)
         run: pytest -v
+
+  mql5-structure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate MQL5 structure
+        run: python tools/validate_mql5_structure.py
