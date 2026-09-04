@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config_registry import ParameterConfiguration, ParameterDeployment, ParameterDeploymentAck
@@ -38,7 +38,7 @@ class ConfigAckResponse(BaseModel):
 
 
 def _advance_ea_validation(deployment: ParameterDeployment | None) -> None:
-    """Advance only SCHEDULED deployments after a successful EA validation."""
+    """Advance only SCHEDULED deployments after successful EA validation."""
     if deployment is not None and deployment.state == "SCHEDULED":
         deployment.state = "EA_VALIDATED"
 
@@ -57,18 +57,21 @@ async def get_active_config(
     session: AsyncSession = Depends(get_session),
     _auth: bool = Depends(verify_api_key),
 ):
-    """Return the current deployable configuration for this symbol.
-
-    The EA performs one network read on its timer, then caches the response.
-    No database call is made from the EA tick/decision path.
-    """
+    """Return the highest-priority configuration awaiting EA validation/application."""
     deployment = await session.scalar(
         select(ParameterDeployment)
         .where(
             ParameterDeployment.symbol == symbol,
-            ParameterDeployment.state.in_(["ACTIVE", "SCHEDULED"]),
+            ParameterDeployment.state.in_(["SCHEDULED", "EA_VALIDATED", "ACTIVE"]),
         )
-        .order_by(ParameterDeployment.activated_at.desc(), ParameterDeployment.created_at.desc())
+        .order_by(
+            case(
+                (ParameterDeployment.state == "SCHEDULED", 0),
+                (ParameterDeployment.state == "EA_VALIDATED", 1),
+                else_=2,
+            ),
+            ParameterDeployment.created_at.desc(),
+        )
         .limit(1)
     )
     if deployment is None:
@@ -85,7 +88,7 @@ async def get_active_config(
         select(ParameterConfiguration).where(ParameterConfiguration.config_hash == deployment.config_hash)
     )
     if config is None or config.validation_state not in {"VALIDATED", "TESTED", "APPROVED", "ACTIVE"}:
-        raise HTTPException(status_code=503, detail="active configuration is missing or not deployable")
+        raise HTTPException(status_code=503, detail="deployable configuration is missing or not validated")
 
     return ConfigResponseV2(
         symbol=symbol,
