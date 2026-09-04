@@ -7,11 +7,12 @@
 #include "../Core/Config.mqh"
 #include "../Core/CandleData.mqh"
 #include "../Core/RuntimeParameters.mqh"
+#include "../Core/RuntimeConfigBus.mqh"
 #include "../Analysis/TFContext.mqh"
 #include "../Analysis/Scoring.mqh"
 #include "Targets.mqh"
 
-class CTradeDecision
+class CTradeDecision : public IRuntimeConfigConsumer
   {
 private:
    CCandleData*      m_priceRef;
@@ -49,6 +50,7 @@ CTradeDecision::CTradeDecision()
    m_fvgMaxDistATR = 3.0;
    m_runtimeEnabled = false;
    m_runtime.Defaults();
+   BindRuntimeConfigConsumer(this);
   }
 
 void CTradeDecision::Init(CCandleData* priceRef, CTFContext* fvgCtx, CTFContext* liqCtx, CScoringEngine* scoring,
@@ -64,16 +66,11 @@ void CTradeDecision::Init(CCandleData* priceRef, CTFContext* fvgCtx, CTFContext*
 
 void CTradeDecision::ApplyRuntimeParameters(const RuntimeParameters &parameters)
   {
-   // ConfigSync has already performed range validation. Copying the whole
-   // struct is atomic at the application boundary; no partial parameter set
-   // can be observed by Generate*Setup().
    m_runtime = parameters;
    m_runtimeEnabled = true;
    m_fvgMaxDistATR = parameters.fvg_proximity_atr;
   }
 
-// Widens (never tightens) a stop so its distance from the real execution
-// entry is at least (current spread * m_minStopSpreadMult).
 double CTradeDecision::EnforceSpreadFloor(string symbol, double entry, double stopLoss, bool isBuy)
   {
    if(m_minStopSpreadMult <= 0.0) return stopLoss;
@@ -148,12 +145,8 @@ double CTradeDecision::RuntimeContradictionPenalty(const SetupReasons &r)
 void CTradeDecision::ApplyRuntimeOverlay(TradeSetup &setup)
   {
    if(!m_runtimeEnabled) return;
-
-   // Runtime parameters are an overlay on the compiled analysis engine.
-   // The expensive detectors still run once; this step is only scalar math.
    double contradiction = RuntimeContradictionPenalty(setup.reasons);
    setup.confidence *= (1.0 - contradiction);
-
    double required = RuntimeStrategyThreshold(setup);
    if(setup.confidence < required)
       setup.active = false;
@@ -164,16 +157,12 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    TradeSetup setup;
    ZeroMemory(setup);
    if(m_priceRef == NULL || m_fvgCtx == NULL || m_scoring == NULL) return setup;
-
    double conf = m_scoring.CalculateConfidence(true);
    if(conf < 50.0) return setup;
-
    FVGZone entryFVG;
    if(!FindEntryFVG(FVG_BULL, entryFVG)) return setup;
-
    double atr = m_fvgCtx.candles.GetATR(0);
    if(atr <= 0) return setup;
-
    setup.type = ORDER_TYPE_BUY;
    setup.entry_top = entryFVG.top;
    setup.entry_bottom = entryFVG.bottom;
@@ -196,16 +185,12 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    TradeSetup setup;
    ZeroMemory(setup);
    if(m_priceRef == NULL || m_fvgCtx == NULL || m_scoring == NULL) return setup;
-
    double conf = m_scoring.CalculateConfidence(false);
    if(conf < 50.0) return setup;
-
    FVGZone entryFVG;
    if(!FindEntryFVG(FVG_BEAR, entryFVG)) return setup;
-
    double atr = m_fvgCtx.candles.GetATR(0);
    if(atr <= 0) return setup;
-
    setup.type = ORDER_TYPE_SELL;
    setup.entry_top = entryFVG.top;
    setup.entry_bottom = entryFVG.bottom;
