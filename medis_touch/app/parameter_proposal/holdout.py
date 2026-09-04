@@ -5,9 +5,10 @@ for finalists after cheaper validation has passed.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any
 
 from .models import Evaluation, ParameterSet
 
@@ -33,14 +34,20 @@ def validate_holdout(
     minimum_trades: int = 300,
     minimum_improvement: float = 0.05,
 ) -> HoldoutResult:
-    holdout = tuple(
-        row for row in rows
-        if isinstance(row, dict)
-        and isinstance(row.get("received_at"), datetime)
-        and start <= row["received_at"] < end
-        or not isinstance(row, dict)
-        and isinstance(getattr(row, "received_at", None), datetime)
-        and start <= getattr(row, "received_at") < end
+    """Score candidate and baseline on the same independent holdout rows."""
+    holdout: tuple[Any, ...] = tuple(
+        row
+        for row in rows
+        if (
+            isinstance(row, dict)
+            and isinstance(row.get("received_at"), datetime)
+            and start <= row["received_at"] < end
+        )
+        or (
+            not isinstance(row, dict)
+            and isinstance(getattr(row, "received_at", None), datetime)
+            and start <= row.received_at < end
+        )
     )
     if not holdout:
         return HoldoutResult(False, None, None, 0.0, "empty_holdout")
