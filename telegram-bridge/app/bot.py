@@ -49,6 +49,13 @@ from app.bot_handlers import (
 )
 from app.bot_promotions import CALLBACK_PREFIX, handle_promotion_callback
 from app.config import settings
+from app.control_plane import (
+    config,
+    ea,
+    learning,
+    portfolio,
+    portfolio_detail,
+)
 from app.logger import logger
 
 application: Application | None = None
@@ -74,14 +81,12 @@ def _build_application() -> Application:
     app.add_handler(CommandHandler("resume", resume))
     app.add_handler(CommandHandler("retry", retry))
     app.add_handler(CommandHandler("version", version_command))
-    # v2.11 step 5 — tap-to-approve promotion cards. Pattern-matched on
-    # the "promo:" prefix (see bot_promotions.py) so this handler can't
-    # accidentally swallow callback_query updates from some future,
-    # unrelated inline-keyboard feature.
+    app.add_handler(CommandHandler("portfolio", portfolio_detail))
+    app.add_handler(CommandHandler("portfolio", portfolio))
+    app.add_handler(CommandHandler("config", config))
+    app.add_handler(CommandHandler("ea", ea))
+    app.add_handler(CommandHandler("learning", learning))
     app.add_handler(CallbackQueryHandler(handle_promotion_callback, pattern=f"^{CALLBACK_PREFIX}:"))
-    # Catches any other "/whatever" sent to the bot. Must be added last -
-    # PTB tries handlers in registration order and stops at the first match,
-    # so this only fires when none of the specific commands above matched.
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
     return app
@@ -108,14 +113,19 @@ async def init_bot() -> None:
 
         await application.bot.set_my_commands(
             [BotCommand(name, desc) for name, desc in COMMAND_LIST]
+            + [
+                BotCommand("portfolio", "Portfolio status; use subcommands for detail"),
+                BotCommand("config", "Read configuration registry"),
+                BotCommand("ea", "Read EA deployment and ACK status"),
+                BotCommand("learning", "Read optimizer and challenger status"),
+            ]
         )
 
         if not settings.RENDER_EXTERNAL_URL and not settings.WEBHOOK_URL:
             logger.warning(
                 "Neither RENDER_EXTERNAL_URL nor WEBHOOK_URL is set — "
-                "skipping set_webhook(). Inbound commands (/start, "
-                "/positions, ...) will not work until the webhook is "
-                "registered."
+                "skipping set_webhook(). Inbound commands will not work "
+                "until the webhook is registered."
             )
             return
 
@@ -123,13 +133,6 @@ async def init_bot() -> None:
         await application.bot.set_webhook(
             url=url,
             secret_token=settings.WEBHOOK_SECRET_TOKEN,
-            # v2.11 — "callback_query" added for step 5's tap-to-approve
-            # promotion cards (InlineKeyboardButton taps arrive as
-            # callback_query updates, never as "message"). Without this,
-            # Telegram silently never delivers button taps to this
-            # webhook at all — process_update()/application.process_update()
-            # are already update-type-agnostic (see bot.py), so this one
-            # line was the actual gap.
             allowed_updates=["message", "callback_query"],
             drop_pending_updates=True,
         )
@@ -149,10 +152,6 @@ async def shutdown_bot() -> None:
         await application.stop()
         await application.shutdown()
     except Exception as e:
-        # Mirrors init_bot(): if startup only partially completed (e.g.
-        # initialize() succeeded but the network died before start()),
-        # stop()/shutdown() can themselves raise. Never let bot teardown
-        # block the rest of the app's shutdown sequence.
         logger.warning(f"Bot shutdown incomplete ({type(e).__name__}): {e}")
     finally:
         application = None
