@@ -12,6 +12,8 @@ def test_deployment_follows_explicit_state_machine():
         DeploymentState.PENDING_APPROVAL,
         DeploymentState.APPROVED,
         DeploymentState.SCHEDULED,
+        DeploymentState.EA_VALIDATED,
+        DeploymentState.EA_ACKNOWLEDGED,
         DeploymentState.ACTIVE,
     ):
         state = transition(state, target)
@@ -22,3 +24,8 @@ def test_deployment_follows_explicit_state_machine():
 def test_deployment_rejects_skipping_approval():
     with pytest.raises(ValueError, match="invalid deployment transition"):
         transition(DeploymentState.TESTED, DeploymentState.ACTIVE)
+
+
+def test_deployment_rejects_activation_without_ea_ack():
+    with pytest.raises(ValueError, match="invalid deployment transition"):
+        transition(DeploymentState.SCHEDULED, DeploymentState.ACTIVE)
