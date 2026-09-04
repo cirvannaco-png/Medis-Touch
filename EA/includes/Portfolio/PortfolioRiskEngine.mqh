@@ -1,8 +1,7 @@
 //+------------------------------------------------------------------+
 //| Portfolio/PortfolioRiskEngine.mqh                                |
 //| Account-wide rolling-correlation and factor-exposure gate.        |
-//| Conservative by design: correlated risk is counted regardless of  |
-//| trade direction. No network, database or optimizer work occurs.  |
+//| Expensive market-data reads are cached per M15 bar.               |
 //+------------------------------------------------------------------+
 #ifndef PORTFOLIORISKENGINE_MQH
 #define PORTFOLIORISKENGINE_MQH
@@ -18,6 +17,14 @@ struct PortfolioRiskSnapshot
    bool   valid;
   };
 
+struct CorrelationCacheEntry
+  {
+   string   symbolA;
+   string   symbolB;
+   datetime barTime;
+   double   value;
+  };
+
 class CPortfolioRiskEngine
   {
 private:
@@ -25,11 +32,14 @@ private:
    double m_correlationThreshold;
    double m_maxCorrelatedRiskPercent;
    double m_maxFactorRiskPercent;
+   CorrelationCacheEntry m_cache[];
 
    bool GetReturns(string symbol, int count, double &returns[]);
+   double CalculateCorrelation(string symbolA, string symbolB);
    double Correlation(string symbolA, string symbolB);
    double OpenRisk(ulong ticket, CRiskEngine &risk);
    string FactorGroup(string symbol);
+   datetime CorrelationBarTime();
 
 public:
    void Init(int correlationLookback = 50, double correlationThreshold = 0.70,
@@ -45,6 +55,12 @@ void CPortfolioRiskEngine::Init(int correlationLookback, double correlationThres
    m_correlationThreshold = MathMax(0.50, MathMin(0.95, correlationThreshold));
    m_maxCorrelatedRiskPercent = MathMax(0.0, maxCorrelatedRiskPercent);
    m_maxFactorRiskPercent = MathMax(0.0, maxFactorRiskPercent);
+   ArrayResize(m_cache, 0);
+  }
+
+datetime CPortfolioRiskEngine::CorrelationBarTime()
+  {
+   return iTime(_Symbol, PERIOD_M15, 0);
   }
 
 bool CPortfolioRiskEngine::GetReturns(string symbol, int count, double &returns[])
@@ -61,7 +77,7 @@ bool CPortfolioRiskEngine::GetReturns(string symbol, int count, double &returns[
    return true;
   }
 
-double CPortfolioRiskEngine::Correlation(string symbolA, string symbolB)
+double CPortfolioRiskEngine::CalculateCorrelation(string symbolA, string symbolB)
   {
    if(symbolA == symbolB) return 1.0;
    double a[], b[];
@@ -85,6 +101,44 @@ double CPortfolioRiskEngine::Correlation(string symbolA, string symbolB)
      }
    if(va <= 0 || vb <= 0) return 0.0;
    return cov / MathSqrt(va * vb);
+  }
+
+double CPortfolioRiskEngine::Correlation(string symbolA, string symbolB)
+  {
+   datetime barTime = CorrelationBarTime();
+   for(int i = 0; i < ArraySize(m_cache); i++)
+     {
+      bool samePair = (m_cache[i].symbolA == symbolA && m_cache[i].symbolB == symbolB) ||
+                      (m_cache[i].symbolA == symbolB && m_cache[i].symbolB == symbolA);
+      if(samePair && m_cache[i].barTime == barTime)
+         return m_cache[i].value;
+     }
+
+   double value = CalculateCorrelation(symbolA, symbolB);
+   int n = ArraySize(m_cache);
+   ArrayResize(m_cache, n + 1);
+   m_cache[n].symbolA = symbolA;
+   m_cache[n].symbolB = symbolB;
+   m_cache[n].barTime = barTime;
+   m_cache[n].value = value;
+
+   // Keep the cache bounded. A normal portfolio has only a handful of pairs;
+   // old-bar entries have no value once a new M15 bar is available.
+   if(ArraySize(m_cache) > 64)
+     {
+      CorrelationCacheEntry fresh[];
+      int kept = 0;
+      ArrayResize(fresh, ArraySize(m_cache));
+      for(int i = 0; i < ArraySize(m_cache); i++)
+        {
+         if(m_cache[i].barTime == barTime)
+            fresh[kept++] = m_cache[i];
+        }
+      ArrayResize(fresh, kept);
+      ArrayResize(m_cache, kept);
+      for(int i = 0; i < kept; i++) m_cache[i] = fresh[i];
+     }
+   return value;
   }
 
 double CPortfolioRiskEngine::OpenRisk(ulong ticket, CRiskEngine &risk)
@@ -177,3 +231,4 @@ bool CPortfolioRiskEngine::BuildSnapshot(string proposedSymbol, double proposedR
   }
 
 #endif // PORTFOLIORISKENGINE_MQH
+//+------------------------------------------------------------------+
