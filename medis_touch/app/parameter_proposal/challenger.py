@@ -1,8 +1,8 @@
 """Champion/challenger validation helpers kept off the live execution path."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 from .models import ParameterSet
 from .multiple_testing import holm_bonferroni
