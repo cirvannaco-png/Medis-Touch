@@ -9,8 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config_registry import ParameterConfiguration, ParameterDeployment, ParameterDeploymentAck
 from app.database import get_session
-from app.parameter_proposal.deployment import transition
-from app.parameter_proposal.models import DeploymentState
+from app.deployment import DeploymentState, transition
 from app.routes import verify_api_key
 
 router = APIRouter(tags=["configuration"])
@@ -40,13 +39,11 @@ class ConfigAckResponse(BaseModel):
 
 
 def _advance_ea_validation(deployment: ParameterDeployment | None) -> None:
-    """Advance only SCHEDULED deployments after successful EA validation."""
     if deployment is not None and deployment.state == DeploymentState.SCHEDULED.value:
         deployment.state = transition(DeploymentState.SCHEDULED, DeploymentState.EA_VALIDATED).value
 
 
 def _advance_ea_applied(deployment: ParameterDeployment | None) -> None:
-    """Activate only after the EA explicitly reports runtime application."""
     if deployment is not None and deployment.state == DeploymentState.EA_VALIDATED.value:
         state = transition(DeploymentState.EA_VALIDATED, DeploymentState.EA_ACKNOWLEDGED)
         state = transition(state, DeploymentState.ACTIVE)
@@ -78,14 +75,7 @@ async def get_active_config(
         .limit(1)
     )
     if deployment is None:
-        return ConfigResponseV2(
-            symbol=symbol,
-            config_hash=None,
-            parent_version=None,
-            state=None,
-            params=None,
-            issued_at=None,
-        )
+        return ConfigResponseV2(symbol=symbol, config_hash=None, parent_version=None, state=None, params=None, issued_at=None)
 
     config = await session.scalar(
         select(ParameterConfiguration).where(ParameterConfiguration.config_hash == deployment.config_hash)
@@ -127,16 +117,14 @@ async def acknowledge_config(
         .limit(1)
     )
 
-    session.add(
-        ParameterDeploymentAck(
-            config_hash=payload.config_hash,
-            symbol=symbol,
-            ea_instance=payload.ea_instance,
-            status=payload.status,
-            reason=payload.reason,
-            ea_version=payload.ea_version,
-        )
-    )
+    session.add(ParameterDeploymentAck(
+        config_hash=payload.config_hash,
+        symbol=symbol,
+        ea_instance=payload.ea_instance,
+        status=payload.status,
+        reason=payload.reason,
+        ea_version=payload.ea_version,
+    ))
 
     if payload.status == "VALIDATED":
         _advance_ea_validation(deployment)
