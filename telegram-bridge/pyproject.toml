@@ -30,6 +30,16 @@ dev = [
 line-length = 110
 
 [tool.ruff.lint]
+# Ruff 0.16 expanded its default rule set substantially. Keep the bridge
+# gate deterministic while the existing codebase is migrated deliberately;
+# this is the pre-0.16 baseline and catches syntax/import/pyflakes failures.
+# New rule families can then be enabled and remediated in separate commits.
+select = [
+    "E4",
+    "E7",
+    "E9",
+    "F",
+]
 ignore = [
     "B008",   # Depends(...) in defaults is FastAPI's standard idiom, not a bug
     "BLE001", # blind `except Exception` used only as documented, last-resort
