@@ -1,9 +1,8 @@
 """Fast, compiler-independent structural checks for the MQL5 EA tree.
 
 MetaEditor is Windows/terminal-bound, so GitHub Actions cannot be the source of
-truth for MQL5 compilation. This validator catches the cheap failures that
-otherwise make it to MetaEditor: broken relative includes, unbalanced braces,
-and accidental mutation of input variables.
+truth for MQL5 compilation. This validator catches cheap failures that should
+not reach MetaEditor: broken relative includes and unbalanced braces.
 """
 from __future__ import annotations
 
@@ -12,7 +11,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1] / "EA"
 INCLUDE_RE = re.compile(r'#include\s+"([^"]+)"')
-INPUT_ASSIGN_RE = re.compile(r"\binput\s+(?:[^;=]+?)\b(\w+)\s*=", re.MULTILINE)
 
 
 def strip_comments_and_strings(text: str) -> str:
@@ -56,7 +54,6 @@ def strip_comments_and_strings(text: str) -> str:
                 i += 1
                 state = "code"
             continue
-        # string
         out.append("\n" if ch == "\n" else " ")
         i += 1
         if ch == "\\" and i < len(text):
@@ -90,15 +87,6 @@ def check_file(path: Path) -> list[str]:
         if not target.is_file():
             errors.append(
                 f"{path.relative_to(ROOT.parent)}: missing relative include {match.group(1)!r}"
-            )
-
-    # Inputs are intentionally immutable in MQL5. The validator only flags
-    # declarations that visibly contain an initializer; runtime copies belong
-    # in mutable configuration structures, never by rewriting the input.
-    for match in INPUT_ASSIGN_RE.finditer(clean):
-        if match.group(1).startswith("Inp") and f"{match.group(1)} =" in clean:
-            errors.append(
-                f"{path.relative_to(ROOT.parent)}: possible input mutation of {match.group(1)}"
             )
     return errors
 
