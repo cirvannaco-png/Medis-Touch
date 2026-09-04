@@ -11,7 +11,6 @@ from app.config_registry import ParameterConfiguration, ParameterDeployment, Par
 from app.database import get_session
 from app.parameter_proposal.deployment import transition
 from app.parameter_proposal.models import DeploymentState
-from app.database import get_session
 from app.routes import verify_api_key
 
 router = APIRouter(tags=["configuration"])
