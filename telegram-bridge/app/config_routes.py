@@ -38,9 +38,17 @@ class ConfigAckResponse(BaseModel):
 
 
 def _advance_ea_validation(deployment: ParameterDeployment | None) -> None:
-    """Advance only SCHEDULED deployments; never infer ACTIVE from VALIDATED."""
+    """Advance only SCHEDULED deployments after a successful EA validation."""
     if deployment is not None and deployment.state == "SCHEDULED":
         deployment.state = "EA_VALIDATED"
+
+
+def _advance_ea_applied(deployment: ParameterDeployment | None) -> None:
+    """Activate only after the EA explicitly reports runtime application."""
+    if deployment is not None and deployment.state == "EA_VALIDATED":
+        deployment.state = "EA_ACKNOWLEDGED"
+        deployment.state = "ACTIVE"
+        deployment.activated_at = datetime.now(timezone.utc)
 
 
 @router.get("/config/{symbol}", response_model=ConfigResponseV2)
@@ -96,12 +104,7 @@ async def acknowledge_config(
     session: AsyncSession = Depends(get_session),
     _auth: bool = Depends(verify_api_key),
 ):
-    """Persist an EA acknowledgement and advance a scheduled deployment safely.
-
-    VALIDATED means the EA parsed and bounds-checked the payload. It is never
-    treated as APPLIED or ACTIVE. This keeps the bridge fail-closed until an
-    EA build explicitly implements runtime parameter application.
-    """
+    """Persist an EA acknowledgement without inferring application from validation."""
     config = await session.scalar(
         select(ParameterConfiguration).where(ParameterConfiguration.config_hash == payload.config_hash)
     )
@@ -131,6 +134,8 @@ async def acknowledge_config(
 
     if payload.status == "VALIDATED":
         _advance_ea_validation(deployment)
+    elif payload.status == "APPLIED":
+        _advance_ea_applied(deployment)
 
     await session.commit()
     return ConfigAckResponse(status="recorded", config_hash=payload.config_hash, symbol=symbol)
