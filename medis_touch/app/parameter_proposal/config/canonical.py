@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from typing import Any
 
 
@@ -12,7 +13,7 @@ def _normalise(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_normalise(item) for item in value]
     if isinstance(value, float):
-        if value != value or value in (float("inf"), float("-inf")):
+        if not math.isfinite(value):
             raise ValueError("configuration contains a non-finite float")
         return float(format(value, ".15g"))
     if hasattr(value, "value"):
