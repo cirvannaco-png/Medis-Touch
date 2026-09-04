@@ -9,6 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config_registry import ParameterConfiguration, ParameterDeployment, ParameterDeploymentAck
 from app.database import get_session
+from app.parameter_proposal.deployment import transition
+from app.parameter_proposal.models import DeploymentState
+from app.database import get_session
 from app.routes import verify_api_key
 
 router = APIRouter(tags=["configuration"])
@@ -43,7 +46,7 @@ async def get_active_config(
     session: AsyncSession = Depends(get_session),
     _auth: bool = Depends(verify_api_key),
 ):
-    """Return only the locally deployable configuration for this symbol.
+    """Return the current deployable configuration for this symbol.
 
     The EA performs one network read on its timer, then caches the response.
     No database call is made from the EA tick/decision path.
@@ -52,9 +55,9 @@ async def get_active_config(
         select(ParameterDeployment)
         .where(
             ParameterDeployment.symbol == symbol,
-            ParameterDeployment.state == "ACTIVE",
+            ParameterDeployment.state.in_(["ACTIVE", "SCHEDULED"]),
         )
-        .order_by(ParameterDeployment.activated_at.desc())
+        .order_by(ParameterDeployment.activated_at.desc(), ParameterDeployment.created_at.desc())
         .limit(1)
     )
     if deployment is None:
@@ -90,12 +93,28 @@ async def acknowledge_config(
     session: AsyncSession = Depends(get_session),
     _auth: bool = Depends(verify_api_key),
 ):
-    """Persist an EA validation/application acknowledgement for auditability."""
+    """Persist an EA acknowledgement and advance a scheduled deployment safely.
+
+    VALIDATED means the EA parsed and bounds-checked the payload. It is never
+    treated as APPLIED or ACTIVE. This keeps the backend fail-closed until an
+    EA build explicitly implements runtime parameter application.
+    """
     config = await session.scalar(
         select(ParameterConfiguration).where(ParameterConfiguration.config_hash == payload.config_hash)
     )
     if config is None:
         raise HTTPException(status_code=404, detail="unknown config_hash")
+
+    deployment = await session.scalar(
+        select(ParameterDeployment)
+        .where(
+            ParameterDeployment.config_hash == payload.config_hash,
+            ParameterDeployment.symbol == symbol,
+        )
+        .order_by(ParameterDeployment.created_at.desc())
+        .limit(1)
+    )
+
     session.add(
         ParameterDeploymentAck(
             config_hash=payload.config_hash,
@@ -106,5 +125,9 @@ async def acknowledge_config(
             ea_version=payload.ea_version,
         )
     )
+
+    if deployment is not None and payload.status == "VALIDATED" and deployment.state == DeploymentState.SCHEDULED.value:
+        deployment.state = transition(DeploymentState.SCHEDULED, DeploymentState.EA_VALIDATED).value
+
     await session.commit()
     return ConfigAckResponse(status="recorded", config_hash=payload.config_hash, symbol=symbol)
