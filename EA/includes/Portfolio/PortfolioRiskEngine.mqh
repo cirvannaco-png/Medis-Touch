@@ -1,21 +1,20 @@
 //+------------------------------------------------------------------+
 //| Portfolio/PortfolioRiskEngine.mqh                                |
-//| Account-wide correlation, directional concentration and factor   |
-//| exposure checks. Calculations are cached/cheap enough for the     |
-//| pre-order gate; no HTTP, database or optimizer work is allowed.  |
+//| Account-wide rolling-correlation and factor-exposure gate.        |
+//| Conservative by design: correlated risk is counted regardless of  |
+//| trade direction. No network, database or optimizer work occurs.  |
 //+------------------------------------------------------------------+
 #ifndef PORTFOLIORISKENGINE_MQH
 #define PORTFOLIORISKENGINE_MQH
+
+#include "../Trading/RiskEngine.mqh"
 
 struct PortfolioRiskSnapshot
   {
    double totalRiskAmount;
    double correlatedRiskAmount;
-   double directionalCorrelatedRiskAmount;
    double factorRiskAmount;
-   double volatilityRiskScore;
    int    correlatedPositions;
-   int    sameDirectionCorrelatedPositions;
    bool   valid;
   };
 
@@ -26,35 +25,26 @@ private:
    double m_correlationThreshold;
    double m_maxCorrelatedRiskPercent;
    double m_maxFactorRiskPercent;
-   double m_maxVolatilityScore;
 
    bool GetReturns(string symbol, int count, double &returns[]);
    double Correlation(string symbolA, string symbolB);
-   double OpenRisk(ulong ticket, class CRiskEngine &risk);
+   double OpenRisk(ulong ticket, CRiskEngine &risk);
    string FactorGroup(string symbol);
 
 public:
-   void Init(int correlationLookback = 50,
-             double correlationThreshold = 0.70,
-             double maxCorrelatedRiskPercent = 1.50,
-             double maxFactorRiskPercent = 2.00,
-             double maxVolatilityScore = 1.50);
-   bool BuildSnapshot(string proposedSymbol, ENUM_ORDER_TYPE proposedType,
-                      double proposedRiskAmount, ulong magic, class CRiskEngine &risk,
-                      PortfolioRiskSnapshot &snapshot, string &reasonOut);
+   void Init(int correlationLookback = 50, double correlationThreshold = 0.70,
+             double maxCorrelatedRiskPercent = 1.50, double maxFactorRiskPercent = 2.00);
+   bool BuildSnapshot(string proposedSymbol, double proposedRiskAmount, ulong magic,
+                      CRiskEngine &risk, PortfolioRiskSnapshot &snapshot, string &reasonOut);
   };
 
-void CPortfolioRiskEngine::Init(int correlationLookback,
-                                double correlationThreshold,
-                                double maxCorrelatedRiskPercent,
-                                double maxFactorRiskPercent,
-                                double maxVolatilityScore)
+void CPortfolioRiskEngine::Init(int correlationLookback, double correlationThreshold,
+                                double maxCorrelatedRiskPercent, double maxFactorRiskPercent)
   {
    m_correlationLookback = MathMax(20, correlationLookback);
    m_correlationThreshold = MathMax(0.50, MathMin(0.95, correlationThreshold));
    m_maxCorrelatedRiskPercent = MathMax(0.0, maxCorrelatedRiskPercent);
    m_maxFactorRiskPercent = MathMax(0.0, maxFactorRiskPercent);
-   m_maxVolatilityScore = MathMax(0.0, maxVolatilityScore);
   }
 
 bool CPortfolioRiskEngine::GetReturns(string symbol, int count, double &returns[])
@@ -82,12 +72,16 @@ double CPortfolioRiskEngine::Correlation(string symbolA, string symbolB)
 
    double ma = 0.0, mb = 0.0;
    for(int i = 0; i < n; i++) { ma += a[i]; mb += b[i]; }
-   ma /= n; mb /= n;
+   ma /= n;
+   mb /= n;
    double cov = 0.0, va = 0.0, vb = 0.0;
    for(int i = 0; i < n; i++)
      {
-      double da = a[i] - ma, db = b[i] - mb;
-      cov += da * db; va += da * da; vb += db * db;
+      double da = a[i] - ma;
+      double db = b[i] - mb;
+      cov += da * db;
+      va += da * da;
+      vb += db * db;
      }
    if(va <= 0 || vb <= 0) return 0.0;
    return cov / MathSqrt(va * vb);
@@ -113,24 +107,24 @@ string CPortfolioRiskEngine::FactorGroup(string symbol)
    return "FX";
   }
 
-bool CPortfolioRiskEngine::BuildSnapshot(string proposedSymbol, ENUM_ORDER_TYPE proposedType,
-                                         double proposedRiskAmount, ulong magic, CRiskEngine &risk,
-                                         PortfolioRiskSnapshot &snapshot, string &reasonOut)
+bool CPortfolioRiskEngine::BuildSnapshot(string proposedSymbol, double proposedRiskAmount, ulong magic,
+                                         CRiskEngine &risk, PortfolioRiskSnapshot &snapshot, string &reasonOut)
   {
    snapshot.totalRiskAmount = proposedRiskAmount;
-   snapshot.correlatedRiskAmount = 0.0;
-   snapshot.directionalCorrelatedRiskAmount = 0.0;
-   snapshot.factorRiskAmount = 0.0;
-   snapshot.volatilityRiskScore = 0.0;
+   snapshot.correlatedRiskAmount = proposedRiskAmount;
+   snapshot.factorRiskAmount = proposedRiskAmount;
    snapshot.correlatedPositions = 0;
-   snapshot.sameDirectionCorrelatedPositions = 0;
    snapshot.valid = true;
    reasonOut = "";
 
    string proposedFactor = FactorGroup(proposedSymbol);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(equity <= 0) { snapshot.valid = false; reasonOut = "invalid account equity"; return false; }
-   double proposedDirection = (proposedType == ORDER_TYPE_SELL ? -1.0 : 1.0);
+   if(equity <= 0)
+     {
+      snapshot.valid = false;
+      reasonOut = "invalid account equity";
+      return false;
+     }
 
    for(int i = 0; i < PositionsTotal(); i++)
      {
@@ -142,45 +136,40 @@ bool CPortfolioRiskEngine::BuildSnapshot(string proposedSymbol, ENUM_ORDER_TYPE 
       if(r <= 0)
         {
          if(PositionGetDouble(POSITION_SL) <= 0)
-           { snapshot.valid = false; reasonOut = "existing position has no stop loss; portfolio risk is unknown"; return false; }
+           {
+            snapshot.valid = false;
+            reasonOut = "existing position has no stop loss; portfolio risk is unknown";
+            return false;
+           }
          continue;
         }
-      snapshot.totalRiskAmount += r;
+
       string posSymbol = PositionGetString(POSITION_SYMBOL);
-      if(FactorGroup(posSymbol) == proposedFactor) snapshot.factorRiskAmount += r;
+      snapshot.totalRiskAmount += r;
+      if(FactorGroup(posSymbol) == proposedFactor)
+         snapshot.factorRiskAmount += r;
 
       double corr = Correlation(proposedSymbol, posSymbol);
       if(MathAbs(corr) >= m_correlationThreshold)
         {
          snapshot.correlatedPositions++;
          snapshot.correlatedRiskAmount += r;
-         double posDirection = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL ? -1.0 : 1.0);
-         if(corr * proposedDirection * posDirection > 0)
-           {
-            snapshot.sameDirectionCorrelatedPositions++;
-            snapshot.directionalCorrelatedRiskAmount += r;
-           }
         }
      }
 
-   // Add the proposed trade to factor/concentration totals.
-   snapshot.factorRiskAmount += proposedRiskAmount;
-   snapshot.correlatedRiskAmount += proposedRiskAmount;
-   snapshot.directionalCorrelatedRiskAmount += proposedRiskAmount;
-
    if(m_maxCorrelatedRiskPercent > 0 &&
-      snapshot.directionalCorrelatedRiskAmount > equity * m_maxCorrelatedRiskPercent / 100.0)
+      snapshot.correlatedRiskAmount > equity * m_maxCorrelatedRiskPercent / 100.0)
      {
       snapshot.valid = false;
-      reasonOut = StringFormat("directionally correlated risk %.2f exceeds %.2f%% portfolio limit",
-                               snapshot.directionalCorrelatedRiskAmount, m_maxCorrelatedRiskPercent);
+      reasonOut = StringFormat("correlated portfolio risk %.2f exceeds %.2f%% limit",
+                               snapshot.correlatedRiskAmount, m_maxCorrelatedRiskPercent);
       return false;
      }
    if(m_maxFactorRiskPercent > 0 &&
       snapshot.factorRiskAmount > equity * m_maxFactorRiskPercent / 100.0)
      {
       snapshot.valid = false;
-      reasonOut = StringFormat("factor exposure %s risk %.2f exceeds %.2f%% portfolio limit",
+      reasonOut = StringFormat("factor exposure %s risk %.2f exceeds %.2f%% limit",
                                proposedFactor, snapshot.factorRiskAmount, m_maxFactorRiskPercent);
       return false;
      }
