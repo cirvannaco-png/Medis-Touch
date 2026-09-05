@@ -9,6 +9,7 @@ from app.config import APP_VERSION, settings
 from app.config_routes import router as config_router
 from app.copy_routes import router as copy_router
 from app.logger import logger
+from app.research_routes import router as research_router
 from app.routes import router
 from app.telegram import check_bot_token, close_http_client, init_http_client
 
@@ -77,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(config_router)
     app.include_router(router)
     app.include_router(copy_router)
+    app.include_router(research_router)
     return app
 
 

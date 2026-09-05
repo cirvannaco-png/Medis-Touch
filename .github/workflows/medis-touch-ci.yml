@@ -75,6 +75,12 @@ jobs:
       - name: Test (pytest)
         run: pytest -v
       - name: Import smoke test
+        env:
+          BOT_TOKEN: ci-placeholder-bot-token
+          CHAT_ID: "0"
+          ADMIN_CHAT_ID: "0"
+          SECRET_KEY: ci-placeholder-secret
+          WEBHOOK_SECRET_TOKEN: ci-placeholder-webhook-secret
         run: python -c "from app.main import create_app; create_app()"
 
   mql5-structure:
