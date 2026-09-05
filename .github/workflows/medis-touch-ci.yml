@@ -3,6 +3,7 @@ name: medis-touch handbook CI
 # Backend, Telegram bridge, and MQL5 structural validation. MetaEditor is
 # terminal/Windows-bound, so the Ubuntu lane deliberately does not pretend
 # that static parsing is equivalent to a real MQL5 compile.
+# CI note: Telegram Bridge Ruff baseline is enforced explicitly in its pyproject.
 on:
   push:
     paths:
