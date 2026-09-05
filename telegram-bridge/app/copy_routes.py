@@ -12,9 +12,8 @@ from app.copy_trading import can_copy
 from app.database import async_session, get_session
 from app.group_enforcement import run_subscription_enforcement
 from app.models import Signal, SignalLifecycleStatus, SignalStatus
+from app.routes import verify_api_key
 from app.subscriptions import get_subscriber_by_copy_feed_key
-from app.database import get_session
-from app.database import check_db_connection
 
 router = APIRouter()
 
@@ -50,6 +49,6 @@ async def get_copy_feed(x_copy_key: str = Header(..., alias="X-Copy-Key"), sessi
 
 
 @router.post("/admin/check-subscriptions")
-async def check_subscriptions(_auth: bool = Depends(__import__("app.routes", fromlist=["verify_api_key"]).verify_api_key)):
+async def check_subscriptions(_auth: bool = Depends(verify_api_key)):
     async with async_session() as session:
         return await run_subscription_enforcement(session)
