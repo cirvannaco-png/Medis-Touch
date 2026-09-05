@@ -1,98 +1,49 @@
-"""
-Inbound bot wiring: builds the python-telegram-bot Application, registers
-command handlers, and manages the Telegram webhook subscription.
-
-This runs in *webhook* mode, not polling. Render exposes a single HTTP
-port per web service - polling would mean a second long-running process
-Render has no straightforward way to host alongside the FastAPI server on
-a free/starter plan. Webhook mode fits the existing deployment exactly:
-Telegram POSTs updates to POST /telegram/webhook (see routes.py), which
-hands them to application.process_update(). No second process, no extra
-Render service.
-"""
-
 from __future__ import annotations
 
 from telegram import BotCommand, Update
-from telegram.ext import (
-    Application,
-    ApplicationBuilder,
-    CallbackQueryHandler,
-    CommandHandler,
-    MessageHandler,
-    filters,
-)
+from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, PreCheckoutQueryHandler, filters
 
-from app.bot_handlers import (
-    COMMAND_LIST,
-    analysis,
-    help_command,
-    mute,
-    muted_command,
-    pause,
-    performance,
-    positions,
-    resume,
-    retry,
-    risk,
-    signal,
-    start,
-    stats,
-    status,
-    symbols_command,
-    unknown_command,
-    unmute,
-    version_command,
-)
+from app.bot_handlers import COMMAND_LIST, analysis, help_command, mute, muted_command, pause, performance, positions, resume, retry, risk, signal, start, stats, status, symbols_command, unknown_command, unmute, version_command
 from app.bot_promotions import CALLBACK_PREFIX, handle_promotion_callback
 from app.config import settings
 from app.control_plane import config, ea, learning, portfolio_detail
+from app.copytrading_admin import COPYTRADING_COMMAND_LIST, checkpayments_command, confirm_text_handler, copytrading_command
 from app.logger import logger
+from app.payments_bot import PAYMENTS_COMMAND_LIST, my_subscription, precheckout_callback, subscribe, successful_payment_callback
 
 application: Application | None = None
+
+for _name, _desc in PAYMENTS_COMMAND_LIST + COPYTRADING_COMMAND_LIST:
+    if _name not in {n for n, _ in COMMAND_LIST}:
+        COMMAND_LIST.append((_name, _desc))
 
 
 def _build_application() -> Application:
     app = ApplicationBuilder().token(settings.BOT_TOKEN).updater(None).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("signal", signal))
-    app.add_handler(CommandHandler("analysis", analysis))
-    app.add_handler(CommandHandler("positions", positions))
-    app.add_handler(CommandHandler("risk", risk))
-    app.add_handler(CommandHandler("performance", performance))
-    app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CommandHandler("symbols", symbols_command))
-    app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("mute", mute))
-    app.add_handler(CommandHandler("unmute", unmute))
-    app.add_handler(CommandHandler("muted", muted_command))
-    app.add_handler(CommandHandler("pause", pause))
-    app.add_handler(CommandHandler("resume", resume))
-    app.add_handler(CommandHandler("retry", retry))
-    app.add_handler(CommandHandler("version", version_command))
-    app.add_handler(CommandHandler("portfolio", portfolio_detail))
-    app.add_handler(CommandHandler("config", config))
-    app.add_handler(CommandHandler("ea", ea))
-    app.add_handler(CommandHandler("learning", learning))
+    for name, handler in [
+        ("start", start), ("help", help_command), ("signal", signal), ("analysis", analysis),
+        ("positions", positions), ("risk", risk), ("performance", performance), ("stats", stats),
+        ("symbols", symbols_command), ("status", status), ("mute", mute), ("unmute", unmute),
+        ("muted", muted_command), ("pause", pause), ("resume", resume), ("retry", retry),
+        ("version", version_command), ("portfolio", portfolio_detail), ("config", config),
+        ("ea", ea), ("learning", learning), ("subscribe", subscribe), ("mysubscription", my_subscription),
+        ("copytrading", copytrading_command), ("checkpayments", checkpayments_command),
+    ]:
+        app.add_handler(CommandHandler(name, handler))
     app.add_handler(CallbackQueryHandler(handle_promotion_callback, pattern=f"^{CALLBACK_PREFIX}:"))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_text_handler))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
-
     return app
 
 
 async def init_bot() -> None:
-    """Build the Application, register commands with Telegram, and point
-    the webhook at this service. Called once from main.py's lifespan.
-    """
     global application
     application = _build_application()
-
     try:
         await application.initialize()
         await application.start()
-
         await application.bot.set_my_commands(
             [BotCommand(name, desc) for name, desc in COMMAND_LIST]
             + [
@@ -102,29 +53,18 @@ async def init_bot() -> None:
                 BotCommand("learning", "Read optimizer and challenger status"),
             ]
         )
-
         if not settings.RENDER_EXTERNAL_URL and not settings.WEBHOOK_URL:
-            logger.warning(
-                "Neither RENDER_EXTERNAL_URL nor WEBHOOK_URL is set — "
-                "skipping set_webhook(). Inbound commands will not work "
-                "until the webhook is registered."
-            )
+            logger.warning("Neither RENDER_EXTERNAL_URL nor WEBHOOK_URL is set — skipping set_webhook().")
             return
-
-        url = settings.webhook_url
         await application.bot.set_webhook(
-            url=url,
+            url=settings.webhook_url,
             secret_token=settings.WEBHOOK_SECRET_TOKEN,
-            allowed_updates=["message", "callback_query"],
+            allowed_updates=["message", "callback_query", "pre_checkout_query"],
             drop_pending_updates=True,
         )
-        logger.info("Telegram webhook set to %s", url)
-    except Exception as e:
-        logger.warning(
-            "Bot setup incomplete - inbound commands may not work (%s): %s",
-            type(e).__name__,
-            e,
-        )
+        logger.info("Telegram webhook set to %s", settings.webhook_url)
+    except Exception as exc:
+        logger.warning("Bot setup incomplete - inbound commands may not work (%s): %s", type(exc).__name__, exc)
 
 
 async def shutdown_bot() -> None:
@@ -134,8 +74,8 @@ async def shutdown_bot() -> None:
     try:
         await application.stop()
         await application.shutdown()
-    except Exception as e:
-        logger.warning("Bot shutdown incomplete (%s): %s", type(e).__name__, e)
+    except Exception as exc:
+        logger.warning("Bot shutdown incomplete (%s): %s", type(exc).__name__, exc)
     finally:
         application = None
 
@@ -143,5 +83,4 @@ async def shutdown_bot() -> None:
 async def process_update(data: dict) -> None:
     if application is None:
         raise RuntimeError("Bot application not initialized - call init_bot() on startup")
-    update = Update.de_json(data, application.bot)
-    await application.process_update(update)
+    await application.process_update(Update.de_json(data, application.bot))
