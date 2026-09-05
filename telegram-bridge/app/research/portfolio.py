@@ -1,7 +1,6 @@
 """Phase-3 portfolio coordinator: correlation, factors, normalized heat and atomic admission."""
 from __future__ import annotations
 from dataclasses import dataclass
-from math import sqrt
 
 @dataclass(frozen=True)
 class PositionRisk:
@@ -41,7 +40,8 @@ class PortfolioCoordinator:
             return False, "duplicate reservation request"
         if self.normalized_heat() + abs(position.risk_r) > self.limits.max_heat_r:
             return False, "portfolio heat limit"
-        if abs(self.directional_exposure(position.direction) + (abs(position.risk_r) if position.direction.lower() in {"buy", "long"} else -abs(position.risk_r))) > self.limits.max_directional_r:
+        signed_new = abs(position.risk_r) if position.direction.lower() in {"buy", "long"} else -abs(position.risk_r)
+        if abs(self.directional_exposure(position.direction) + signed_new) > self.limits.max_directional_r:
             return False, "directional exposure limit"
         if correlated_risk + abs(position.risk_r) > self.limits.max_correlated_cluster_r:
             return False, "correlated cluster limit"
