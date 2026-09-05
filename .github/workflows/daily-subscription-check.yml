@@ -1,0 +1,25 @@
+name: Daily subscription check
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  check-subscriptions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger subscription sweep
+        run: |
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            "${{ secrets.BRIDGE_BASE_URL }}/admin/check-subscriptions" \
+            -H "X-API-Key: ${{ secrets.BRIDGE_API_KEY }}" \
+            --max-time 120)
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "HTTP $http_code"
+          echo "$body"
+          if [ "$http_code" -ge 300 ]; then
+            echo "::error::check-subscriptions returned HTTP $http_code"
+            exit 1
+          fi
