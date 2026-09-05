@@ -11,13 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.logger import logger
-from app.models import (
-    PAYMENT_STATUS_SUCCEEDED,
-    SUBSCRIBER_STATUS_ACTIVE,
-    SUBSCRIBER_STATUS_PENDING,
-    Payment,
-    Subscriber,
-)
+from app.payment_models import PAYMENT_STATUS_SUCCEEDED, SUBSCRIBER_STATUS_ACTIVE, SUBSCRIBER_STATUS_PENDING, Payment, Subscriber
 
 
 def _generate_copy_feed_key() -> str:
@@ -25,9 +19,7 @@ def _generate_copy_feed_key() -> str:
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
-    if dt is not None and dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
+    return dt.replace(tzinfo=timezone.utc) if dt is not None and dt.tzinfo is None else dt
 
 
 async def get_subscriber_by_user_id(session: AsyncSession, telegram_user_id: str) -> Subscriber | None:
@@ -47,12 +39,7 @@ async def get_or_create_subscriber(session: AsyncSession, telegram_user_id: str,
             subscriber.telegram_username = telegram_username
             await session.commit()
         return subscriber
-
-    subscriber = Subscriber(
-        telegram_user_id=str(telegram_user_id),
-        telegram_username=telegram_username,
-        status=SUBSCRIBER_STATUS_PENDING,
-    )
+    subscriber = Subscriber(telegram_user_id=str(telegram_user_id), telegram_username=telegram_username, status=SUBSCRIBER_STATUS_PENDING)
     session.add(subscriber)
     try:
         await session.commit()
@@ -69,28 +56,9 @@ def is_entitled(subscriber: Subscriber | None) -> bool:
     return end is not None and end > datetime.now(timezone.utc)
 
 
-async def record_payment(
-    session: AsyncSession,
-    subscriber: Subscriber,
-    *,
-    telegram_payment_charge_id: str,
-    amount: int,
-    currency: str,
-    invoice_payload: str,
-    raw_payload: dict,
-    period_days: int | None = None,
-) -> Payment | None:
+async def record_payment(session: AsyncSession, subscriber: Subscriber, *, telegram_payment_charge_id: str, amount: int, currency: str, invoice_payload: str, raw_payload: dict, period_days: int | None = None) -> Payment | None:
     period_days = period_days or settings.SUBSCRIPTION_PERIOD_DAYS
-    payment = Payment(
-        telegram_payment_charge_id=telegram_payment_charge_id,
-        subscriber_id=subscriber.id,
-        amount=amount,
-        currency=currency,
-        period_days=period_days,
-        invoice_payload=invoice_payload,
-        status=PAYMENT_STATUS_SUCCEEDED,
-        raw_payload=raw_payload,
-    )
+    payment = Payment(telegram_payment_charge_id=telegram_payment_charge_id, subscriber_id=subscriber.id, amount=amount, currency=currency, period_days=period_days, invoice_payload=invoice_payload, status=PAYMENT_STATUS_SUCCEEDED, raw_payload=raw_payload)
     session.add(payment)
     try:
         await session.flush()
@@ -99,7 +67,6 @@ async def record_payment(
         await session.refresh(subscriber)
         logger.info("Duplicate successful_payment ignored (telegram_payment_charge_id=%s)", telegram_payment_charge_id)
         return None
-
     now = datetime.now(timezone.utc)
     existing_end = _as_utc(subscriber.current_period_end)
     base = existing_end if existing_end and existing_end > now else now
