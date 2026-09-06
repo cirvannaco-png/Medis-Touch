@@ -8,7 +8,7 @@ from app.domain.copy import CopyDecision, CopyRequest, authorize_copy
 
 @dataclass(frozen=True)
 class CopyAuthorizationContext:
-    broker: Broker
+    broker: Broker | str
     symbol: str
     direction: str
     risk_percent: float
@@ -27,9 +27,10 @@ class CopyService:
     """
 
     def authorize(self, context: CopyAuthorizationContext) -> CopyDecision:
+        broker = context.broker.value if isinstance(context.broker, Broker) else str(context.broker)
         return authorize_copy(
             CopyRequest(
-                broker=context.broker.value,
+                broker=broker,
                 symbol=context.symbol,
                 direction=context.direction,
                 risk_percent=context.risk_percent,
