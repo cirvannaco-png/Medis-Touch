@@ -4,7 +4,7 @@ version = "1.4.0"
 description = "Medis Touch MT5 to Telegram bridge"
 requires-python = ">=3.10"
 dependencies = [
-    "fastapi==0.140.0",
+    "fastapi==0.141.1",
     "uvicorn[standard]==0.34.0",
     "pydantic-settings==2.14.2",
     "httpx==0.28.1",
