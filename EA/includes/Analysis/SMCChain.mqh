@@ -18,13 +18,6 @@ enum ENUM_CHAIN_STATUS
    CHAIN_VALID
   };
 
-enum ENUM_SETUP_FAMILY
-  {
-   SETUP_FAMILY_NONE = 0,
-   SETUP_FAMILY_REVERSAL,
-   SETUP_FAMILY_CONTINUATION
-  };
-
 struct SMCChain
   {
    ENUM_CHAIN_STATUS status;
@@ -48,6 +41,9 @@ struct SMCChain
    bool location_ok;
    bool freshness_ok;
    bool invalidation_ok;
+
+   int    displacement_bar_index;
+   datetime displacement_time;
 
    double rejection_ratio;
    double penetration_atr;
@@ -74,15 +70,16 @@ private:
    double      m_minStructureStrength;
    bool        m_requirePremiumDiscount;
 
-   bool FindStructure(bool forBuy, BOSEvent &bosOut, CHOCHPoint &chochOut,
+   bool FindStructure(bool forBuy, int minBar, BOSEvent &bosOut, CHOCHPoint &chochOut,
                       bool &hasBos, bool &hasChoch, ENUM_SETUP_FAMILY &family);
    bool FindSweep(bool forBuy, const datetime structureTime, int structureBar,
                   LiquidityEvent &out);
-   bool FindCausalFVG(bool forBuy, const datetime structureTime, int structureBar,
-                      const datetime sweepTime, int &ageBars, FVGZone &out);
+   bool FindCausalFVG(bool forBuy, int structureBar, int displacementBar,
+                      int sweepBar, int maxGapBars, int &ageBars, FVGZone &out);
    bool CalculateLocation(bool forBuy, datetime beforeTime, double price, double &midpoint);
-   bool ValidateDisplacement(bool forBuy, int structureBar, double &atr,
-                             double &bodyRatio, double &rangeATR);
+   bool FindDisplacement(bool forBuy, int structureBar, int sweepBar,
+                         int maxGapBars, int &dispBar,
+                         double &atr, double &bodyRatio, double &rangeATR);
    bool ValidateRejection(bool forBuy, const LiquidityEvent &sweep, double &ratio, double &penetrationATR);
    ulong StableChainId(datetime structureTime, datetime fvgTime, bool forBuy) const;
 
@@ -153,7 +150,7 @@ ulong CSMCChainBuilder::StableChainId(datetime structureTime, datetime fvgTime, 
    return id;
   }
 
-bool CSMCChainBuilder::FindStructure(bool forBuy, BOSEvent &bosOut, CHOCHPoint &chochOut,
+bool CSMCChainBuilder::FindStructure(bool forBuy, int minBar, BOSEvent &bosOut, CHOCHPoint &chochOut,
                                      bool &hasBos, bool &hasChoch, ENUM_SETUP_FAMILY &family)
   {
    hasBos = false;
@@ -169,6 +166,7 @@ bool CSMCChainBuilder::FindStructure(bool forBuy, BOSEvent &bosOut, CHOCHPoint &
    for(int i = 0; i < m_entryCtx.bos.Count(); i++)
      {
       BOSEvent e = m_entryCtx.bos.GetBOS(i);
+      if(e.bar_index < minBar) continue;
       if(e.bar_index < 1) continue;
       if(e.is_bullish != forBuy) continue;
       if(e.bar_index < bestBar)
@@ -182,6 +180,7 @@ bool CSMCChainBuilder::FindStructure(bool forBuy, BOSEvent &bosOut, CHOCHPoint &
    for(int i = 0; i < m_entryCtx.choch.Count(); i++)
      {
       CHOCHPoint e = m_entryCtx.choch.Get(i);
+      if(e.bar_index < minBar) continue;
       if(e.bar_index < 1) continue;
       if(e.bullish != forBuy) continue;
       if(e.bar_index < bestBar)
@@ -207,7 +206,7 @@ bool CSMCChainBuilder::FindSweep(bool forBuy, const datetime structureTime, int 
   {
    if(m_entryCtx == NULL) return false;
    bool found = false;
-   int bestGap = INT_MAX;
+   int bestGap = 1000000000;
    double bestStrength = -1.0;
 
    // BUY needs sell-side liquidity swept; SELL needs buy-side liquidity swept.
@@ -262,42 +261,60 @@ bool CSMCChainBuilder::ValidateRejection(bool forBuy, const LiquidityEvent &swee
    return (ratio >= 0.20);
   }
 
-bool CSMCChainBuilder::ValidateDisplacement(bool forBuy, int structureBar, double &atr,
-                                            double &bodyRatio, double &rangeATR)
+bool CSMCChainBuilder::FindDisplacement(bool forBuy, int structureBar, int sweepBar,
+                                            int maxGapBars, int &dispBar,
+                                            double &atr, double &bodyRatio, double &rangeATR)
   {
+   dispBar = -1;
    atr = 0.0;
    bodyRatio = 0.0;
    rangeATR = 0.0;
-   if(m_entryCtx == NULL || structureBar < 1 || structureBar >= m_entryCtx.candles.Total())
-      return false;
+   if(m_entryCtx == NULL) return false;
 
-   CandleData cd = m_entryCtx.candles.GetCandle(structureBar);
-   atr = m_entryCtx.candles.GetATR(structureBar);
-   if(atr <= 0.0) return false;
+   int total = m_entryCtx.candles.Total();
+   if(structureBar < 1 || structureBar >= total) return false;
 
-   double range = cd.high - cd.low;
-   if(range <= 0.0) return false;
+   int oldest = (sweepBar >= 1)
+                ? MathMin(sweepBar - 1, structureBar + MathMax(1, maxGapBars))
+                : MathMin(total - 1, structureBar + MathMax(1, maxGapBars));
 
-   bool directional = forBuy ? (cd.close > cd.open) : (cd.close < cd.open);
-   bodyRatio = MathAbs(cd.close - cd.open) / range;
-   rangeATR = range / atr;
+   // Series order: smaller index is newer. Scan from the structure event
+   // backward toward the sweep so the closest qualifying displacement wins.
+   for(int bar = structureBar; bar <= oldest; bar++)
+     {
+      CandleData cd = m_entryCtx.candles.GetCandle(bar);
+      double a = m_entryCtx.candles.GetATR(bar);
+      if(a <= 0.0) continue;
 
-   if(!directional) return false;
-   if(rangeATR < m_minDisplacementATR) return false;
-   if(bodyRatio < m_minDisplacementBodyRatio) return false;
+      double range = cd.high - cd.low;
+      if(range <= 0.0) continue;
 
-   return true;
+      bool directional = forBuy ? (cd.close > cd.open) : (cd.close < cd.open);
+      double br = MathAbs(cd.close - cd.open) / range;
+      double ra = range / a;
+
+      if(!directional) continue;
+      if(ra < m_minDisplacementATR) continue;
+      if(br < m_minDisplacementBodyRatio) continue;
+
+      dispBar = bar;
+      atr = a;
+      bodyRatio = br;
+      rangeATR = ra;
+      return true;
+     }
+
+   return false;
   }
-
-bool CSMCChainBuilder::FindCausalFVG(bool forBuy, const datetime structureTime, int structureBar,
-                                     const datetime sweepTime, int &ageBars, FVGZone &out)
+bool CSMCChainBuilder::FindCausalFVG(bool forBuy, int structureBar, int displacementBar,
+                                     int sweepBar, int maxGapBars, int &ageBars, FVGZone &out)
   {
    ageBars = -1;
    if(m_entryCtx == NULL) return false;
 
    bool found = false;
-   int bestGap = INT_MAX;
-   int bestAge = INT_MAX;
+   int bestGap = 1000000000;
+   int bestAge = 1000000000;
 
    for(int i = 0; i < m_entryCtx.fvg.Count(); i++)
      {
@@ -306,30 +323,38 @@ bool CSMCChainBuilder::FindCausalFVG(bool forBuy, const datetime structureTime, 
       if(z.state != FVG_FRESH && z.state != FVG_TESTED) continue;
       if(z.bar_index < 1) continue;
 
-      int age = z.bar_index;
+      int age = MathMax(0, z.bar_index - 1);
       if(age > m_maxFVGAgeBars) continue;
 
-      int gap = MathAbs(z.bar_index - structureBar);
-      if(gap > m_maxStructureToFVGBars) continue;
+      // FVG bar_index is the middle candle of the three-candle pattern.
+      // The latest candle that completes the FVG is therefore bar_index-1.
+      // This lets a displacement candle itself complete the FVG without
+      // incorrectly requiring the zone timestamp to be later than it.
+      int fvgLatestBar = MathMax(1, z.bar_index - 1);
 
-      // A causal FVG must post-date the sweep in event time. The FVG's
-      // middle candle timestamp can precede the structure bar by one bar,
-      // so its relation to the structure is bounded by gap above instead.
-      if(z.time < sweepTime) continue;
-      if(z.time > structureTime && gap > m_maxStructureToFVGBars) continue;
+      int gapToStructure = MathAbs(fvgLatestBar - structureBar);
+      int gapToDisplacement = MathAbs(fvgLatestBar - displacementBar);
+      if(gapToStructure > maxGapBars && gapToDisplacement > maxGapBars)
+         continue;
 
-      if(!found || gap < bestGap || (gap == bestGap && age < bestAge))
+      // For reversal chains, the FVG must not predate the sweep. Because
+      // series indices increase into the past, larger-than-sweep indices
+      // would be older than the causal sweep.
+      if(sweepBar >= 1 && fvgLatestBar > sweepBar - 1)
+         continue;
+
+      if(!found || gapToDisplacement < bestGap ||
+         (gapToDisplacement == bestGap && age < bestAge))
         {
          out = z;
          ageBars = age;
-         bestGap = gap;
+         bestGap = gapToDisplacement;
          bestAge = age;
          found = true;
         }
      }
    return found;
   }
-
 bool CSMCChainBuilder::CalculateLocation(bool forBuy, datetime beforeTime, double price, double &midpoint)
   {
    midpoint = 0.0;
@@ -378,10 +403,6 @@ SMCChain CSMCChainBuilder::Build(bool forBuy)
    c.status = CHAIN_INVALID;
    c.direction = forBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    c.family = SETUP_FAMILY_NONE;
-   c.quality = 0.0;
-   c.location_ok = false;
-   c.freshness_ok = false;
-   c.invalidation_ok = false;
 
    if(m_entryCtx == NULL || !m_entryCtx.candles.IsReady())
      {
@@ -390,114 +411,143 @@ SMCChain CSMCChainBuilder::Build(bool forBuy)
       return c;
      }
 
-   bool hasBos = false, hasChoch = false;
-   ENUM_SETUP_FAMILY family = SETUP_FAMILY_NONE;
-   if(!FindStructure(forBuy, c.bos, c.choch, hasBos, hasChoch, family))
+   // Try the newest structural event first, then walk backward if that
+   // event is not causally explainable. This prevents one broken/latest
+   // BOS from hiding an older but valid chain.
+   int minStructureBar = 1;
+   for(int attempt = 0; attempt < 8; attempt++)
      {
-      c.status = CHAIN_INCOMPLETE;
-      c.failure_reason = "no confirmed directional BOS/CHoCH";
+      bool hasBos = false, hasChoch = false;
+      BOSEvent bos;
+      CHOCHPoint choch;
+      ENUM_SETUP_FAMILY family = SETUP_FAMILY_NONE;
+      if(!FindStructure(forBuy, minStructureBar, bos, choch, hasBos, hasChoch, family))
+        {
+         c.status = CHAIN_INCOMPLETE;
+         c.failure_reason = "no confirmed directional BOS/CHoCH";
+         return c;
+        }
+
+      int structureBar = hasChoch ? choch.bar_index : bos.bar_index;
+      datetime structureTime = hasChoch ? choch.time : bos.time;
+      c.bos = bos;
+      c.choch = choch;
+      c.has_bos = hasBos;
+      c.has_choch = hasChoch;
+      c.family = family;
+      c.structure_strength = hasChoch ? 1.0 : bos.strength;
+
+      if(hasBos && c.structure_strength < m_minStructureStrength)
+        {
+         minStructureBar = structureBar + 1;
+         continue;
+        }
+
+      bool haveSweep = FindSweep(forBuy, structureTime, structureBar, c.sweep);
+      if(family == SETUP_FAMILY_REVERSAL && !haveSweep)
+        {
+         minStructureBar = structureBar + 1;
+         continue;
+        }
+
+      c.has_sweep = haveSweep;
+
+      if(haveSweep)
+        {
+         if(!ValidateRejection(forBuy, c.sweep, c.rejection_ratio, c.penetration_atr))
+           {
+            minStructureBar = structureBar + 1;
+            continue;
+           }
+         c.has_rejection = true;
+        }
+
+      int sweepBar = haveSweep ? c.sweep.bar_index : -1;
+      int dispBar = -1;
+      double dispATR = 0.0, dispBody = 0.0, dispRangeATR = 0.0;
+      if(!FindDisplacement(forBuy, structureBar, sweepBar,
+                           m_maxSweepToStructureBars,
+                           dispBar, dispATR, dispBody, dispRangeATR))
+        {
+         minStructureBar = structureBar + 1;
+         continue;
+        }
+
+      c.has_displacement = true;
+      c.displacement_bar_index = dispBar;
+      c.displacement_time = m_entryCtx.candles.GetCandle(dispBar).time;
+      c.displacement_atr = dispRangeATR;
+      c.body_ratio = dispBody;
+
+      int fvgAge = -1;
+      if(!FindCausalFVG(forBuy, structureBar, dispBar, sweepBar,
+                        m_maxStructureToFVGBars, fvgAge, c.fvg))
+        {
+         minStructureBar = structureBar + 1;
+         continue;
+        }
+
+      c.has_fvg = true;
+      c.freshness_ok = (fvgAge >= 0 && fvgAge <= m_maxFVGAgeBars);
+
+      double fvgMid = (c.fvg.top + c.fvg.bottom) * 0.5;
+      c.location_ok = CalculateLocation(forBuy, structureTime, fvgMid, c.location_midpoint);
+      if(m_requirePremiumDiscount && !c.location_ok)
+        {
+         minStructureBar = structureBar + 1;
+         continue;
+        }
+
+      CandleData thesisCandle = haveSweep
+                                 ? m_entryCtx.candles.GetCandle(c.sweep.bar_index)
+                                 : m_entryCtx.candles.GetCandle(dispBar);
+      c.invalidation_price = forBuy ? thesisCandle.low : thesisCandle.high;
+      c.invalidation_ok = forBuy
+                          ? (c.invalidation_price < c.fvg.bottom)
+                          : (c.invalidation_price > c.fvg.top);
+      if(!c.invalidation_ok)
+        {
+         minStructureBar = structureBar + 1;
+         continue;
+        }
+
+      c.chain_id = StableChainId(structureTime, c.fvg.time, forBuy);
+      c.chain_key = StringFormat("%s|%d|%I64d|%I64d|%d|%d|%d",
+                                 m_entryCtx.candles.Symbol(),
+                                 forBuy ? 1 : 0,
+                                 (long)structureTime,
+                                 (long)c.fvg.time,
+                                 structureBar,
+                                 dispBar,
+                                 haveSweep ? c.sweep.bar_index : -1);
+
+      double sweepQ = haveSweep ? MathMax(0.0, MathMin(c.rejection_ratio, 1.0)) : 0.0;
+      double dispQ = MathMax(0.0, MathMin(c.displacement_atr / 2.5, 1.0));
+      double structQ = MathMax(0.0, MathMin(c.structure_strength, 1.0));
+      double fvgQ = MathMax(0.0, MathMin(c.fvg.width, 1.0));
+      double freshQ = c.freshness_ok ? 1.0 : 0.0;
+      double locQ = c.location_ok ? 1.0 : 0.0;
+
+      if(family == SETUP_FAMILY_REVERSAL)
+         c.quality = 100.0 * (0.20 * sweepQ +
+                              0.20 * dispQ +
+                              0.20 * structQ +
+                              0.15 * fvgQ +
+                              0.10 * freshQ +
+                              0.15 * locQ);
+      else
+         c.quality = 100.0 * (0.25 * dispQ +
+                              0.25 * structQ +
+                              0.20 * fvgQ +
+                              0.15 * freshQ +
+                              0.15 * locQ);
+
+      c.status = CHAIN_VALID;
       return c;
      }
 
-   c.has_bos = hasBos;
-   c.has_choch = hasChoch;
-   c.family = family;
-
-   datetime structureTime = hasChoch ? c.choch.time : c.bos.time;
-   int structureBar = hasChoch ? c.choch.bar_index : c.bos.bar_index;
-   c.structure_strength = hasChoch ? 1.0 : c.bos.strength;
-
-   if(c.structure_strength < m_minStructureStrength && hasBos)
-     {
-      c.status = CHAIN_INVALID;
-      c.failure_reason = "structure break strength below minimum";
-      return c;
-     }
-
-   if(!FindSweep(forBuy, structureTime, structureBar, c.sweep))
-     {
-      c.status = CHAIN_INCOMPLETE;
-      c.failure_reason = "no causal opposing-side liquidity sweep before structure break";
-      return c;
-     }
-   c.has_sweep = true;
-
-   if(!ValidateRejection(forBuy, c.sweep, c.rejection_ratio, c.penetration_atr))
-     {
-      c.status = CHAIN_INVALID;
-      c.failure_reason = "liquidity sweep did not show sufficient reclaim/rejection";
-      return c;
-     }
-   c.has_rejection = true;
-
-   double displacementATR = 0.0;
-   double dispBody = 0.0;
-   double dispRangeATR = 0.0;
-   if(!ValidateDisplacement(forBuy, structureBar, displacementATR, dispBody, dispRangeATR))
-     {
-      c.status = CHAIN_INVALID;
-      c.failure_reason = "displacement validation failed";
-      return c;
-     }
-   c.displacement_atr = dispRangeATR;
-   c.body_ratio = dispBody;
-   c.has_displacement = true;
-
-   int fvgAge = -1;
-   if(!FindCausalFVG(forBuy, structureTime, structureBar, c.sweep.time, fvgAge, c.fvg))
-     {
-      c.status = CHAIN_INCOMPLETE;
-      c.failure_reason = "no fresh/tested causal FVG linked to the structure event";
-      return c;
-     }
-   c.has_fvg = true;
-   c.freshness_ok = (fvgAge >= 0 && fvgAge <= m_maxFVGAgeBars);
-
-   double fvgMid = (c.fvg.top + c.fvg.bottom) * 0.5;
-   c.location_ok = CalculateLocation(forBuy, structureTime, fvgMid, c.location_midpoint);
-   if(m_requirePremiumDiscount && !c.location_ok)
-     {
-      c.status = CHAIN_INVALID;
-      c.failure_reason = "entry zone is on the wrong side of structural equilibrium";
-      return c;
-     }
-
-   CandleData sweepCandle = m_entryCtx.candles.GetCandle(c.sweep.bar_index);
-   c.invalidation_price = forBuy ? sweepCandle.low : sweepCandle.high;
-   c.invalidation_ok = forBuy
-                       ? (c.invalidation_price < c.fvg.bottom)
-                       : (c.invalidation_price > c.fvg.top);
-   if(!c.invalidation_ok)
-     {
-      c.status = CHAIN_INVALID;
-      c.failure_reason = "structural invalidation does not sit beyond the entry zone";
-      return c;
-     }
-
-   c.chain_id = StableChainId(structureTime, c.fvg.time, forBuy);
-   c.chain_key = StringFormat("%s|%d|%I64d|%I64d|%d|%d",
-                              m_entryCtx.candles.Symbol(),
-                              (int)forBuy,
-                              (long)structureTime,
-                              (long)c.fvg.time,
-                              structureBar,
-                              c.sweep.bar_index);
-
-   double sweepQ = MathMax(0.0, MathMin(c.rejection_ratio, 1.0));
-   double dispQ = MathMax(0.0, MathMin(c.displacement_atr / 2.5, 1.0));
-   double structQ = MathMax(0.0, MathMin(c.structure_strength, 1.0));
-   double fvgQ = MathMax(0.0, MathMin(c.fvg.width / 1.0, 1.0));
-   double freshQ = c.freshness_ok ? 1.0 : 0.0;
-   double locQ = c.location_ok ? 1.0 : 0.0;
-
-   c.quality = 100.0 * (0.15 * sweepQ +
-                        0.20 * dispQ +
-                        0.20 * structQ +
-                        0.15 * fvgQ +
-                        0.15 * freshQ +
-                        0.15 * locQ);
-
-   c.status = CHAIN_VALID;
+   c.status = CHAIN_INCOMPLETE;
+   c.failure_reason = "no causally valid structural event in candidate window";
    return c;
   }
 
