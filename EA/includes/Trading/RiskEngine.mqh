@@ -141,6 +141,7 @@ bool CRiskEngine::ValidateSetup(TradeSetup &setup, double minRR, double maxSLDis
    if(!setup.active) return false;
    if(setup.status != SETUP_ACTIVE) return false;
    if(!setup.structural_valid) return false;
+   if(!setup.target_plan_valid) return false;
 
    // Structural thesis and protective order are separate. The actual stop
    // must remain beyond the thesis invalidation boundary.
