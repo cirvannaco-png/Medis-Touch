@@ -190,7 +190,7 @@ void CMomentumBreakoutEngine::Evaluate(bool forBuy, double &momentumScore, doubl
       if(atrCount > 0)
         {
          double avgAtr = sumAtr / atrCount;
-         CandleData now = m_candles.GetCandle(0);
+         CandleData now = m_candles.GetCandle(1);
          CandleData then = m_candles.GetCandle(m_momentumLookbackBars);
          double netMove = forBuy ? (now.close - then.close) : (then.close - now.close);
          double raw = netMove / (avgAtr * m_momentumLookbackBars * 0.35); // 0.35 = expected fraction of ATR moved per bar in a genuine trend; empirical starting point, not fit
