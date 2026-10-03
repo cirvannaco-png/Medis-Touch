@@ -107,54 +107,6 @@ bool CTradeDecision::FindEntryFVG(ENUM_FVG_DIR dir, FVGZone &out)
    return false;
   }
 
-double CTradeDecision::RuntimeStrategyThreshold(const TradeSetup &setup)
-  {
-   if(!m_runtimeEnabled) return 60.0;
-   double threshold = (double)m_runtime.ensemble_threshold;
-   switch(setup.reasons.selected_strategy)
-     {
-      case STRATEGY_MOMENTUM_BREAKOUT:
-         threshold = MathMax(threshold, (double)m_runtime.momentum_threshold);
-         break;
-      case STRATEGY_MEAN_REVERSION:
-         threshold = MathMax(threshold, (double)m_runtime.mean_reversion_threshold);
-         break;
-      case STRATEGY_KEY_LEVEL:
-         threshold = MathMax(threshold, (double)m_runtime.key_level_threshold);
-         break;
-      case STRATEGY_SMC:
-         threshold = MathMax(threshold, (double)m_runtime.smc_threshold);
-         break;
-      default:
-         threshold = MathMax(threshold, (double)m_runtime.smc_threshold);
-         break;
-     }
-   return threshold;
-  }
-
-double CTradeDecision::RuntimeContradictionPenalty(const SetupReasons &r)
-  {
-   if(!m_runtimeEnabled) return 0.0;
-   int hits = 0;
-   if(!r.trend_aligned)               hits++;
-   if(!r.premium_discount_ok)         hits++;
-   if(!r.chase_ok)                    hits++;
-   if(r.vol_regime == VOL_REGIME_LOW) hits++;
-   if(!r.session_ok)                  hits++;
-   if(r.news_risk != NEWS_NONE)       hits++;
-   if(r.htf_ob_state == OB_MITIGATED) hits++;
-   return MathMin((double)hits * m_runtime.contradiction_penalty, 1.0);
-  }
-
-void CTradeDecision::ApplyRuntimeOverlay(TradeSetup &setup)
-  {
-   // v2.16: runtime configuration is policy metadata only until the
-   // DecisionEngine owns an explicit, auditable policy record. The former
-   // implementation mutated setup.active/confidence and read the diagnostic
-   // strategy selector, making a supposedly diagnostic module live.
-   setup.active = setup.active;
-  }
-
 
 TradeSetup CTradeDecision::GenerateBuySetup()
   {
