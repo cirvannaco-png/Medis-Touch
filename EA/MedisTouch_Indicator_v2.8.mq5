@@ -14,6 +14,7 @@
 #include "includes/Core/SignalLogger.mqh"
 #include "includes/Analysis/TFContext.mqh"
 #include "includes/Analysis/Scoring.mqh"
+#include "includes/Analysis/StructuralValidator.mqh"
 #include "includes/Trading/TradeZone.mqh"
 #include "includes/Trading/RiskEngine.mqh"
 #include "includes/Trading/OutcomeTracker.mqh"
@@ -39,6 +40,15 @@ input double InpFVGMinSizeATR = 0.1;        // Minimum FVG size as ATR fraction
 
 input group "Liquidity"
 input double InpInternalLiqThresholdATR = 0.2; // Internal liquidity threshold ATR
+
+input group "SMC Chain Validation (v2.16)"
+input int    InpMaxSweepToStructureBars = 8;
+input int    InpMaxStructureToFVGBars = 2;
+input int    InpMaxFVGAgeBars = 15;
+input double InpMinChainDisplacementATR = 1.0;
+input double InpMinChainDisplacementBodyRatio = 0.55;
+input double InpMinChainStructureStrength = 0.45;
+input bool   InpRequireContinuationHTFAlignment = true;
 
 input group "Risk"
 input double InpMinRiskReward = 1.5;
@@ -190,7 +200,20 @@ int OnInit()
    g_scoring.ConfigureVolatilityRegime(InpBlockLowVolRegime, InpVolRegimeLookback, InpVolRegimeLowPct, InpVolRegimeHighPct);
    g_scoring.ConfigureSessionFilter(InpUseSessionFilter, InpAllowTokyoSession, InpAllowLondonSession,
                                     InpAllowNewYorkSession, InpAllowLondonNYOverlap);
-   g_decision.Init(&g_chartCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, InpSLBufferATR, InpMinStopSpreadMult);
+
+   g_validator.Init(g_fvgCtx, g_trendCtx,
+                    InpMaxSweepToStructureBars,
+                    InpMaxStructureToFVGBars,
+                    InpMaxFVGAgeBars,
+                    InpMinChainDisplacementATR,
+                    InpMinChainDisplacementBodyRatio,
+                    InpMinChainStructureStrength,
+                    InpRequirePremiumDiscount,
+                    InpRequireContinuationHTFAlignment,
+                    0.0);
+
+   g_decision.Init(&g_fvgCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, &g_validator,
+                   InpSLBufferATR, InpMinStopSpreadMult);
    g_visuals.Init(&g_objMan);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);
@@ -220,7 +243,7 @@ int OnCalculate(const int rates_total,
    if(g_chartCtx == NULL || !g_chartCtx.candles.IsReady())
       return rates_total;
 
-   double currentATR = g_fvgCtx.candles.GetATR(0); // same ATR basis used for SL sizing in TradeZone
+   double currentATR = g_fvgCtx.candles.GetATR(1); // confirmed-bar ATR for setup validation
 
    TradeSetup buySetup = g_decision.GenerateBuySetup();
    TradeSetup sellSetup = g_decision.GenerateSellSetup();
