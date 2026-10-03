@@ -10,6 +10,7 @@
 #include "../Core/RuntimeConfigBus.mqh"
 #include "../Analysis/TFContext.mqh"
 #include "../Analysis/Scoring.mqh"
+#include "../Analysis/StructuralValidator.mqh"
 #include "Targets.mqh"
 
 class CTradeDecision : public IRuntimeConfigConsumer
@@ -18,8 +19,9 @@ private:
    CCandleData*      m_priceRef;
    CTFContext*       m_fvgCtx;
    CTFContext*       m_liqCtx;
-   CScoringEngine*   m_scoring;
-   TradeSetup        m_lastSetup;
+   CScoringEngine*      m_scoring;
+   CStructuralValidator* m_validator;
+   TradeSetup             m_lastSetup;
    double            m_slBufferATR;
    double            m_minStopSpreadMult;
    double            m_fvgMaxDistATR;
@@ -35,7 +37,7 @@ private:
 public:
                      CTradeDecision();
    void              Init(CCandleData* priceRef, CTFContext* fvgCtx, CTFContext* liqCtx, CScoringEngine* scoring,
-                          double slBufferATR = 0.25, double minStopSpreadMult = 3.0);
+                          CStructuralValidator* validator, double slBufferATR = 0.25, double minStopSpreadMult = 3.0);
    void              ApplyRuntimeParameters(const RuntimeParameters &parameters);
    TradeSetup        GenerateBuySetup();
    TradeSetup        GenerateSellSetup();
@@ -50,16 +52,18 @@ CTradeDecision::CTradeDecision()
    m_fvgMaxDistATR = 3.0;
    m_runtimeEnabled = false;
    m_runtime.Defaults();
+   m_validator = NULL;
    BindRuntimeConfigConsumer(this);
   }
 
 void CTradeDecision::Init(CCandleData* priceRef, CTFContext* fvgCtx, CTFContext* liqCtx, CScoringEngine* scoring,
-                          double slBufferATR, double minStopSpreadMult)
+                          CStructuralValidator* validator, double slBufferATR, double minStopSpreadMult)
   {
    m_priceRef = priceRef;
    m_fvgCtx = fvgCtx;
    m_liqCtx = liqCtx;
    m_scoring = scoring;
+   m_validator = validator;
    m_slBufferATR = (slBufferATR > 0.0 ? slBufferATR : 0.25);
    m_minStopSpreadMult = (minStopSpreadMult >= 0.0 ? minStopSpreadMult : 3.0);
   }
@@ -144,47 +148,60 @@ double CTradeDecision::RuntimeContradictionPenalty(const SetupReasons &r)
 
 void CTradeDecision::ApplyRuntimeOverlay(TradeSetup &setup)
   {
-   if(!m_runtimeEnabled) return;
-
-   bool forBuy = (setup.type == ORDER_TYPE_BUY);
-   InducementResult ind = m_scoring.GetInducement(forBuy);
-   if(!ind.valid || ind.bosBarIndex < 0 || ind.bosBarIndex > m_runtime.freshness_bars)
-     {
-      setup.active = false;
-      return;
-     }
-
-   double contradiction = RuntimeContradictionPenalty(setup.reasons);
-   setup.confidence *= (1.0 - contradiction);
-   double required = RuntimeStrategyThreshold(setup);
-   if(setup.confidence < required)
-      setup.active = false;
+   // v2.16: runtime configuration is policy metadata only until the
+   // DecisionEngine owns an explicit, auditable policy record. The former
+   // implementation mutated setup.active/confidence and read the diagnostic
+   // strategy selector, making a supposedly diagnostic module live.
+   setup.active = setup.active;
   }
+
 
 TradeSetup CTradeDecision::GenerateBuySetup()
   {
    TradeSetup setup;
    ZeroMemory(setup);
-   if(m_priceRef == NULL || m_fvgCtx == NULL || m_scoring == NULL) return setup;
+   if(m_priceRef == NULL || m_fvgCtx == NULL || m_scoring == NULL || m_validator == NULL)
+      return setup;
+
+   StructuralValidationResult sv;
+   if(!m_validator.Validate(true, sv))
+      return setup;
+
    double conf = m_scoring.CalculateConfidence(true);
    if(conf < 50.0) return setup;
-   FVGZone entryFVG;
-   if(!FindEntryFVG(FVG_BULL, entryFVG)) return setup;
-   double atr = m_fvgCtx.candles.GetATR(0);
-   if(atr <= 0) return setup;
+
+   double atr = m_fvgCtx.candles.GetATR(1);
+   if(atr <= 0.0) return setup;
+
+   setup.setup_id = sv.chain.chain_key;
+   setup.smc_chain_id = sv.chain.chain_id;
+   setup.status = SETUP_ACTIVE;
+   setup.rejection_reason = SETUP_REJECT_NONE;
    setup.type = ORDER_TYPE_BUY;
-   setup.entry_top = entryFVG.top;
-   setup.entry_bottom = entryFVG.bottom;
-   setup.stop_loss = entryFVG.bottom - m_slBufferATR * atr;
+   setup.entry_top = sv.entry_fvg.top;
+   setup.entry_bottom = sv.entry_fvg.bottom;
+   setup.invalidation = sv.invalidation_price;
+   setup.stop_loss = setup.invalidation - m_slBufferATR * atr;
    setup.stop_loss = EnforceSpreadFloor(m_priceRef.Symbol(), setup.entry_top, setup.stop_loss, true);
+
    CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr, setup.entry_bottom);
+
+   setup.raw_confidence = conf;
    setup.confidence = conf;
-   setup.creation_time = TimeCurrent();
+   setup.structural_valid = sv.valid;
+   setup.structural_quality = sv.structural_quality;
+   setup.creation_time = sv.chain.has_choch ? sv.chain.choch.time : sv.chain.bos.time;
+   setup.expiry_time = 0;
    setup.active = true;
+
    m_scoring.EvaluateReasons(true, setup.reasons);
+   setup.reasons.bos_confirmed = true;
+   setup.reasons.liquidity_swept = sv.chain.has_sweep;
+   setup.reasons.fresh_fvg = true;
    m_scoring.PopulateStrategyDiagnostics(true, setup.confidence, setup.reasons);
    ApplyRuntimeOverlay(setup);
    m_scoring.PopulateConfidenceDiagnostics(setup.reasons, setup.confidence);
+
    m_lastSetup = setup;
    return setup;
   }
@@ -193,28 +210,51 @@ TradeSetup CTradeDecision::GenerateSellSetup()
   {
    TradeSetup setup;
    ZeroMemory(setup);
-   if(m_priceRef == NULL || m_fvgCtx == NULL || m_scoring == NULL) return setup;
+   if(m_priceRef == NULL || m_fvgCtx == NULL || m_scoring == NULL || m_validator == NULL)
+      return setup;
+
+   StructuralValidationResult sv;
+   if(!m_validator.Validate(false, sv))
+      return setup;
+
    double conf = m_scoring.CalculateConfidence(false);
    if(conf < 50.0) return setup;
-   FVGZone entryFVG;
-   if(!FindEntryFVG(FVG_BEAR, entryFVG)) return setup;
-   double atr = m_fvgCtx.candles.GetATR(0);
-   if(atr <= 0) return setup;
+
+   double atr = m_fvgCtx.candles.GetATR(1);
+   if(atr <= 0.0) return setup;
+
+   setup.setup_id = sv.chain.chain_key;
+   setup.smc_chain_id = sv.chain.chain_id;
+   setup.status = SETUP_ACTIVE;
+   setup.rejection_reason = SETUP_REJECT_NONE;
    setup.type = ORDER_TYPE_SELL;
-   setup.entry_top = entryFVG.top;
-   setup.entry_bottom = entryFVG.bottom;
-   setup.stop_loss = entryFVG.top + m_slBufferATR * atr;
+   setup.entry_top = sv.entry_fvg.top;
+   setup.entry_bottom = sv.entry_fvg.bottom;
+   setup.invalidation = sv.invalidation_price;
+   setup.stop_loss = setup.invalidation + m_slBufferATR * atr;
    setup.stop_loss = EnforceSpreadFloor(m_priceRef.Symbol(), setup.entry_bottom, setup.stop_loss, false);
+
    CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr, setup.entry_top);
+
+   setup.raw_confidence = conf;
    setup.confidence = conf;
-   setup.creation_time = TimeCurrent();
+   setup.structural_valid = sv.valid;
+   setup.structural_quality = sv.structural_quality;
+   setup.creation_time = sv.chain.has_choch ? sv.chain.choch.time : sv.chain.bos.time;
+   setup.expiry_time = 0;
    setup.active = true;
+
    m_scoring.EvaluateReasons(false, setup.reasons);
+   setup.reasons.bos_confirmed = true;
+   setup.reasons.liquidity_swept = sv.chain.has_sweep;
+   setup.reasons.fresh_fvg = true;
    m_scoring.PopulateStrategyDiagnostics(false, setup.confidence, setup.reasons);
    ApplyRuntimeOverlay(setup);
    m_scoring.PopulateConfidenceDiagnostics(setup.reasons, setup.confidence);
+
    m_lastSetup = setup;
    return setup;
   }
+
 #endif
 //+------------------------------------------------------------------+
