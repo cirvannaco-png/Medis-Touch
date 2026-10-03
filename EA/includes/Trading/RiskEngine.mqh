@@ -100,6 +100,9 @@ double CRiskEngine::CalculateLotSize(string symbol, double riskPercent, double e
    double minLot  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
    double maxLot  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
    double lotStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   if(minLot <= 0.0 || maxLot < minLot || lotStep <= 0.0) return 0.0;
+
+   if(riskAmount <= 0.0) return 0.0;
 
    double lots = rawLots;
    if(lotStep > 0)
@@ -136,6 +139,24 @@ double CRiskEngine::RiskAmountForLots(string symbol, double lots, double entry, 
 bool CRiskEngine::ValidateSetup(TradeSetup &setup, double minRR, double maxSLDistanceATR, double currentATR)
   {
    if(!setup.active) return false;
+   if(setup.status != SETUP_ACTIVE) return false;
+   if(!setup.structural_valid) return false;
+
+   // Structural thesis and protective order are separate. The actual stop
+   // must remain beyond the thesis invalidation boundary.
+   if(setup.invalidation <= 0.0 || setup.stop_loss <= 0.0) return false;
+   if(setup.type == ORDER_TYPE_BUY)
+     {
+      if(setup.invalidation >= setup.entry_bottom) return false;
+      if(setup.stop_loss >= setup.invalidation) return false;
+     }
+   else if(setup.type == ORDER_TYPE_SELL)
+     {
+      if(setup.invalidation <= setup.entry_top) return false;
+      if(setup.stop_loss <= setup.invalidation) return false;
+     }
+   else return false;
+
    // FIXED: this used to check R:R and the ATR-distance cap against
    // entry_bottom/entry_top — the *opposite*, more favorable edge of the
    // zone from what OrderManager::Submit() and OnTick()'s lot-sizing call
@@ -154,8 +175,9 @@ bool CRiskEngine::ValidateSetup(TradeSetup &setup, double minRR, double maxSLDis
    // checked against anything — a dead input that gave the impression of
    // risk control while doing nothing. Now it actually rejects setups
    // whose stop is unreasonably wide relative to current volatility.
-   if(currentATR > 0)
+   if(maxSLDistanceATR > 0.0)
      {
+      if(currentATR <= 0.0) return false;
       double slDistATR = slDist / currentATR;
       if(slDistATR > maxSLDistanceATR) return false;
      }
