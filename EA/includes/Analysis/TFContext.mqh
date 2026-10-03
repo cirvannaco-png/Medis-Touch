@@ -75,6 +75,7 @@ bool CTFContext::Init(string symbol, ENUM_TIMEFRAMES timeframe, int maxBars,
    bos.Init(&swings, &candles);
    choch.Init(&swings, &candles);
    fvg.Init(&candles, fvgMinSizeATR);
+   fvg.ConfigureAging(8, 15);
    liquidity.Init(&candles, &swings, liqThresholdATR);
    sr.Init(&candles, &swings);
    trend.Init(&swings, &bos, &choch, &candles);
