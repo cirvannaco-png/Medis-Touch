@@ -15,23 +15,32 @@ private:
    int               m_zoneCount;
 
    double            m_minSizeATR;   // minimum gap size as fraction of ATR
+   int               m_degradeBars;
+   int               m_maxAgeBars;
 
    void              UpdateState(FVGZone &zone);
 
 public:
                      CFVG();
    void              Init(CCandleData* candleData, double minSizeATR = 0.1);
+   void              ConfigureAging(int degradeBars = 8, int maxAgeBars = 15);
    void              Detect();
    int               Count() const { return m_zoneCount; }
    FVGZone           GetZone(int i) const; // 0 = most recent
    void              UpdateAllStates();
   };
 //+------------------------------------------------------------------+
-CFVG::CFVG() : m_candles(NULL), m_zoneCount(0), m_minSizeATR(0.1) {}
+CFVG::CFVG() : m_candles(NULL), m_zoneCount(0), m_minSizeATR(0.1), m_degradeBars(8), m_maxAgeBars(15) {}
 void CFVG::Init(CCandleData* candleData, double minSizeATR)
   {
    m_candles = candleData;
    m_minSizeATR = minSizeATR;
+  }
+//+------------------------------------------------------------------+
+void CFVG::ConfigureAging(int degradeBars, int maxAgeBars)
+  {
+   m_degradeBars = MathMax(1, degradeBars);
+   m_maxAgeBars = MathMax(m_degradeBars + 1, maxAgeBars);
   }
 //+------------------------------------------------------------------+
 void CFVG::Detect()
@@ -112,8 +121,15 @@ void CFVG::UpdateAllStates()
 //+------------------------------------------------------------------+
 void CFVG::UpdateState(FVGZone &zone)
   {
-   if(zone.state == FVG_MITIGATED || zone.state == FVG_INVALIDATED)
+   if(zone.state == FVG_MITIGATED || zone.state == FVG_EXPIRED || zone.state == FVG_INVALIDATED)
       return; // terminal states — nothing to update
+
+   int ageBars = MathMax(0, zone.bar_index - 1);
+   if(ageBars > m_maxAgeBars)
+     {
+      zone.state = FVG_EXPIRED;
+      return;
+     }
    int total = m_candles.Total();
    // Series-indexed newest-first: scan from now (0) backward. Once we
    // reach a bar older than the zone's creation time we can stop —
@@ -133,7 +149,7 @@ void CFVG::UpdateState(FVGZone &zone)
            {
             if(cd.close >= zone.top)
                zone.state = FVG_MITIGATED;
-            else if(zone.state == FVG_FRESH)
+            else if(zone.state == FVG_FRESH || zone.state == FVG_DEGRADED)
                zone.state = FVG_TESTED;
            }
         }
@@ -143,11 +159,16 @@ void CFVG::UpdateState(FVGZone &zone)
            {
             if(cd.close <= zone.bottom)
                zone.state = FVG_MITIGATED;
-            else if(zone.state == FVG_FRESH)
+            else if(zone.state == FVG_FRESH || zone.state == FVG_DEGRADED)
                zone.state = FVG_TESTED;
            }
         }
      }
+
+   // Age is itself a quality signal. A zone that survived but remained
+   // untouched beyond the degradation horizon is no longer executable.
+   if(zone.state == FVG_FRESH && ageBars >= m_degradeBars)
+      zone.state = FVG_DEGRADED;
   }
 //+------------------------------------------------------------------+
 FVGZone CFVG::GetZone(int i) const
