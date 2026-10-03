@@ -434,6 +434,7 @@ int OnInit()
    g_subscribers.Init();
    g_publisher.Init(_Symbol, &g_subscribers, InpWebRequestTimeoutMs, InpBridgeApiKey);
    g_publisher.SetWeightVersion(MIDAS_WEIGHT_SET_VERSION);
+   g_publisher.SetSignalTimeframe(InpFVGTF);
    // v2.11 — dormant until InpConfigSyncEndpoint is set AND a real
    // promotion has happened on the bridge; see ConfigSync.mqh header.
    // EventSetTimer's argument is seconds, hence the *60.
