@@ -66,6 +66,7 @@ input bool   InpRequireContinuationHTFAlignment = true;
 
 input group "Market Regime Policy (v2.17)"
 input bool   InpEnableRegimeGate = true;
+input int    InpMaxRegimeTrendBOSAgeBars = 12;
 
 input group "Risk"
 input double InpMinRiskReward = 1.5;
