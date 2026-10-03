@@ -49,7 +49,7 @@ CTradeDecision::CTradeDecision()
    ZeroMemory(m_lastSetup);
    m_slBufferATR = 0.25;
    m_minStopSpreadMult = 3.0;
-   m_fvgMaxDistATR = 3.0;
+   m_fvgMaxDistATR = 1.25;
    m_runtimeEnabled = false;
    m_runtime.Defaults();
    m_validator = NULL;
