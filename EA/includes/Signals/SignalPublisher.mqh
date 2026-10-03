@@ -182,8 +182,9 @@ string CSignalPublisher::BuildExtraJson(const TradeDecisionRecord &dec)
 
    string sweepGradeStr = EnumToString(r.sweep_grade);
    string newsRiskStr = EnumToString(r.news_risk);
-   string family = (dec.setup.reasons.bos_confirmed && dec.setup.reasons.inducement_valid)
-                    ? "SMC_CHAIN" : "SMC";
+   string family = "SMC";
+   if(dec.setup.family == SETUP_FAMILY_REVERSAL) family = "SMC_REVERSAL";
+   else if(dec.setup.family == SETUP_FAMILY_CONTINUATION) family = "SMC_CONTINUATION";
 
    return StringFormat(
       "{\"setup_id\":\"%s\",\"chain_id\":\"%I64u\",\"entry_top\":%.5f,\"entry_bottom\":%.5f,"
