@@ -12,7 +12,7 @@
 // together on the same chart (indicator for the visuals you're used to,
 // EA for the parts that touch money) or run this alone headless.
 #property copyright "Medis Touch"
-#property version   "2.80"
+#property version   "2.16"
 #property strict
 
 #include "includes/Core/Config.mqh"
@@ -433,7 +433,7 @@ int OnInit()
    g_store.Init(_Symbol);
    g_subscribers.Init();
    g_publisher.Init(_Symbol, &g_subscribers, InpWebRequestTimeoutMs, InpBridgeApiKey);
-   g_publisher.SetWeightVersion(InpWeightSetVersion);
+   g_publisher.SetWeightVersion(MIDAS_WEIGHT_SET_VERSION);
    // v2.11 — dormant until InpConfigSyncEndpoint is set AND a real
    // promotion has happened on the bridge; see ConfigSync.mqh header.
    // EventSetTimer's argument is seconds, hence the *60.
