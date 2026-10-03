@@ -273,10 +273,17 @@ bool CDecisionStore::Save(const TradeDecisionRecord &rec)
    for(int i = 0; i < ArraySize(m_decisions); i++)
       if(m_decisions[i].decision_id == rec.decision_id) return true;
 
+   // Durability is a prerequisite for execution decisions. Write and
+   // verify the append BEFORE adding the record to the in-memory mirror.
+   // Otherwise a disk failure could look harmless during this session and
+   // leave Recovery blind after a restart.
+   if(!AppendLine(m_decisionsFile, SerializeDecision(rec)))
+      return false;
+
    int idx = ArraySize(m_decisions);
    ArrayResize(m_decisions, idx + 1);
    m_decisions[idx] = rec;
-   return AppendLine(m_decisionsFile, SerializeDecision(rec));
+   return true;
   }
 //+------------------------------------------------------------------+
 bool CDecisionStore::SaveExecution(long decisionId, double volume, ulong ticket)
