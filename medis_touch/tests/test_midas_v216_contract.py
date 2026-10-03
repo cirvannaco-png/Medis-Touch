@@ -19,7 +19,8 @@ def test_live_trade_setup_has_first_class_invalidation_and_structural_validity()
 def test_fvg_formation_is_closed_bar_only():
     c = read("EA/includes/SmartMoney/FVG.mqh")
     assert "for(int i = 3; i < total; i++)" in c
-    assert "FVG_DEGRADED" not in c  # enum belongs to Config, not this implementation
+    assert "m_degradeBars" in c
+    assert "m_maxAgeBars" in c
 
 
 def test_choch_cannot_break_from_live_bar_and_requires_swing_confirmation():
@@ -48,8 +49,8 @@ def test_broker_stop_validation_fails_closed_when_point_size_missing():
 def test_tradezone_is_structurally_gated():
     c = read("EA/includes/Trading/TradeZone.mqh")
     assert '#include "../Analysis/StructuralValidator.mqh"' in c
-    assert "!m_validator->Validate(true, sv)" in c
-    assert "!m_validator->Validate(false, sv)" in c
+    assert "if(!m_validator.Validate(true, sv))" in c
+    assert "if(!m_validator.Validate(false, sv))" in c
 
 
 def test_strategy_selector_runtime_overlay_is_not_mutating_live_setup():
@@ -60,7 +61,7 @@ def test_strategy_selector_runtime_overlay_is_not_mutating_live_setup():
 
 def test_signal_payload_preserves_zone_invalidation_and_expiry():
     c = read("EA/includes/Signals/SignalPublisher.mqh")
-    assert '\"expires_at\":%d' in c
+    assert '\\\"expires_at\\\":%d' in c
     assert "entry_top" in c
     assert "entry_bottom" in c
     assert "invalidation" in c
