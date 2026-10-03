@@ -24,6 +24,7 @@ private:
    TradeSetup             m_lastSetup;
    double            m_slBufferATR;
    double            m_minStopSpreadMult;
+   double            m_targetMinRR;
    bool              m_runtimeEnabled;
    RuntimeParameters m_runtime;
 
@@ -32,7 +33,8 @@ private:
 public:
                      CTradeDecision();
    void              Init(CCandleData* priceRef, CTFContext* fvgCtx, CTFContext* liqCtx, CScoringEngine* scoring,
-                          CStructuralValidator* validator, double slBufferATR = 0.25, double minStopSpreadMult = 3.0);
+                          CStructuralValidator* validator, double slBufferATR = 0.25, double minStopSpreadMult = 3.0,
+                          double targetMinRR = 1.5);
    void              ApplyRuntimeParameters(const RuntimeParameters &parameters);
    TradeSetup        GenerateBuySetup();
    TradeSetup        GenerateSellSetup();
@@ -44,6 +46,7 @@ CTradeDecision::CTradeDecision()
    ZeroMemory(m_lastSetup);
    m_slBufferATR = 0.25;
    m_minStopSpreadMult = 3.0;
+   m_targetMinRR = 1.5;
    m_runtimeEnabled = false;
    m_runtime.Defaults();
    m_validator = NULL;
@@ -60,6 +63,7 @@ void CTradeDecision::Init(CCandleData* priceRef, CTFContext* fvgCtx, CTFContext*
    m_validator = validator;
    m_slBufferATR = (slBufferATR > 0.0 ? slBufferATR : 0.25);
    m_minStopSpreadMult = (minStopSpreadMult >= 0.0 ? minStopSpreadMult : 3.0);
+   m_targetMinRR = (targetMinRR > 0.0 ? targetMinRR : 1.5);
   }
 
 void CTradeDecision::ApplyRuntimeParameters(const RuntimeParameters &parameters)
@@ -92,6 +96,10 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    if(!m_validator.Validate(true, sv))
       return setup;
 
+   string regimeReason;
+   if(!m_scoring.IsRegimeCompatible(true, sv.family, regimeReason))
+      return setup;
+
    double conf = m_scoring.CalculateConfidence(true);
    if(conf < 50.0) return setup;
 
@@ -110,7 +118,8 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    setup.stop_loss = setup.invalidation - m_slBufferATR * atr;
    setup.stop_loss = EnforceSpreadFloor(m_priceRef.Symbol(), setup.entry_top, setup.stop_loss, true);
 
-   CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr, setup.entry_bottom);
+   CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr, setup.entry_bottom,
+                                  m_targetMinRR, m_scoring.GetMarketRegime());
 
    setup.raw_confidence = conf;
    setup.confidence = conf;
@@ -121,6 +130,8 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    setup.active = true;
 
    m_scoring.EvaluateReasons(true, setup.reasons);
+   setup.reasons.regime_compatible = true;
+   setup.reasons.regime_reason = regimeReason;
    setup.reasons.bos_confirmed = (sv.chain.has_bos || sv.chain.has_choch);
    setup.reasons.liquidity_swept = sv.chain.has_sweep;
    setup.reasons.fresh_fvg = true;
@@ -148,6 +159,10 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    if(!m_validator.Validate(false, sv))
       return setup;
 
+   string regimeReason;
+   if(!m_scoring.IsRegimeCompatible(false, sv.family, regimeReason))
+      return setup;
+
    double conf = m_scoring.CalculateConfidence(false);
    if(conf < 50.0) return setup;
 
@@ -166,7 +181,8 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    setup.stop_loss = setup.invalidation + m_slBufferATR * atr;
    setup.stop_loss = EnforceSpreadFloor(m_priceRef.Symbol(), setup.entry_bottom, setup.stop_loss, false);
 
-   CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr, setup.entry_top);
+   CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr, setup.entry_top,
+                                  m_targetMinRR, m_scoring.GetMarketRegime());
 
    setup.raw_confidence = conf;
    setup.confidence = conf;
@@ -177,6 +193,8 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    setup.active = true;
 
    m_scoring.EvaluateReasons(false, setup.reasons);
+   setup.reasons.regime_compatible = true;
+   setup.reasons.regime_reason = regimeReason;
    setup.reasons.bos_confirmed = (sv.chain.has_bos || sv.chain.has_choch);
    setup.reasons.liquidity_swept = sv.chain.has_sweep;
    setup.reasons.fresh_fvg = true;
