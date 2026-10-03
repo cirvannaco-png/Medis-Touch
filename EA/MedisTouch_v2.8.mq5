@@ -697,6 +697,13 @@ void OnTick()
    int tfSeconds = PeriodSeconds(InpFVGTF);
    if(tfSeconds > 0)
       chosen.expiry_time = chosen.creation_time + (datetime)(InpSignalExpiryBars * tfSeconds);
+   if(chosen.expiry_time > 0 && TimeCurrent() >= chosen.expiry_time)
+     {
+      // The chain was structurally valid, but it is no longer actionable
+      // by the time the EA observed it. Do not publish a setup that is
+      // already expired.
+      return;
+     }
 
    // v2.9: attach the empirical calibration read for this confidence
    // bucket to the chosen setup before it's logged/published — this is
