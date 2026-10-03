@@ -196,11 +196,15 @@ void CConfigSync::Poll(void)
       return;
      }
 
-   // SCHEDULED -> EA_VALIDATED is deliberately a separate acknowledgement.
-   // This prevents the backend from activating a configuration merely because
-   // the EA could parse it. The APPLIED acknowledgement is sent only after the
-   // local runtime object has accepted the complete validated parameter set.
-   if(state == "SCHEDULED" && !Ack(configHash, "VALIDATED", "runtime_parameters_validated"))
+   // Validation and activation are intentionally separate lifecycle states.
+   // SCHEDULED / EA_VALIDATED may be acknowledged, but MUST NOT mutate
+   // live trading parameters. Only ACTIVE can apply a configuration.
+   if(state == "SCHEDULED")
+     {
+      Ack(configHash, "VALIDATED", "runtime_parameters_validated");
+      return;
+     }
+   if(state == "EA_VALIDATED")
       return;
 
    consumer.ApplyRuntimeParameters(parsed);
