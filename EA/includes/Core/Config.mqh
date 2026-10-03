@@ -558,6 +558,15 @@ struct SetupReasons
    // failure mode of blending every score into one number.
    ENUM_SELECTED_STRATEGY selected_strategy;       // which strategy's read was strongest for this regime
    double                 selected_strategy_score;  // that strategy's own score, on its own scale (0-100 for all five candidates)
+
+   // v2.16 extension evidence. Computed on confirmed bars; diagnostic
+   // until independent ablation/holdout testing promotes any component.
+   bool                   ifvg_confirmed;
+   bool                   bpr_confirmed;
+   bool                   cisd_confirmed;
+   bool                   breaker_block_confirmed;
+   bool                   smt_confirmed;
+   double                 extension_quality;
   };
 
 struct TradeSetup
