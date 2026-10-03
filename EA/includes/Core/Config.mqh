@@ -8,6 +8,11 @@
 #ifndef CONFIG_MQH
 #define CONFIG_MQH
 
+#define MIDAS_ENGINE_VERSION "2.16"
+#define MIDAS_SCHEMA_VERSION 4
+#define MIDAS_SETUP_CONTRACT_VERSION 2
+#define MIDAS_WEIGHT_SET_VERSION "SMC-CAUSAL-2.16"
+
 #include "NewsFilter.mqh" // for ENUM_NEWS_RISK, used by SetupReasons (v2.9)
 
 // --- Enums ---
