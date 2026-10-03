@@ -202,7 +202,18 @@ public:
    // v2.10. Half-life, in unfilled bars, of the diagnostic confidence
    // decay. 12 bars is the spec's starting point, not a fitted value.
    void              ConfigureConfidenceDecay(double halfLifeBars = 12.0) { m_decayHalfLifeBars = halfLifeBars; }
-   void              ConfigureCalibration(bool enabled, int minSample = 30) { m_calibrationEnabled = enabled; m_calibration.Init(m_symbol, minSample); }
+   void              ConfigureCalibration(bool enabled, int minSample = 30)
+     {
+      m_calibrationEnabled = enabled;
+      m_calibration.Init(m_symbol, minSample, false, MIDAS_WEIGHT_SET_VERSION);
+     }
+   double            GetContextCalibratedProbability(double confidence, ENUM_MARKET_REGIME regime,
+                                                     ENUM_SETUP_FAMILY family, int &sampleSizeOut,
+                                                     bool &hasEnoughDataOut, bool &contextUsedOut) const
+     {
+      return m_calibration.GetContextCalibratedProbability(confidence, regime, family,
+                                                            sampleSizeOut, hasEnoughDataOut, contextUsedOut);
+     }
    // v2.11. OFF by default (NULL publisher) — call once after Init(),
    // same pattern as ConfigureSimulation/ConfigureCalibration. When set,
    // FinalizeExit() and Resolve() push every outcome to the bridge in
@@ -419,7 +430,8 @@ void COutcomeTracker::FinalizeExit(int idx, PendingSetup &p, string outcome, dou
          // signal time — see CalibrationEngine.mqh limitation #4 about
          // what happens to this data across a scoring-formula change.
          if(m_calibrationEnabled)
-            m_calibration.Record(p.setup.confidence, p.realizedPnL);
+            m_calibration.Record(p.setup.confidence, p.realizedPnL,
+                                 p.setup.reasons.regime, p.setup.family);
         }
      }
 
