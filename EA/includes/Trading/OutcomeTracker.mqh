@@ -610,12 +610,15 @@ void COutcomeTracker::ProcessFilledBar(int idx, CandleData &bar0)
          break; // nothing happened this bar
         }
 
-      // 2b. Partial stage (only reachable once breakeven is done, same
-      // order CPositionManager enforces).
+      // 2b. Target-aware TP1 partial (mirrors CPositionManager).
+      // Legacy m_partialAtR remains only as a fallback for pre-v2.17
+      // restored decisions that have no valid TP1.
       if(!p.partialDone)
         {
-         double partialTrigger = isBuy ? p.sizingEntryPrice + m_partialAtR * p.mgmtRiskDist
-                                        : p.sizingEntryPrice - m_partialAtR * p.mgmtRiskDist;
+         double partialTrigger = p.setup.tp1;
+         if(partialTrigger <= 0.0)
+            partialTrigger = isBuy ? p.sizingEntryPrice + m_partialAtR * p.mgmtRiskDist
+                                   : p.sizingEntryPrice - m_partialAtR * p.mgmtRiskDist;
          bool partialTouched = isBuy ? (bar0.high >= partialTrigger) : (bar0.low <= partialTrigger);
 
          if(adverseTouched && partialTouched)
@@ -635,7 +638,26 @@ void COutcomeTracker::ProcessFilledBar(int idx, CandleData &bar0)
             m_pending[idx] = p;
             continue;
            }
-         break;
+        }
+
+      // 2c. TP2 profit protection. Once TP2 is touched after the partial,
+      // move the operative stop to TP1. This intentionally does not close
+      // another slice; it locks in the target-plan's first realized
+      // milestone while leaving the runner available for final_tp.
+      if(p.partialDone && p.setup.tp2 > 0.0)
+        {
+         bool tp2Touched = isBuy ? (bar0.high >= p.setup.tp2) : (bar0.low <= p.setup.tp2);
+         if(tp2Touched && p.setup.tp1 > 0.0)
+           {
+            bool improvedLock = isBuy ? (p.setup.tp1 > p.currentSL)
+                                      : (p.setup.tp1 < p.currentSL);
+            if(improvedLock)
+              {
+               p.currentSL = p.setup.tp1;
+               m_pending[idx] = p;
+               continue;
+              }
+           }
         }
 
       // 3. Pure runner — the stop only trails (never widens). A hit on
