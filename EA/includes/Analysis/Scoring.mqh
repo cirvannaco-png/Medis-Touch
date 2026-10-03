@@ -137,6 +137,8 @@ private:
    // v2.15: no Init() needed — see Strategies/StrategySelector.mqh, this
    // class only reads values the three engines above already computed.
    CStrategySelector        m_strategySelector;
+   bool                     m_regimeGateEnabled;
+
 
    double            OBScore(bool forBuy);
 
@@ -303,8 +305,8 @@ public:
    // decision path has one market-state source of truth instead of creating
    // a second independent detector at the EA layer.
    ENUM_MARKET_REGIME GetMarketRegime() { return m_regimeDetector.Classify(); }
-   bool              IsRegimeCompatible(bool forBuy, ENUM_SETUP_FAMILY family, string &reason)
-                       { return m_regimeDetector.AllowsSetup(forBuy, family, reason); }
+   bool              IsRegimeCompatible(bool forBuy, ENUM_SETUP_FAMILY family, string &reason);
+   void              ConfigureRegimeGate(bool enabled) { m_regimeGateEnabled = enabled; }
    InducementResult  GetInducement(bool forBuy) { return m_inducement.Validate(forBuy); }
    ENUM_MARKET_PHASE GetPhase() { return m_phase.Detect(); }
   };
@@ -319,7 +321,8 @@ CScoringEngine::CScoringEngine() : m_trendCtx(NULL), m_bosCtx(NULL), m_liqCtx(NU
                                     m_blockLowVolRegime(false),
                                     m_fvgMaxDistATR(1.25), m_requireChaseFilter(false), m_maxChaseDistATR(0.75),
                                     m_newsFilter(NULL), m_newsWarningMultiplier(0.85),
-                                    m_contradictionWeight(0.25), m_envWeight(1.0), m_execWeight(1.0)
+                                    m_contradictionWeight(0.25), m_envWeight(1.0), m_execWeight(1.0),
+                                    m_regimeGateEnabled(true)
   {
    // Session filter defaults to ON — see ConfigureSessionFilter()'s
    // comment. Unlike the other v2.8 gates this isn't a new, unbacktested
@@ -757,6 +760,16 @@ double CScoringEngine::PipSize()
    // everywhere (Telegram payload, dashboard) instead of a locally
    // re-derived one. Behavior is unchanged — same formula as before.
    return CPipCalculator::PipSize(m_priceRef.Symbol());
+  }
+//+------------------------------------------------------------------+
+bool CScoringEngine::IsRegimeCompatible(bool forBuy, ENUM_SETUP_FAMILY family, string &reason)
+  {
+   if(!m_regimeGateEnabled)
+     {
+      reason = "regime gate disabled (ablation mode)";
+      return true;
+     }
+   return m_regimeDetector.AllowsSetup(forBuy, family, reason);
   }
 //+------------------------------------------------------------------+
 void CScoringEngine::EvaluateReasons(bool forBuy, SetupReasons &out)
