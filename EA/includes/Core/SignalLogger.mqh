@@ -288,7 +288,11 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
                // v2.14 diagnostics — same append-only discipline.
                "KeyLevelSource", "KeyLevelReaction", "KeyLevelScore",
                // v2.15 diagnostics — same append-only discipline.
-               "SelectedStrategy", "SelectedStrategyScore");
+               "SelectedStrategy", "SelectedStrategyScore",
+               // v2.17 target/regime/calibration evidence.
+               "RegimeCompatible", "RegimeReason", "TargetPlanValid",
+               "TP1_R", "TP2_R", "TP3_R", "TP1_Quality", "TP2_Quality", "TP3_Quality",
+               "CalibratedProbability", "CalibrationSample", "CalibrationContextUsed");
       m_headerWritten = true;
      }
 
@@ -331,7 +335,15 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
             KeyLevelReactionLabel(setup.reasons.keylevel_reaction),
             DoubleToString(setup.reasons.keylevel_score, 1),
             SelectedStrategyLabel(setup.reasons.selected_strategy),
-            DoubleToString(setup.reasons.selected_strategy_score, 1));
+            DoubleToString(setup.reasons.selected_strategy_score, 1),
+            setup.reasons.regime_compatible ? "Yes" : "No",
+            setup.reasons.regime_reason,
+            setup.target_plan_valid ? "Yes" : "No",
+            DoubleToString(setup.tp1_rr, 2), DoubleToString(setup.tp2_rr, 2), DoubleToString(setup.tp3_rr, 2),
+            DoubleToString(setup.tp1_quality, 1), DoubleToString(setup.tp2_quality, 1), DoubleToString(setup.tp3_quality, 1),
+            DoubleToString(setup.calibrated_probability, 1),
+            setup.calibration_sample,
+            setup.calibration_context_used ? "Yes" : "No");
 
    FileClose(handle);
    return true;
@@ -369,7 +381,12 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
                // v2.14 — same rationale.
                "KeyLevelSource", "KeyLevelReaction", "KeyLevelScore",
                // v2.15 — same rationale.
-               "SelectedStrategy", "SelectedStrategyScore");
+               "SelectedStrategy", "SelectedStrategyScore",
+               // v2.17 — target/regime/calibration evidence repeated so the
+               // outcome row is self-sufficient for attribution.
+               "RegimeCompatible", "RegimeReason", "TargetPlanValid",
+               "TP1_R", "TP2_R", "TP3_R", "TP1_Quality", "TP2_Quality", "TP3_Quality",
+               "CalibratedProbability", "CalibrationSample", "CalibrationContextUsed");
       m_outcomeHeaderWritten = true;
      }
 
@@ -434,7 +451,15 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
             KeyLevelReactionLabel(p.setup.reasons.keylevel_reaction),
             DoubleToString(p.setup.reasons.keylevel_score, 1),
             SelectedStrategyLabel(p.setup.reasons.selected_strategy),
-            DoubleToString(p.setup.reasons.selected_strategy_score, 1));
+            DoubleToString(p.setup.reasons.selected_strategy_score, 1),
+            p.setup.reasons.regime_compatible ? "Yes" : "No",
+            p.setup.reasons.regime_reason,
+            p.setup.target_plan_valid ? "Yes" : "No",
+            DoubleToString(p.setup.tp1_rr, 2), DoubleToString(p.setup.tp2_rr, 2), DoubleToString(p.setup.tp3_rr, 2),
+            DoubleToString(p.setup.tp1_quality, 1), DoubleToString(p.setup.tp2_quality, 1), DoubleToString(p.setup.tp3_quality, 1),
+            DoubleToString(p.setup.calibrated_probability, 1),
+            p.setup.calibration_sample,
+            p.setup.calibration_context_used ? "Yes" : "No");
 
    FileClose(handle);
    return true;
