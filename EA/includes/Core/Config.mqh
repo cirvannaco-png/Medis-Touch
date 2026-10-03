@@ -245,6 +245,13 @@ enum ENUM_SETUP_REJECTION_REASON
    SETUP_REJECT_REWARD
   };
 
+enum ENUM_SETUP_FAMILY
+  {
+   SETUP_FAMILY_NONE = 0,
+   SETUP_FAMILY_REVERSAL,
+   SETUP_FAMILY_CONTINUATION
+  };
+
 enum ENUM_SWEEP_GRADE
   {
    SWEEP_GRADE_NONE,   // no sweep (Validate() already returns early in this case)
@@ -560,6 +567,7 @@ struct TradeSetup
    ulong             smc_chain_id;         // causal SMC chain identity
    ENUM_SETUP_STATUS status;
    ENUM_SETUP_REJECTION_REASON rejection_reason;
+   ENUM_SETUP_FAMILY family;
 
    // --- Setup thesis ---
    ENUM_ORDER_TYPE   type;                 // ORDER_TYPE_BUY or ORDER_TYPE_SELL
