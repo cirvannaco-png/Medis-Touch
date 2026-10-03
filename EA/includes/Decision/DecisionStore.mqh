@@ -136,7 +136,7 @@ string CDecisionStore::SerializeDecision(const TradeDecisionRecord &rec)
   {
    // v2.16 appends fields only; the first 13 positions stay frozen so
    // historical decision files remain readable after an upgrade.
-   string parts[23];
+   string parts[24];
    parts[0]  = IntegerToString(rec.decision_id);
    parts[1]  = rec.symbol;
    parts[2]  = IntegerToString((int)rec.setup.type);
@@ -161,9 +161,10 @@ string CDecisionStore::SerializeDecision(const TradeDecisionRecord &rec)
    parts[20] = rec.setup.structural_valid ? "1" : "0";
    parts[21] = DoubleToString(rec.setup.structural_quality, 2);
    parts[22] = IntegerToString((long)rec.setup.expiry_time);
+   parts[23] = IntegerToString((int)rec.setup.reasons.regime);
 
    string line = parts[0];
-   for(int i = 1; i < 23; i++) line += DECISION_CSV_SEP + parts[i];
+   for(int i = 1; i < 24; i++) line += DECISION_CSV_SEP + parts[i];
    return line;
   }
 //+------------------------------------------------------------------+
@@ -205,6 +206,7 @@ bool CDecisionStore::ParseDecision(const string line, TradeDecisionRecord &rec)
    if(n > 20) rec.setup.structural_valid = (f[20] == "1");
    if(n > 21) rec.setup.structural_quality = StringToDouble(f[21]);
    if(n > 22) rec.setup.expiry_time = (datetime)StringToInteger(f[22]);
+   if(n > 23) rec.setup.reasons.regime = (ENUM_MARKET_REGIME)(int)StringToInteger(f[23]);
 
    rec.structural_valid = (n > 20) ? rec.setup.structural_valid : false;
    rec.rejection_reason = (n > 16) ? rec.setup.rejection_reason : SETUP_REJECT_DATA;
