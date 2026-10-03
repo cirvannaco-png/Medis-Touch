@@ -307,6 +307,10 @@ public:
    ENUM_MARKET_REGIME GetMarketRegime() { return m_regimeDetector.Classify(); }
    bool              IsRegimeCompatible(bool forBuy, ENUM_SETUP_FAMILY family, string &reason);
    void              ConfigureRegimeGate(bool enabled) { m_regimeGateEnabled = enabled; }
+   void              ConfigureRegimeFreshness(int maxTrendBOSAgeBars = 12)
+                       { m_regimeDetector.ConfigureFreshness(maxTrendBOSAgeBars); }
+   double            GetRegimeQuality() { return m_regimeDetector.Quality(); }
+   int               GetRegimeAgeBars() { return m_regimeDetector.AgeBars(); }
    InducementResult  GetInducement(bool forBuy) { return m_inducement.Validate(forBuy); }
    ENUM_MARKET_PHASE GetPhase() { return m_phase.Detect(); }
   };
