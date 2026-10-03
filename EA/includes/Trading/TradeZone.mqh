@@ -158,6 +158,7 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    setup.smc_chain_id = sv.chain.chain_id;
    setup.status = SETUP_ACTIVE;
    setup.rejection_reason = SETUP_REJECT_NONE;
+   setup.family = sv.family;
    setup.type = ORDER_TYPE_SELL;
    setup.entry_top = sv.entry_fvg.top;
    setup.entry_bottom = sv.entry_fvg.bottom;
