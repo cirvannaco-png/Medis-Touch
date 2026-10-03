@@ -299,6 +299,12 @@ public:
    // PopulateConfidenceDiagnostics() — v2.15 needs it to compare against
    // the three strategy scores computed in this same call.
    void              PopulateStrategyDiagnostics(bool forBuy, double confidence, SetupReasons &out);
+   // v2.17: expose the same regime detector used by diagnostics so the live
+   // decision path has one market-state source of truth instead of creating
+   // a second independent detector at the EA layer.
+   ENUM_MARKET_REGIME GetMarketRegime() { return m_regimeDetector.Classify(); }
+   bool              IsRegimeCompatible(bool forBuy, ENUM_SETUP_FAMILY family, string &reason)
+                       { return m_regimeDetector.AllowsSetup(forBuy, family, reason); }
    InducementResult  GetInducement(bool forBuy) { return m_inducement.Validate(forBuy); }
    ENUM_MARKET_PHASE GetPhase() { return m_phase.Detect(); }
   };
