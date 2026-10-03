@@ -88,15 +88,25 @@ TradeDecisionRecord CDecisionEngine::Decide(const TradeSetup &setup)
   {
    TradeDecisionRecord rec;
    ZeroMemory(rec);
+   rec.setup_id = setup.setup_id;
    rec.symbol = m_symbol;
    rec.setup = setup;
+   rec.structural_valid = setup.structural_valid;
+   rec.rejection_reason = setup.rejection_reason;
+   rec.raw_confidence = setup.raw_confidence;
    rec.confidence = setup.confidence;
    rec.decided_time = TimeCurrent();
    rec.action = POLICY_IGNORE;
    rec.valid = false;
    rec.spread_points = CurrentSpreadPoints();
 
-   if(!setup.active)
+   if(!setup.structural_valid)
+     {
+      rec.reason = "structural validation failed";
+      return rec;
+     }
+
+   if(!setup.active || setup.status != SETUP_ACTIVE)
      {
       rec.reason = "setup inactive";
       return rec;
