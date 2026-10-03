@@ -292,6 +292,7 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
                // v2.17 target/regime/calibration evidence.
                "RegimeCompatible", "RegimeReason", "RegimeQuality", "RegimeAgeBars", "TargetPlanValid",
                "TP1_R", "TP2_R", "TP3_R", "TP1_Quality", "TP2_Quality", "TP3_Quality",
+               "TP1_CalibratedProbability", "TP2_CalibratedProbability", "TP3_CalibratedProbability",
                "CalibratedProbability", "CalibrationSample", "CalibrationContextUsed");
       m_headerWritten = true;
      }
@@ -343,6 +344,9 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
             setup.target_plan_valid ? "Yes" : "No",
             DoubleToString(setup.tp1_rr, 2), DoubleToString(setup.tp2_rr, 2), DoubleToString(setup.tp3_rr, 2),
             DoubleToString(setup.tp1_quality, 1), DoubleToString(setup.tp2_quality, 1), DoubleToString(setup.tp3_quality, 1),
+            DoubleToString(setup.tp1_calibrated_probability, 1),
+            DoubleToString(setup.tp2_calibrated_probability, 1),
+            DoubleToString(setup.tp3_calibrated_probability, 1),
             DoubleToString(setup.calibrated_probability, 1),
             setup.calibration_sample,
             setup.calibration_context_used ? "Yes" : "No");
@@ -388,6 +392,7 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
                // outcome row is self-sufficient for attribution.
                "RegimeCompatible", "RegimeReason", "RegimeQuality", "RegimeAgeBars", "TargetPlanValid",
                "TP1_R", "TP2_R", "TP3_R", "TP1_Quality", "TP2_Quality", "TP3_Quality",
+               "TP1_CalibratedProbability", "TP2_CalibratedProbability", "TP3_CalibratedProbability",
                "CalibratedProbability", "CalibrationSample", "CalibrationContextUsed");
       m_outcomeHeaderWritten = true;
      }
@@ -461,6 +466,9 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
             p.setup.target_plan_valid ? "Yes" : "No",
             DoubleToString(p.setup.tp1_rr, 2), DoubleToString(p.setup.tp2_rr, 2), DoubleToString(p.setup.tp3_rr, 2),
             DoubleToString(p.setup.tp1_quality, 1), DoubleToString(p.setup.tp2_quality, 1), DoubleToString(p.setup.tp3_quality, 1),
+            DoubleToString(p.setup.tp1_calibrated_probability, 1),
+            DoubleToString(p.setup.tp2_calibrated_probability, 1),
+            DoubleToString(p.setup.tp3_calibrated_probability, 1),
             DoubleToString(p.setup.calibrated_probability, 1),
             p.setup.calibration_sample,
             p.setup.calibration_context_used ? "Yes" : "No");
