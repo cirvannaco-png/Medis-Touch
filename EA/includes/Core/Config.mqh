@@ -624,6 +624,9 @@ struct TradeSetup
    double            tp1_quality;          // 0-100 target-path quality, diagnostic only
    double            tp2_quality;
    double            tp3_quality;
+   double            tp1_calibrated_probability;
+   double            tp2_calibrated_probability;
+   double            tp3_calibrated_probability;
   };
 
 // Single source of truth for "what price does this setup actually fill
