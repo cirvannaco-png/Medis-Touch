@@ -41,6 +41,19 @@ input double InpFVGMinSizeATR = 0.1;        // Minimum FVG size as ATR fraction
 input group "Liquidity"
 input double InpInternalLiqThresholdATR = 0.2; // Internal liquidity threshold ATR
 
+input group "SMC Extension Evidence (v2.16)"
+input string InpSMTReferenceSymbol = "";
+input bool   InpSMTInverseCorrelation = false;
+input int    InpIFVGMaxAgeBars = 15;
+input int    InpBPRMaxGapBars = 4;
+input int    InpCISDLookbackBars = 12;
+input int    InpCISDMaxRunBars = 5;
+input int    InpBreakerMaxAgeBars = 20;
+input int    InpSMTLookbackBars = 30;
+input int    InpSMTMaxDriftBars = 2;
+input double InpSMTMinCorrelation = 0.70;
+
+
 input group "SMC Chain Validation (v2.16)"
 input int    InpMaxSweepToStructureBars = 8;
 input int    InpMaxStructureToFVGBars = 2;
@@ -210,7 +223,17 @@ int OnInit()
                     InpMinChainStructureStrength,
                     InpRequirePremiumDiscount,
                     InpRequireContinuationHTFAlignment,
-                    0.0);
+                    0.0,
+                    InpSMTReferenceSymbol,
+                    InpIFVGMaxAgeBars,
+                    InpBPRMaxGapBars,
+                    InpCISDLookbackBars,
+                    InpCISDMaxRunBars,
+                    InpBreakerMaxAgeBars,
+                    InpSMTLookbackBars,
+                    InpSMTMaxDriftBars,
+                    InpSMTMinCorrelation,
+                    InpSMTInverseCorrelation);
 
    g_decision.Init(&g_fvgCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, &g_validator,
                    InpSLBufferATR, InpMinStopSpreadMult);
