@@ -218,6 +218,33 @@ enum ENUM_SELECTED_STRATEGY
 // boolean sweepFound treats a 1-tick liquidity poke and a violent
 // displacement-sweep-rejection identically; this doesn't. See
 // CInducement::GradeSweep() for the scoring components.
+enum ENUM_SETUP_STATUS
+  {
+   SETUP_NEW = 0,
+   SETUP_ACTIVE,
+   SETUP_STALE,
+   SETUP_INVALIDATED,
+   SETUP_EXPIRED,
+   SETUP_FILLED,
+   SETUP_CANCELLED,
+   SETUP_SUPERSEDED,
+   SETUP_COMPLETED
+  };
+
+enum ENUM_SETUP_REJECTION_REASON
+  {
+   SETUP_REJECT_NONE = 0,
+   SETUP_REJECT_DATA,
+   SETUP_REJECT_NO_CHAIN,
+   SETUP_REJECT_CHAIN_INCOMPLETE,
+   SETUP_REJECT_CHAIN_AMBIGUOUS,
+   SETUP_REJECT_STRUCTURE,
+   SETUP_REJECT_LOCATION,
+   SETUP_REJECT_FRESHNESS,
+   SETUP_REJECT_INVALIDATION,
+   SETUP_REJECT_REWARD
+  };
+
 enum ENUM_SWEEP_GRADE
   {
    SWEEP_GRADE_NONE,   // no sweep (Validate() already returns early in this case)
@@ -528,25 +555,35 @@ struct SetupReasons
 
 struct TradeSetup
   {
-   ENUM_ORDER_TYPE   type;         // ORDER_TYPE_BUY or ORDER_TYPE_SELL
-   double            entry_top;
-   double            entry_bottom;
-   double            stop_loss;
+   // --- Canonical identity / lifecycle (v2.16) ---
+   string            setup_id;             // deterministic identity of the market event chain
+   ulong             smc_chain_id;         // causal SMC chain identity
+   ENUM_SETUP_STATUS status;
+   ENUM_SETUP_REJECTION_REASON rejection_reason;
+
+   // --- Setup thesis ---
+   ENUM_ORDER_TYPE   type;                 // ORDER_TYPE_BUY or ORDER_TYPE_SELL
+   double            entry_top;            // zone ceiling
+   double            entry_bottom;         // zone floor
+   double            invalidation;         // thesis boundary; NOT the broker SL
+   double            stop_loss;            // executable protective order
    double            tp1;
    double            tp2;
    double            final_tp;
-   double            confidence;
+
+   // --- Model outputs ---
+   double            raw_confidence;
+   double            confidence;            // effective policy-facing confidence, 0..100
+   double            structural_quality;    // 0..100; cannot override invalid structure
+
    datetime          creation_time;
+   datetime          expiry_time;
    bool              active;
+
    SetupReasons      reasons;
-   // v2.9: populated by the EA right after g_tracker.GetCalibratedProbability()
-   // is called on the chosen setup (see MedisTouch_v2.8.mq5) — NOT set by
-   // the scoring engine itself, since calibration data lives in
-   // COutcomeTracker, not Scoring.mqh. calibration_sample==0 means "no
-   // calibration data for this bucket yet"; always check
-   // calibration_has_enough_data before treating calibrated_probability
-   // as meaningful (see CalibrationEngine.mqh).
-   double            calibrated_probability;   // 0-100, empirical win rate for this confidence bucket
+
+   // --- Empirical calibration (diagnostic until explicitly promoted) ---
+   double            calibrated_probability;
    int               calibration_sample;
    bool              calibration_has_enough_data;
   };
