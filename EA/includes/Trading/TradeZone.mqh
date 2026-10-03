@@ -24,15 +24,10 @@ private:
    TradeSetup             m_lastSetup;
    double            m_slBufferATR;
    double            m_minStopSpreadMult;
-   double            m_fvgMaxDistATR;
    bool              m_runtimeEnabled;
    RuntimeParameters m_runtime;
 
-   bool              FindEntryFVG(ENUM_FVG_DIR dir, FVGZone &out);
    double            EnforceSpreadFloor(string symbol, double entry, double stopLoss, bool isBuy);
-   double            RuntimeStrategyThreshold(const TradeSetup &setup);
-   double            RuntimeContradictionPenalty(const SetupReasons &r);
-   void              ApplyRuntimeOverlay(TradeSetup &setup);
 
 public:
                      CTradeDecision();
@@ -49,7 +44,6 @@ CTradeDecision::CTradeDecision()
    ZeroMemory(m_lastSetup);
    m_slBufferATR = 0.25;
    m_minStopSpreadMult = 3.0;
-   m_fvgMaxDistATR = 1.25;
    m_runtimeEnabled = false;
    m_runtime.Defaults();
    m_validator = NULL;
@@ -72,7 +66,6 @@ void CTradeDecision::ApplyRuntimeParameters(const RuntimeParameters &parameters)
   {
    m_runtime = parameters;
    m_runtimeEnabled = true;
-   m_fvgMaxDistATR = parameters.fvg_proximity_atr;
   }
 
 double CTradeDecision::EnforceSpreadFloor(string symbol, double entry, double stopLoss, bool isBuy)
@@ -85,26 +78,6 @@ double CTradeDecision::EnforceSpreadFloor(string symbol, double entry, double st
    double curDist = MathAbs(entry - stopLoss);
    if(curDist >= minDist) return stopLoss;
    return isBuy ? (entry - minDist) : (entry + minDist);
-  }
-
-bool CTradeDecision::FindEntryFVG(ENUM_FVG_DIR dir, FVGZone &out)
-  {
-   if(m_fvgCtx == NULL || m_priceRef == NULL || m_priceRef.Total() == 0) return false;
-   double price = m_priceRef.GetCandle(1).close;
-   double atr = m_fvgCtx.candles.GetATR(1);
-   if(atr <= 0) return false;
-
-   for(int i = 0; i < m_fvgCtx.fvg.Count(); i++)
-     {
-      FVGZone z = m_fvgCtx.fvg.GetZone(i);
-      if(z.dir != dir) continue;
-      if(z.state != FVG_FRESH && z.state != FVG_TESTED) continue;
-      double mid = (z.top + z.bottom) / 2.0;
-      if(MathAbs(price - mid) / atr > m_fvgMaxDistATR) continue;
-      out = z;
-      return true;
-     }
-   return false;
   }
 
 
