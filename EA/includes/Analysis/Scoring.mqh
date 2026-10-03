@@ -519,7 +519,7 @@ double CScoringEngine::FVGScore(bool forBuy)
   {
    if(m_fvgCtx == NULL || m_fvgCtx.candles.Total() == 0) return 0.0;
    double price = CurrentPrice();
-   double atr = m_fvgCtx.candles.GetATR(0);
+   double atr = m_fvgCtx.candles.GetATR(1);
    if(price <= 0 || atr <= 0) return 0.0;
    ENUM_FVG_DIR wantDir = forBuy ? FVG_BULL : FVG_BEAR;
 
@@ -548,7 +548,7 @@ double CScoringEngine::SRScore(bool forBuy)
   {
    if(m_srCtx == NULL || m_srCtx.candles.Total() == 0) return 0.0;
    double price = CurrentPrice();
-   double atr = m_srCtx.candles.GetATR(0);
+   double atr = m_srCtx.candles.GetATR(1);
    if(price <= 0 || atr <= 0) return 0.0;
 
    for(int i = 0; i < m_srCtx.sr.Count(); i++)
@@ -643,7 +643,7 @@ double CScoringEngine::CalculateConfidence(bool forBuy)
    if(m_requireChaseFilter && ind.bosBarIndex >= 0 && m_bosCtx != NULL)
      {
       double price = CurrentPrice();
-      double atr = m_bosCtx.candles.GetATR(0);
+      double atr = m_bosCtx.candles.GetATR(1);
       if(price > 0 && atr > 0)
         {
          double chaseDist = forBuy ? (price - ind.bosClosePrice) : (ind.bosClosePrice - price);
@@ -816,7 +816,7 @@ void CScoringEngine::EvaluateReasons(bool forBuy, SetupReasons &out)
    out.chase_ok = true;
    if(ind.bosBarIndex >= 0 && m_bosCtx != NULL && price > 0)
      {
-      double atrB = m_bosCtx.candles.GetATR(0);
+      double atrB = m_bosCtx.candles.GetATR(1);
       if(atrB > 0)
         {
          out.chase_dist_atr = (forBuy ? (price - ind.bosClosePrice) : (ind.bosClosePrice - price)) / atrB;
