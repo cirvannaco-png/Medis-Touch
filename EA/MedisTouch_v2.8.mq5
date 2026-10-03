@@ -558,9 +558,9 @@ void CheckSignalLifecycle(double currentAtr)
      {
       if(g_lifecycleStatus != "invalidated")
         {
-         g_publisher.PublishStatusUpdate(g_lifecycleDecisionId, "superseded",
+         g_publisher.PublishStatusUpdate(g_lifecycleDecisionId, "invalidated",
                                          StringFormat("Opposing setup confidence reached %.0f — newer policy read superseded the unfilled setup", oppositeConfidence));
-         g_lifecycleStatus = "superseded";
+         g_lifecycleStatus = "invalidated";
         }
       g_lifecycleDecisionId = 0; // terminal — stop tracking
       return;
