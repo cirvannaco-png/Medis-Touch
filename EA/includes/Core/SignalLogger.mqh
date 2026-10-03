@@ -290,7 +290,7 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
                // v2.15 diagnostics — same append-only discipline.
                "SelectedStrategy", "SelectedStrategyScore",
                // v2.17 target/regime/calibration evidence.
-               "RegimeCompatible", "RegimeReason", "TargetPlanValid",
+               "RegimeCompatible", "RegimeReason", "RegimeQuality", "RegimeAgeBars", "TargetPlanValid",
                "TP1_R", "TP2_R", "TP3_R", "TP1_Quality", "TP2_Quality", "TP3_Quality",
                "CalibratedProbability", "CalibrationSample", "CalibrationContextUsed");
       m_headerWritten = true;
@@ -338,6 +338,8 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
             DoubleToString(setup.reasons.selected_strategy_score, 1),
             setup.reasons.regime_compatible ? "Yes" : "No",
             setup.reasons.regime_reason,
+            DoubleToString(setup.reasons.regime_quality, 1),
+            setup.reasons.regime_age_bars,
             setup.target_plan_valid ? "Yes" : "No",
             DoubleToString(setup.tp1_rr, 2), DoubleToString(setup.tp2_rr, 2), DoubleToString(setup.tp3_rr, 2),
             DoubleToString(setup.tp1_quality, 1), DoubleToString(setup.tp2_quality, 1), DoubleToString(setup.tp3_quality, 1),
@@ -384,7 +386,7 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
                "SelectedStrategy", "SelectedStrategyScore",
                // v2.17 — target/regime/calibration evidence repeated so the
                // outcome row is self-sufficient for attribution.
-               "RegimeCompatible", "RegimeReason", "TargetPlanValid",
+               "RegimeCompatible", "RegimeReason", "RegimeQuality", "RegimeAgeBars", "TargetPlanValid",
                "TP1_R", "TP2_R", "TP3_R", "TP1_Quality", "TP2_Quality", "TP3_Quality",
                "CalibratedProbability", "CalibrationSample", "CalibrationContextUsed");
       m_outcomeHeaderWritten = true;
@@ -454,6 +456,8 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
             DoubleToString(p.setup.reasons.selected_strategy_score, 1),
             p.setup.reasons.regime_compatible ? "Yes" : "No",
             p.setup.reasons.regime_reason,
+            DoubleToString(p.setup.reasons.regime_quality, 1),
+            p.setup.reasons.regime_age_bars,
             p.setup.target_plan_valid ? "Yes" : "No",
             DoubleToString(p.setup.tp1_rr, 2), DoubleToString(p.setup.tp2_rr, 2), DoubleToString(p.setup.tp3_rr, 2),
             DoubleToString(p.setup.tp1_quality, 1), DoubleToString(p.setup.tp2_quality, 1), DoubleToString(p.setup.tp3_quality, 1),
