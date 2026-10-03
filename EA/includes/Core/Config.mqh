@@ -544,6 +544,8 @@ struct SetupReasons
    // Mean Reversion and the Key-Level Price Action engine are the next
    // two modules, not yet built; see docs/CHANGELOG.md v2.12 entry.
    ENUM_MARKET_REGIME   regime;              // regime read at setup creation
+   bool                 regime_compatible;   // v2.17: action permission for this setup family/direction
+   string               regime_reason;      // auditable reason for permission/WAIT
    double               momentum_score;      // 0-100: directional persistence + BOS strength composite, see MomentumBreakout.mqh
    double               breakout_score;      // 0-100: quality of the most recent BOS as a breakout, independent of momentum_score
    ENUM_BREAKOUT_CLASS  breakout_class;      // classification of that same BOS event
@@ -611,6 +613,15 @@ struct TradeSetup
    double            calibrated_probability;
    int               calibration_sample;
    bool              calibration_has_enough_data;
+   bool              calibration_context_used; // v2.17: context-conditioned probability was supported by enough data
+   // --- v2.17 target-management diagnostics ---
+   bool              target_plan_valid;
+   double            tp1_rr;
+   double            tp2_rr;
+   double            tp3_rr;
+   double            tp1_quality;          // 0-100 target-path quality, diagnostic only
+   double            tp2_quality;
+   double            tp3_quality;
   };
 
 // Single source of truth for "what price does this setup actually fill
