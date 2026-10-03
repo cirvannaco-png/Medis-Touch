@@ -46,6 +46,7 @@ public:
    int               Total() { return ArraySize(m_trades); }
    void              Prune();  // drop ARCHIVED/CANCELLED/REJECTED rows to keep the array bounded
    bool              MarkFilledFromPending(ulong orderTicket, ulong positionTicket, double fillPrice = 0.0);
+   bool              CancelByDecisionId(long decisionId);
 
    // Accessors used by PositionManager instead of direct array access.
    ENUM_TRADE_STATE     StateAt(int idx)              { return m_trades[idx].fsm.State(); }
@@ -77,6 +78,27 @@ int COrderManager::FindByDecisionId(long id)
    for(int i = 0; i < ArraySize(m_trades); i++)
       if(m_trades[i].decision.decision_id == id) return i;
    return -1;
+  }
+
+bool COrderManager::CancelByDecisionId(long decisionId)
+  {
+   int idx = FindByDecisionId(decisionId);
+   if(idx < 0) return false;
+
+   ENUM_TRADE_STATE state = m_trades[idx].fsm.State();
+   if(state == TS_PENDING)
+     {
+      ulong ticket = m_trades[idx].fsm.Ticket();
+      if(ticket == 0 || m_broker == NULL) return false;
+      if(!m_broker.CancelOrder(ticket))
+         return false;
+      return m_trades[idx].fsm.Transition(TS_CANCELLED);
+     }
+
+   if(state == TS_WAITING || state == TS_VALIDATED || state == TS_DETECTED)
+      return m_trades[idx].fsm.Transition(TS_CANCELLED);
+
+   return false; // already filled/closed or terminal
   }
 //+------------------------------------------------------------------+
 int COrderManager::OpenCount()
