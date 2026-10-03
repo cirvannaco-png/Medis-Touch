@@ -12,7 +12,7 @@
 // together on the same chart (indicator for the visuals you're used to,
 // EA for the parts that touch money) or run this alone headless.
 #property copyright "Medis Touch"
-#property version   "2.16"
+#property version   "2.17"
 #property strict
 
 #include "includes/Core/Config.mqh"
@@ -733,9 +733,10 @@ void OnTick()
    // bucket to the chosen setup before it's logged/published — this is
    // what turns "confidence 78" into "confidence 78, historically wins
    // 63% of the time (114 comparable setups)" on the Telegram card.
-   chosen.calibrated_probability = g_tracker.GetCalibratedProbability(chosen.confidence,
-                                                                       chosen.calibration_sample,
-                                                                       chosen.calibration_has_enough_data);
+   chosen.calibrated_probability = g_tracker.GetContextCalibratedProbability(
+      chosen.confidence, chosen.reasons.regime, chosen.family,
+      chosen.calibration_sample, chosen.calibration_has_enough_data,
+      chosen.calibration_context_used);
 
    if(InpLogSignals)
      {
