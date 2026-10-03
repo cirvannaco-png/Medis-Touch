@@ -177,6 +177,7 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    setup.smc_chain_id = sv.chain.chain_id;
    setup.status = SETUP_ACTIVE;
    setup.rejection_reason = SETUP_REJECT_NONE;
+   setup.family = sv.family;
    setup.type = ORDER_TYPE_BUY;
    setup.entry_top = sv.entry_fvg.top;
    setup.entry_bottom = sv.entry_fvg.bottom;
@@ -195,7 +196,7 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    setup.active = true;
 
    m_scoring.EvaluateReasons(true, setup.reasons);
-   setup.reasons.bos_confirmed = true;
+   setup.reasons.bos_confirmed = (sv.chain.has_bos || sv.chain.has_choch);
    setup.reasons.liquidity_swept = sv.chain.has_sweep;
    setup.reasons.fresh_fvg = true;
    m_scoring.PopulateStrategyDiagnostics(true, setup.confidence, setup.reasons);
