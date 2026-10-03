@@ -15,7 +15,29 @@ public:
                                       bool halveForReducedRisk, bool allowMinLotOverride, bool &exceededRiskBudget,
                                       double sizeMultiplier = 1.0); // RiskGuard's drawdown de-risk ramp — see Portfolio/RiskGuard.mqh
    double            RiskAmountForLots(string symbol, double lots, double entry, double stopLoss);
+   bool              ValidateMargin(string symbol, ENUM_ORDER_TYPE type, double lots,
+                                     double price, string &reason);
   };
+// v2.16: broker-native loss estimate. OrderCalcProfit() is the
+// authoritative cross-check for this instrument/account; manual tick-value
+// math remains useful as a consistency check but is not trusted blindly.
+double BrokerLossPerLot(string symbol, ENUM_ORDER_TYPE type, double entry, double stopLoss)
+  {
+   if(StringLen(symbol) == 0 || entry <= 0.0 || stopLoss <= 0.0) return 0.0;
+
+   double profit = 0.0;
+   ResetLastError();
+   if(!OrderCalcProfit(type, symbol, 1.0, entry, stopLoss, profit))
+     {
+      PrintFormat("MedisTouch RiskEngine: OrderCalcProfit failed for %s (err=%d) — refusing to size the trade.",
+                  symbol, GetLastError());
+      return 0.0;
+     }
+
+   double loss = MathAbs(profit);
+   return (loss > 0.0 && MathIsValidNumber(loss)) ? loss : 0.0;
+  }
+
 //+------------------------------------------------------------------+
 // NEW: nothing in v2.1 converted a validated setup into an actual lot
 // size — risk was checked as a ratio (R:R, SL-in-ATR) but never turned
@@ -48,14 +70,31 @@ double CRiskEngine::CalculateLotSize(string symbol, double riskPercent, double e
    if(halveForReducedRisk) riskAmount *= 0.5;
    riskAmount *= MathMax(0.0, MathMin(1.0, sizeMultiplier)); // RiskGuard drawdown ramp — 1.0 = no change
 
+   ENUM_ORDER_TYPE orderType = (stopLoss < entry) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   double brokerLossPerLot = BrokerLossPerLot(symbol, orderType, entry, stopLoss);
+   if(brokerLossPerLot <= 0.0) return 0.0;
+
+   // Independent tick-value estimate is retained as a diagnostic guard.
+   // If broker-native and analytical loss disagree materially, sizing is
+   // unknowable enough to justify a fail-closed rejection.
    double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
    double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-   if(tickSize <= 0 || tickValue <= 0) return 0.0;
+   double analyticalLoss = 0.0;
+   if(tickSize > 0.0 && tickValue > 0.0)
+      analyticalLoss = slDistance * (tickValue / tickSize);
 
-   double valuePerUnitDistance = tickValue / tickSize; // account-currency value of 1.0 price move, per lot
-   double lossPerLot = slDistance * valuePerUnitDistance;
-   if(lossPerLot <= 0) return 0.0;
+   if(analyticalLoss > 0.0)
+     {
+      double deviation = MathAbs(analyticalLoss - brokerLossPerLot) / brokerLossPerLot;
+      if(deviation > 0.10)
+        {
+         PrintFormat("MedisTouch RiskEngine: %s sizing mismatch — broker loss/lot %.2f vs analytical %.2f (%.1f%%). Refusing trade.",
+                     symbol, brokerLossPerLot, analyticalLoss, deviation * 100.0);
+         return 0.0;
+        }
+     }
 
+   double lossPerLot = brokerLossPerLot;
    double rawLots = riskAmount / lossPerLot;
 
    double minLot  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
@@ -88,12 +127,10 @@ double CRiskEngine::RiskAmountForLots(string symbol, double lots, double entry, 
    double slDistance = MathAbs(entry - stopLoss);
    if(slDistance <= 0 || lots <= 0) return 0.0;
 
-   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-   double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-   if(tickSize <= 0 || tickValue <= 0) return 0.0;
-
-   double valuePerUnitDistance = tickValue / tickSize;
-   return slDistance * valuePerUnitDistance * lots;
+   ENUM_ORDER_TYPE orderType = (stopLoss < entry) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   double brokerLossPerLot = BrokerLossPerLot(symbol, orderType, entry, stopLoss);
+   if(brokerLossPerLot <= 0.0) return 0.0;
+   return brokerLossPerLot * lots;
   }
 //+------------------------------------------------------------------+
 bool CRiskEngine::ValidateSetup(TradeSetup &setup, double minRR, double maxSLDistanceATR, double currentATR)
@@ -125,4 +162,38 @@ bool CRiskEngine::ValidateSetup(TradeSetup &setup, double minRR, double maxSLDis
    return true;
   }
 #endif
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+bool CRiskEngine::ValidateMargin(string symbol, ENUM_ORDER_TYPE type, double lots,
+                                  double price, string &reason)
+  {
+   reason = "";
+   if(lots <= 0.0 || price <= 0.0)
+     {
+      reason = "invalid lots or reference price";
+      return false;
+     }
+
+   double margin = 0.0;
+   ResetLastError();
+   if(!OrderCalcMargin(type, symbol, lots, price, margin))
+     {
+      reason = StringFormat("OrderCalcMargin failed (err=%d)", GetLastError());
+      return false;
+     }
+   if(margin <= 0.0 || !MathIsValidNumber(margin))
+     {
+      reason = "broker returned invalid required margin";
+      return false;
+     }
+
+   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   if(freeMargin <= 0.0 || margin > freeMargin)
+     {
+      reason = StringFormat("required margin %.2f exceeds free margin %.2f", margin, freeMargin);
+      return false;
+     }
+   return true;
+  }
 //+------------------------------------------------------------------+
