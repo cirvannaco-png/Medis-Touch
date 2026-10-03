@@ -103,18 +103,20 @@ void CPositionManager::OnTick(double currentAtr)
       // target chosen before risk approval. The legacy fixed-R trigger is
       // only a fallback for an old restored decision that predates TP1.
       double tp1 = dec.setup.tp1;
-      double tp1R = (MathAbs(entry - dec.setup.stop_loss) > 0.0)
-                    ? RMultiple(dec, entry, tp1) : 0.0;
-      bool tp1Reached = (isBuy && tp1 > entry) ? (price >= tp1)
-                     : (!isBuy && tp1 < entry) ? (price <= tp1)
-                     : (tp1R > 0.0 && r >= m_partialAtR);
+      bool tp1Directional = isBuy ? (tp1 > entry) : (tp1 < entry);
+      bool tp1Reached = tp1Directional
+                        ? (isBuy ? (price >= tp1) : (price <= tp1))
+                        : (r >= m_partialAtR);
 
       if(state == TS_PROTECTED && tp1Reached)
         {
          double vol = m_orders.VolumeAt(i) * m_partialFraction;
          double minVol = SymbolInfoDouble(dec.symbol, SYMBOL_VOLUME_MIN);
          if(vol >= minVol && m_broker.ClosePartial(ticket, vol))
+           {
             m_orders.TransitionAt(i, TS_PARTIAL);
+            state = TS_PARTIAL; // allow TP2 protection on the same tick if reached
+           }
         }
 
       // 3. TP2 is a profit-protection milestone rather than a second
@@ -136,7 +138,10 @@ void CPositionManager::OnTick(double currentAtr)
 
       // 4. Hand the remainder off as a trailing runner
       if(state == TS_PARTIAL)
+        {
          m_orders.TransitionAt(i, TS_RUNNER);
+         state = TS_RUNNER;
+        }
 
       // 5. Trail the runner — only ever tighten, never widen, the stop
       // after the TP2 profit-protection milestone.
