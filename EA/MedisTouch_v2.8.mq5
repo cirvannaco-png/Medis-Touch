@@ -53,6 +53,7 @@ input ENUM_TIMEFRAMES InpFVGTF = PERIOD_M15;
 
 input group "Fair Value Gaps"
 input double InpFVGMinSizeATR = 0.1;
+input int    InpFVGDegradeBars = 8;
 
 input group "Liquidity"
 input double InpInternalLiqThresholdATR = 0.2;
