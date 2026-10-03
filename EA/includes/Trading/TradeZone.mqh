@@ -90,8 +90,8 @@ double CTradeDecision::EnforceSpreadFloor(string symbol, double entry, double st
 bool CTradeDecision::FindEntryFVG(ENUM_FVG_DIR dir, FVGZone &out)
   {
    if(m_fvgCtx == NULL || m_priceRef == NULL || m_priceRef.Total() == 0) return false;
-   double price = m_priceRef.GetCandle(0).close;
-   double atr = m_fvgCtx.candles.GetATR(0);
+   double price = m_priceRef.GetCandle(1).close;
+   double atr = m_fvgCtx.candles.GetATR(1);
    if(atr <= 0) return false;
 
    for(int i = 0; i < m_fvgCtx.fvg.Count(); i++)
