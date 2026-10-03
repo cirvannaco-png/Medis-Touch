@@ -208,7 +208,7 @@ bool CBrokerAdapter::ValidateStopDistance(string symbol, double refPrice, double
       return false;
      }
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   if(point <= 0.0) return true; // can't validate without a point size -- a symbol-info failure unrelated to stops shouldn't block the trade
+   if(point <= 0.0) return false; // fail closed: missing point size means stop validity is unknowable
 
    long stopsLevelPts  = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
    long freezeLevelPts = SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL);
