@@ -528,10 +528,31 @@ void CheckSignalLifecycle(double currentAtr)
       return;
      }
 
-   // INVALIDATED: the opposite direction has since become a strong
-   // setup in its own right — a real structural contradiction of the
-   // original read, not just drift. Checked before STALE for the same
-   // "worse state wins" reasoning as EXPIRED above.
+   // HARD THESIS INVALIDATION: price crossing the explicit setup
+   // invalidation boundary ends an unfilled idea immediately. Any linked
+   // resting order must be cancelled, not merely hidden from the signal UI.
+   double invalidation = g_lifecycleSetup.invalidation;
+   double marketForInvalidation = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                                        : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   bool priceInvalidated = isBuy ? (marketForInvalidation <= invalidation)
+                                 : (marketForInvalidation >= invalidation);
+   if(invalidation > 0.0 && marketForInvalidation > 0.0 && priceInvalidated)
+     {
+      if(g_lifecycleStatus != "invalidated")
+        {
+         g_publisher.PublishStatusUpdate(g_lifecycleDecisionId, "invalidated",
+                                         StringFormat("Price %.5f crossed thesis invalidation %.5f",
+                                                      marketForInvalidation, invalidation));
+         g_lifecycleStatus = "invalidated";
+         g_orders.CancelByDecisionId(g_lifecycleDecisionId);
+        }
+      g_lifecycleDecisionId = 0;
+      return;
+     }
+
+   // SUPERSEDED: a new opposing structural read can retire an unfilled
+   // setup, but that is different from proving the original price thesis
+   // false. Preserve that distinction for outcome attribution.
    double oppositeConfidence = g_scoring.CalculateConfidence(!isBuy);
    if(oppositeConfidence >= InpInvalidateOpposingConfidence)
      {
