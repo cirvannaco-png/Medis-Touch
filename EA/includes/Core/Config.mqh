@@ -574,6 +574,7 @@ struct TradeSetup
    // --- Model outputs ---
    double            raw_confidence;
    double            confidence;            // effective policy-facing confidence, 0..100
+   bool              structural_valid;     // HARD structural verdict; never implied by confidence
    double            structural_quality;    // 0..100; cannot override invalid structure
 
    datetime          creation_time;
