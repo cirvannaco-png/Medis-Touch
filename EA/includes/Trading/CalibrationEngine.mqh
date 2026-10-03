@@ -4,12 +4,11 @@
 #ifndef CALIBRATIONENGINE_MQH
 #define CALIBRATIONENGINE_MQH
 
-// v2.9 addition — review item #1 / #9: "a confidence score isn't a
-// probability until it's been checked against real outcomes." This
-// bucket-tracks CScoringEngine::CalculateConfidence()'s output against
-// COutcomeTracker's resolved win/loss verdicts and reports the ACTUAL
-// historical win rate for each confidence range, persisted to a file so
-// the sample survives restarts.
+// v2.17 calibration. Confidence is treated as an empirical statistic,
+// not a probability claim. Outcomes are tracked globally and, when sample
+// size permits, by regime + setup family + confidence bucket. The
+// context-conditioned result is hierarchical: use the context bucket only
+// when it has enough data; otherwise fall back to the global bucket.
 //
 // HONEST LIMITATIONS — read before trusting the numbers this produces:
 //  1. This does NOT change trading behavior on its own. Nothing in the
@@ -23,22 +22,22 @@
 //     but flagged low-confidence — with a live strategy this realistically
 //     means MONTHS of forward/backtest data before any bucket's number
 //     means anything. Don't trust a 5-trade bucket's win rate.
-//  3. Buckets are fixed 5-point-wide bins from 0-100 (20 buckets). This
-//     is a starting resolution, not a tuned one — too fine and you never
-//     accumulate samples per bucket, too coarse and you can't see
-//     structure like "90+ underperforms 80-89". Revisit once you have
-//     real volume.
-//  4. This tracks the RAW CalculateConfidence() output at the moment
+//  3. Buckets are fixed 10-point-wide bins from 0-100 (10 buckets). This
+//     deliberately trades resolution for sample depth; the bin width is
+//     still a research parameter, not an optimized fact.
+//  4. The calibration file is versioned with MIDAS_WEIGHT_SET_VERSION so
+//     changing the scoring definition automatically moves new outcomes
+//     onto a new evidence population rather than mixing incompatible scores.
+//  5. This tracks the RAW CalculateConfidence() output at the moment
 //     AddSetup() logged the trade — if you change the scoring formula
 //     (as the v2.9 sweep-grade/BOS-strength/decay changes in this same
 //     release do), OLD calibration data no longer describes the NEW
 //     score's meaning. Clear/reset the calibration file after any
 //     scoring-formula change, or you'll be calibrating against a
 //     confidence definition that no longer exists. See Reset().
-//  5. Calibration is symbol-agnostic by construction (one file per
-//     EA instance/symbol, same as OutcomeTracker's CSV) — a XAUUSD
-//     bucket's win rate says nothing about EURUSD's. Don't share the
-//     file across symbols.
+//  6. Calibration remains diagnostic until independently validated. A
+//     calibrated probability is never allowed to turn structurally-invalid
+//     information into a trade.
 class CCalibrationEngine
   {
 private:
