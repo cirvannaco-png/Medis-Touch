@@ -196,14 +196,24 @@ string CSignalPublisher::BuildExtraJson(const TradeDecisionRecord &dec)
       "\"sweep_grade\":\"%s\",\"bos_strength\":%.1f,\"time_decay\":%.1f,"
       "\"chase_dist_atr\":%.2f,\"chase_ok\":%s,"
       "\"news_risk\":\"%s\",\"news_label\":\"%s\",\"news_minutes_to_event\":%d,"
-      "\"calibrated_probability\":%.1f,\"calibration_sample\":%d,\"calibration_has_enough_data\":%s}",
+      "\"regime\":\"%s\",\"regime_quality\":%.1f,\"regime_age_bars\":%d,\"regime_compatible\":%s,"
+      "\"target_plan_valid\":%s,\"tp1_rr\":%.2f,\"tp2_rr\":%.2f,\"tp3_rr\":%.2f,"
+      "\"tp1_quality\":%.1f,\"tp2_quality\":%.1f,\"tp3_quality\":%.1f,"
+      "\"calibrated_probability\":%.1f,\"calibration_sample\":%d,"
+      "\"calibration_context_used\":%s,\"calibration_has_enough_data\":%s}",
       dec.setup.setup_id, dec.setup.smc_chain_id, dec.setup.entry_top, dec.setup.entry_bottom,
       dec.setup.invalidation, dec.setup.structural_quality,
       pipsSl, pipsTp1, pipsTp2, rrTp1, rrTp2, family,
       sweepGradeStr, r.bos_strength * 100.0, r.time_decay * 100.0,
       r.chase_dist_atr, r.chase_ok ? "true" : "false",
       newsRiskStr, r.news_label, r.news_minutes_to_event,
+      EnumToString(r.regime), r.regime_quality, r.regime_age_bars,
+      r.regime_compatible ? "true" : "false",
+      dec.setup.target_plan_valid ? "true" : "false",
+      dec.setup.tp1_rr, dec.setup.tp2_rr, dec.setup.tp3_rr,
+      dec.setup.tp1_quality, dec.setup.tp2_quality, dec.setup.tp3_quality,
       dec.setup.calibrated_probability, dec.setup.calibration_sample,
+      dec.setup.calibration_context_used ? "true" : "false",
       dec.setup.calibration_has_enough_data ? "true" : "false");
   }
 //+------------------------------------------------------------------+
