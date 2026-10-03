@@ -50,8 +50,6 @@ def test_broker_stop_validation_fails_closed_when_point_size_missing():
 def test_tradezone_is_structurally_gated():
     c = read("EA/includes/Trading/TradeZone.mqh")
     assert '#include "../Analysis/StructuralValidator.mqh"' in c
-    assert "m_validator->" not in c  # object is pointer; call syntax is checked below
-    assert "m_validator->" in c or "m_validator." in c
     assert "!m_validator->Validate(true, sv)" in c
     assert "!m_validator->Validate(false, sv)" in c
 
