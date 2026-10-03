@@ -219,7 +219,9 @@ input group "Logging"
 input bool   InpLogSignals = true;
 input bool   InpTrackOutcomes = true;
 input int    InpMaxTrackingBars = 100;
-input int    InpCalibrationMinSample = 30;         // v2.9: bucket sample size before GetCalibratedProbability() is trusted — see CalibrationEngine.mqh
+input int    InpCalibrationMinSample = 30;
+input bool   InpUseCalibratedGate = false;             // diagnostic/ablation gate; remains OFF until out-of-sample calibration proves useful
+input double InpMinCalibratedProbability = 55.0;       // minimum empirical probability when the calibrated gate is enabled         // v2.9: bucket sample size before GetCalibratedProbability() is trusted — see CalibrationEngine.mqh
 input int    InpSessionGMTOffsetOverride = 999;
 input ENUM_FILL_POLICY InpFillPolicy = FILL_CONSERVATIVE;
 input ENUM_TIMEFRAMES  InpReplayTF = PERIOD_M1;
@@ -744,6 +746,33 @@ void OnTick()
       chosen.confidence, chosen.reasons.regime, chosen.family,
       chosen.calibration_sample, chosen.calibration_has_enough_data,
       chosen.calibration_context_used);
+
+   // v2.17: target-reach calibration is intentionally diagnostic. A
+   // context-specific value is used only when the target has enough
+   // resolved observations; otherwise the field remains the smoothed
+   // fallback returned by the calibration engine.
+   {
+      int sample = 0; bool enough = false; bool contextUsed = false;
+      chosen.tp1_calibrated_probability =
+         g_tracker.GetTargetCalibratedProbability(0, chosen.confidence, chosen.reasons.regime, chosen.family,
+                                                  sample, enough, contextUsed);
+      chosen.tp2_calibrated_probability =
+         g_tracker.GetTargetCalibratedProbability(1, chosen.confidence, chosen.reasons.regime, chosen.family,
+                                                  sample, enough, contextUsed);
+      chosen.tp3_calibrated_probability =
+         g_tracker.GetTargetCalibratedProbability(2, chosen.confidence, chosen.reasons.regime, chosen.family,
+                                                  sample, enough, contextUsed);
+   }
+
+   if(InpUseCalibratedGate && chosen.calibration_has_enough_data &&
+      chosen.calibrated_probability < InpMinCalibratedProbability)
+     {
+      // Calibration may filter an already structurally-valid/regime-valid
+      // setup, but can never rescue an invalid one. Kept opt-in so no
+      // unvalidated probability threshold silently changes live behavior.
+      g_lastSetupId = chosen.setup_id;
+      return;
+     }
 
    if(InpLogSignals)
      {
