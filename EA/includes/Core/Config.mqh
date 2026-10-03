@@ -546,6 +546,8 @@ struct SetupReasons
    ENUM_MARKET_REGIME   regime;              // regime read at setup creation
    bool                 regime_compatible;   // v2.17: action permission for this setup family/direction
    string               regime_reason;      // auditable reason for permission/WAIT
+   double               regime_quality;     // v2.17: deterministically-derived regime stability/quality, 0..100
+   int                  regime_age_bars;    // age of most recent confirmed BOS used by the classifier
    double               momentum_score;      // 0-100: directional persistence + BOS strength composite, see MomentumBreakout.mqh
    double               breakout_score;      // 0-100: quality of the most recent BOS as a breakout, independent of momentum_score
    ENUM_BREAKOUT_CLASS  breakout_class;      // classification of that same BOS event
