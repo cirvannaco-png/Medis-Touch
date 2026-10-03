@@ -119,7 +119,18 @@ input int    InpMaxBarsSinceBOS = 5;               // Decay-to-zero cutoff (0/90
 input bool   InpRequireChaseFilter = false;        // Gate: OFF by default — reject setups that ran too far past BOS before entry
 input double InpMaxChaseDistATR = 0.75;            // Max (price - BOS close)/ATR in the trade direction before rejecting as "chased"
 input double InpFVGMaxDistATR = 1.25;              // FVG proximity cap — tightened default from the old hardcoded 3.0 (see Scoring.mqh)
-input double InpMinDirectionalAdvantage = 0.0;     // v2.9: min confidence-point edge BUY must have over SELL (or vice versa) to be selected; 0 = old ">="-only behavior, unvalidated nonzero values need ablation testing (review item "directional competition")
+input double InpMinDirectionalAdvantage = 0.0;
+
+// --- v2.16 causal SMC chain validation ----------------------------
+input group "SMC Chain Validation (v2.16)"
+input int    InpMaxSweepToStructureBars = 8;
+input int    InpMaxStructureToFVGBars = 2;
+input int    InpMaxFVGAgeBars = 15;
+input double InpMinChainDisplacementATR = 1.0;
+input double InpMinChainDisplacementBodyRatio = 0.55;
+input double InpMinChainStructureStrength = 0.45;
+input bool   InpRequireContinuationHTFAlignment = true;
+     // v2.9: min confidence-point edge BUY must have over SELL (or vice versa) to be selected; 0 = old ">="-only behavior, unvalidated nonzero values need ablation testing (review item "directional competition")
 
 input group "Signal Lifecycle (v2.9)"
 input bool   InpPublishLifecycleUpdates = false;   // OFF by default — requires the bridge to be on migration 0004+; a pre-0004 bridge will 404 the PATCH endpoint
@@ -278,6 +289,7 @@ CTFContext*        g_bosCtx = NULL;
 CTFContext*        g_liqCtx = NULL;
 CTFContext*        g_fvgCtx = NULL;
 CTFContext*        g_htfObCtx = NULL;   // v2.8 — must stay a genuinely higher TF than g_fvgCtx/g_bosCtx
+CStructuralValidator g_validator;
 
 // --- Global objects: the new layer ---
 CDecisionEngine    g_router;
@@ -294,8 +306,9 @@ CSignalPublisher   g_publisher;
 CConfigSync        g_configSync;
 CProductionMonitor g_monitor;
 
-datetime           g_lastLoggedTime = 0;
+datetime           g_lastLoggedTime = 0; // legacy diagnostic timestamp; setup_id is authoritative
 datetime           g_lastBarTime = 0;
+string             g_lastSetupId = "";
 
 // v2.9 — signal lifecycle monitor state. Tracks only the single most
 // recently published, still-unfilled decision — matches the existing
@@ -332,7 +345,7 @@ int OnInit()
             "will be comparing zones on the same or a lower resolution than the entry timeframe, ",
             "which defeats the point of the filter even if InpRequireHtfOB is left OFF for diagnostics only.");
 
-   g_scoring.Init(g_trendCtx, g_bosCtx, g_liqCtx, g_fvgCtx, g_chartCtx, &g_chartCtx.candles);
+   g_scoring.Init(g_trendCtx, g_bosCtx, g_liqCtx, g_fvgCtx, g_chartCtx, &g_fvgCtx.candles);
    g_scoring.ConfigureInducement(InpImpulseLookbackBars, InpImpulseATRMult, InpImpulseBodyRatio,
                                  InpEqualTolATR, InpMaxLegExtend,
                                  InpRequirePremiumDiscount, InpRequireDistributionPhase,
@@ -359,7 +372,23 @@ int OnInit()
                                           InpKeyLevelTouchToleranceATRMult, InpKeyLevelAbsorptionMinTouches,
                                           InpKeyLevelWickRejectionRatio, InpKeyLevelRoundStep);
    g_scoring.ConfigureStrategySelection(InpMinSelectionScore);
-   g_decision.Init(&g_chartCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, InpSLBufferATR, InpMinStopSpreadMult);
+
+   // v2.16: one hard structural authority sits between analysis and setup
+   // generation. The causal chain itself runs on the execution/FVG TF;
+   // HTF context is used separately for continuation alignment.
+   g_validator.Init(g_fvgCtx, g_trendCtx,
+                    InpMaxSweepToStructureBars,
+                    InpMaxStructureToFVGBars,
+                    InpMaxFVGAgeBars,
+                    InpMinChainDisplacementATR,
+                    InpMinChainDisplacementBodyRatio,
+                    InpMinChainStructureStrength,
+                    InpRequirePremiumDiscount,
+                    InpRequireContinuationHTFAlignment,
+                    0.0);
+
+   g_decision.Init(&g_fvgCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, &g_validator,
+                   InpSLBufferATR, InpMinStopSpreadMult);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);
    // Deliberately the SAME values driving g_positions/g_risk below — so the
@@ -508,9 +537,9 @@ void CheckSignalLifecycle(double currentAtr)
      {
       if(g_lifecycleStatus != "invalidated")
         {
-         g_publisher.PublishStatusUpdate(g_lifecycleDecisionId, "invalidated",
-                                         StringFormat("Opposing setup confidence reached %.0f — original read contradicted", oppositeConfidence));
-         g_lifecycleStatus = "invalidated";
+         g_publisher.PublishStatusUpdate(g_lifecycleDecisionId, "superseded",
+                                         StringFormat("Opposing setup confidence reached %.0f — newer policy read superseded the unfilled setup", oppositeConfidence));
+         g_lifecycleStatus = "superseded";
         }
       g_lifecycleDecisionId = 0; // terminal — stop tracking
       return;
@@ -552,7 +581,9 @@ void OnTick()
    g_pool.DetectAll();
    if(g_chartCtx == NULL || !g_chartCtx.candles.IsReady()) return;
 
-   double currentAtr = g_fvgCtx.candles.GetATR(0);
+   double currentAtr = g_fvgCtx.candles.GetATR(0);      // live management context
+   double analysisAtr = g_fvgCtx.candles.GetATR(1);    // confirmed-bar risk/decision context
+   if(analysisAtr <= 0.0) return;
 
    // Manage everything already open before looking for anything new —
    // a break-even/trailing update should never wait behind new-setup work.
@@ -586,7 +617,7 @@ void OnTick()
 
    // Only evaluate for a NEW decision once per closed bar, same as the
    // indicator's OnCalculate cadence — a decision per bar, not per tick.
-   datetime barTime = iTime(_Symbol, _Period, 0);
+   datetime barTime = iTime(_Symbol, InpFVGTF, 0);
    bool isNewBar = (barTime != g_lastBarTime);
    g_lastBarTime = barTime;
    if(!isNewBar) return;
@@ -612,12 +643,12 @@ void OnTick()
      {
       if(confDelta >= InpMinDirectionalAdvantage)
         {
-         if(g_risk.ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr))
+         if(g_risk.ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, analysisAtr))
             chosen = buySetup;
         }
       else if(-confDelta >= InpMinDirectionalAdvantage)
         {
-         if(g_risk.ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr))
+         if(g_risk.ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, analysisAtr))
             chosen = sellSetup;
         }
       // else: neither side clears the advantage threshold — no trade,
@@ -634,9 +665,17 @@ void OnTick()
          chosen = sellSetup;
      }
 
-   if(!chosen.active) return;
-   if(chosen.creation_time == g_lastLoggedTime) return; // already routed this exact setup
+   if(!chosen.active || !chosen.structural_valid) return;
+   if(StringLen(chosen.setup_id) == 0) return;
+   if(chosen.setup_id == g_lastSetupId) return; // deterministic event identity, not TimeCurrent()
+   g_lastSetupId = chosen.setup_id;
    g_lastLoggedTime = chosen.creation_time;
+
+   // v2.16: persist an explicit absolute expiry for transport/back-end
+   // consumers while the local lifecycle still uses closed-bar counts.
+   int tfSeconds = PeriodSeconds(InpFVGTF);
+   if(tfSeconds > 0)
+      chosen.expiry_time = chosen.creation_time + (datetime)(InpSignalExpiryBars * tfSeconds);
 
    // v2.9: attach the empirical calibration read for this confidence
    // bucket to the chosen setup before it's logged/published — this is
