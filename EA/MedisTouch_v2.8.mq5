@@ -130,6 +130,18 @@ input double InpMinChainDisplacementATR = 1.0;
 input double InpMinChainDisplacementBodyRatio = 0.55;
 input double InpMinChainStructureStrength = 0.45;
 input bool   InpRequireContinuationHTFAlignment = true;
+input group "SMC Extension Evidence (v2.16)"
+input string InpSMTReferenceSymbol = "";
+input bool   InpSMTInverseCorrelation = false;
+input int    InpIFVGMaxAgeBars = 15;
+input int    InpBPRMaxGapBars = 4;
+input int    InpCISDLookbackBars = 12;
+input int    InpCISDMaxRunBars = 5;
+input int    InpBreakerMaxAgeBars = 20;
+input int    InpSMTLookbackBars = 30;
+input int    InpSMTMaxDriftBars = 2;
+input double InpSMTMinCorrelation = 0.70;
+
      // v2.9: min confidence-point edge BUY must have over SELL (or vice versa) to be selected; 0 = old ">="-only behavior, unvalidated nonzero values need ablation testing (review item "directional competition")
 
 input group "Signal Lifecycle (v2.9)"
@@ -385,7 +397,17 @@ int OnInit()
                     InpMinChainStructureStrength,
                     InpRequirePremiumDiscount,
                     InpRequireContinuationHTFAlignment,
-                    0.0);
+                    0.0,
+                    InpSMTReferenceSymbol,
+                    InpIFVGMaxAgeBars,
+                    InpBPRMaxGapBars,
+                    InpCISDLookbackBars,
+                    InpCISDMaxRunBars,
+                    InpBreakerMaxAgeBars,
+                    InpSMTLookbackBars,
+                    InpSMTMaxDriftBars,
+                    InpSMTMinCorrelation,
+                    InpSMTInverseCorrelation);
 
    g_decision.Init(&g_fvgCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, &g_validator,
                    InpSLBufferATR, InpMinStopSpreadMult);
