@@ -272,9 +272,9 @@ void CKeyLevelEngine::Evaluate(bool forBuy, ENUM_KEYLEVEL_SOURCE &source, ENUM_K
    reactionScore = 0.0;
 
    if(m_candles == NULL || m_candles.Total() < m_lookbackBars + 1) return;
-   double atr = m_candles.GetATR(0);
+   double atr = m_candles.GetATR(1);
    if(atr <= 0) return;
-   double price = m_candles.GetCandle(0).close; // live/current-bar proxy, same convention as the other two strategy modules
+   double price = m_candles.GetCandle(1).close; // live/current-bar proxy, same convention as the other two strategy modules
 
    double levelPrice;
    if(!FindNearestLevel(forBuy, atr, price, levelPrice, source))
