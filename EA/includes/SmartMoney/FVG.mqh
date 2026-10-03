@@ -40,7 +40,7 @@ void CFVG::Detect()
    if(m_candles == NULL) return;
    ArrayFree(m_zones);
    int total = m_candles.Total();
-   if(total < 3) return;
+   if(total < 4) return;
 
    // Series-indexed: shift 0 = now. As i runs 2 -> total-1, the 3-bar
    // window {i, i-1, i-2} slides from the most recent triplet toward the
@@ -48,7 +48,9 @@ void CFVG::Detect()
    // three (largest shift); cd0 = GetCandle(i-2) is the NEWEST of the
    // three (smallest shift). (The original comments had this backwards —
    // labels only, the gap-direction math itself was already correct.)
-   for(int i = 2; i < total; i++)
+   // v2.16 temporal firewall: the newest candle in the 3-bar pattern
+   // must be shift 1 or older; candle 0 is live and may never create an FVG.
+   for(int i = 3; i < total; i++)
      {
       CandleData cd0 = m_candles.GetCandle(i - 2); // newest of the triplet
       CandleData cd1 = m_candles.GetCandle(i - 1); // middle
@@ -118,11 +120,13 @@ void CFVG::UpdateState(FVGZone &zone)
    // everything beyond that is even older (was "continue" in the
    // original, forcing a full unnecessary scan of the whole history
    // buffer on every OnCalculate call, for every zone).
-   for(int bar = 0; bar < total; bar++)
+   int newestPostCreationBar = MathMax(1, zone.bar_index - 1);
+   for(int bar = 1; bar < total && bar <= newestPostCreationBar; bar++)
      {
-      CandleData cd = m_candles.GetCandle(bar);
-      if(cd.time < zone.time)
+      // Only bars newer than the formation candle can change its state.
+      if(bar >= zone.bar_index)
          break;
+      CandleData cd = m_candles.GetCandle(bar);
       if(zone.dir == FVG_BULL)
         {
          if(cd.low <= zone.top && cd.high >= zone.bottom)
