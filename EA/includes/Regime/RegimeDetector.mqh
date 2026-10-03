@@ -55,7 +55,7 @@ ENUM_MARKET_REGIME CRegimeDetector::Classify()
       return REGIME_UNDEFINED;
 
    ENUM_TREND_STATE  trend = m_trend.GetCurrentTrend();
-   ENUM_VOL_REGIME   vol   = m_volRegime.Classify(0);
+   ENUM_VOL_REGIME   vol   = m_volRegime.Classify(1);
    ENUM_MARKET_PHASE phase = m_phase.Detect();
 
    // Fail closed on an unverifiable volatility read, same convention as
