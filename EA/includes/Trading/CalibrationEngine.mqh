@@ -53,6 +53,14 @@ private:
    int m_contextLosses[REGIME_SLOTS][FAMILY_SLOTS][NUM_BUCKETS];
    int m_contextScratches[REGIME_SLOTS][FAMILY_SLOTS][NUM_BUCKETS];
 
+   // Target-reach calibration: probability that TP1/TP2/final target was
+   // touched before the setup resolved. Stored separately from profit
+   // outcome because a profitable partial trade can miss the final target.
+   int m_tpHits[3][NUM_BUCKETS];
+   int m_tpMisses[3][NUM_BUCKETS];
+   int m_contextTpHits[3][REGIME_SLOTS][FAMILY_SLOTS][NUM_BUCKETS];
+   int m_contextTpMisses[3][REGIME_SLOTS][FAMILY_SLOTS][NUM_BUCKETS];
+
    string m_filename;
    int m_minSample;
 
@@ -90,6 +98,10 @@ public:
       ArrayInitialize(m_contextWins, 0);
       ArrayInitialize(m_contextLosses, 0);
       ArrayInitialize(m_contextScratches, 0);
+      ArrayInitialize(m_tpHits, 0);
+      ArrayInitialize(m_tpMisses, 0);
+      ArrayInitialize(m_contextTpHits, 0);
+      ArrayInitialize(m_contextTpMisses, 0);
      }
 
    void Init(string symbol, int minSample = 30, bool useCommonFolder = false, string version = "")
@@ -113,12 +125,17 @@ public:
       ArrayInitialize(m_contextWins, 0);
       ArrayInitialize(m_contextLosses, 0);
       ArrayInitialize(m_contextScratches, 0);
+      ArrayInitialize(m_tpHits, 0);
+      ArrayInitialize(m_tpMisses, 0);
+      ArrayInitialize(m_contextTpHits, 0);
+      ArrayInitialize(m_contextTpMisses, 0);
       Load(useCommonFolder);
      }
 
    void Record(double confidence, double netPnL,
                ENUM_MARKET_REGIME regime = REGIME_UNDEFINED,
                ENUM_SETUP_FAMILY family = SETUP_FAMILY_NONE,
+               bool tp1Hit = false, bool tp2Hit = false, bool tp3Hit = false,
                bool useCommonFolder = false)
      {
       int b = BucketIndex(confidence);
@@ -126,12 +143,32 @@ public:
       else if(netPnL < -0.0000001) m_losses[b]++;
       else                         m_scratches[b]++;
 
+      bool targetHit[3];
+      targetHit[0] = tp1Hit; targetHit[1] = tp2Hit; targetHit[2] = tp3Hit;
       int r, f;
       if(ContextIndex(regime, family, r, f))
         {
          if(netPnL > 0.0000001)       m_contextWins[r][f][b]++;
          else if(netPnL < -0.0000001) m_contextLosses[r][f][b]++;
          else                         m_contextScratches[r][f][b]++;
+
+         for(int t = 0; t < 3; t++)
+           {
+            if(targetHit[t])
+              {
+               m_contextTpHits[t][r][f][b]++;
+              }
+            else
+              {
+               m_contextTpMisses[t][r][f][b]++;
+              }
+           }
+        }
+
+      for(int t = 0; t < 3; t++)
+        {
+         if(targetHit[t]) m_tpHits[t][b]++;
+         else              m_tpMisses[t][b]++;
         }
       Save(useCommonFolder);
      }
@@ -178,6 +215,44 @@ public:
       return SmoothedProbability(gw, gl);
      }
 
+   double GetTargetCalibratedProbability(int targetIndex, double confidence,
+                                                  ENUM_MARKET_REGIME regime,
+                                                  ENUM_SETUP_FAMILY family,
+                                                  int &sampleSizeOut,
+                                                  bool &hasEnoughDataOut,
+                                                  bool &contextUsedOut) const
+     {
+      if(targetIndex < 0 || targetIndex > 2)
+        {
+         sampleSizeOut = 0; hasEnoughDataOut = false; contextUsedOut = false;
+         return 50.0;
+        }
+
+      int b = BucketIndex(confidence);
+      int r, f;
+      if(ContextIndex(regime, family, r, f))
+        {
+         int ch = m_contextTpHits[targetIndex][r][f][b];
+         int cm = m_contextTpMisses[targetIndex][r][f][b];
+         int ct = ch + cm;
+         if(ct >= m_minSample)
+           {
+            sampleSizeOut = ct;
+            hasEnoughDataOut = true;
+            contextUsedOut = true;
+            return SmoothedProbability(ch, cm);
+           }
+        }
+
+      int gh = m_tpHits[targetIndex][b];
+      int gm = m_tpMisses[targetIndex][b];
+      int gt = gh + gm;
+      sampleSizeOut = gt;
+      hasEnoughDataOut = (gt >= m_minSample);
+      contextUsedOut = false;
+      return SmoothedProbability(gh, gm);
+     }
+
    string BucketSummary(int bucketIdx) const
      {
       if(bucketIdx < 0 || bucketIdx >= NUM_BUCKETS) return "";
@@ -201,6 +276,10 @@ public:
       ArrayInitialize(m_contextWins, 0);
       ArrayInitialize(m_contextLosses, 0);
       ArrayInitialize(m_contextScratches, 0);
+      ArrayInitialize(m_tpHits, 0);
+      ArrayInitialize(m_tpMisses, 0);
+      ArrayInitialize(m_contextTpHits, 0);
+      ArrayInitialize(m_contextTpMisses, 0);
       Save(useCommonFolder);
      }
 
@@ -212,18 +291,25 @@ public:
       int h = FileOpen(m_filename, flags, ',');
       if(h == INVALID_HANDLE) return;
 
-      FileWrite(h, "Scope", "Regime", "Family", "BucketLow", "BucketHigh", "Wins", "Losses", "Scratches");
+      FileWrite(h, "Scope", "Regime", "Family", "BucketLow", "BucketHigh", "Wins", "Losses", "Scratches",
+                "TP1Hits", "TP1Misses", "TP2Hits", "TP2Misses", "TP3Hits", "TP3Misses");
 
       for(int b = 0; b < NUM_BUCKETS; b++)
          FileWrite(h, "GLOBAL", (int)REGIME_UNDEFINED, (int)SETUP_FAMILY_NONE,
-                   b * 10, b * 10 + 10, m_wins[b], m_losses[b], m_scratches[b]);
+                   b * 10, b * 10 + 10, m_wins[b], m_losses[b], m_scratches[b],
+                   m_tpHits[0][b], m_tpMisses[0][b],
+                   m_tpHits[1][b], m_tpMisses[1][b],
+                   m_tpHits[2][b], m_tpMisses[2][b]);
 
       for(int r = 0; r < REGIME_SLOTS; r++)
          for(int f = 0; f < FAMILY_SLOTS; f++)
             for(int b = 0; b < NUM_BUCKETS; b++)
                FileWrite(h, "CONTEXT", r, f + 1, b * 10, b * 10 + 10,
                          m_contextWins[r][f][b], m_contextLosses[r][f][b],
-                         m_contextScratches[r][f][b]);
+                         m_contextScratches[r][f][b],
+                         m_contextTpHits[0][r][f][b], m_contextTpMisses[0][r][f][b],
+                         m_contextTpHits[1][r][f][b], m_contextTpMisses[1][r][f][b],
+                         m_contextTpHits[2][r][f][b], m_contextTpMisses[2][r][f][b]);
 
       FileClose(h);
      }
@@ -236,7 +322,7 @@ public:
       int h = FileOpen(m_filename, flags, ',');
       if(h == INVALID_HANDLE) return false;
 
-      for(int c = 0; c < 9 && !FileIsEnding(h); c++) FileReadString(h);
+      for(int c = 0; c < 15 && !FileIsEnding(h); c++) FileReadString(h);
 
       while(!FileIsEnding(h))
         {
@@ -250,6 +336,12 @@ public:
          int w = (int)StringToInteger(FileReadString(h));
          int l = (int)StringToInteger(FileReadString(h));
          int s = (int)StringToInteger(FileReadString(h));
+         int t1h = (int)StringToInteger(FileReadString(h));
+         int t1m = (int)StringToInteger(FileReadString(h));
+         int t2h = (int)StringToInteger(FileReadString(h));
+         int t2m = (int)StringToInteger(FileReadString(h));
+         int t3h = (int)StringToInteger(FileReadString(h));
+         int t3m = (int)StringToInteger(FileReadString(h));
 
          int b = MathMax(0, MathMin(NUM_BUCKETS - 1, bucketLow / 10));
          if(scope == "GLOBAL")
@@ -257,6 +349,9 @@ public:
             m_wins[b] = w;
             m_losses[b] = l;
             m_scratches[b] = s;
+            m_tpHits[0][b] = t1h; m_tpMisses[0][b] = t1m;
+            m_tpHits[1][b] = t2h; m_tpMisses[1][b] = t2m;
+            m_tpHits[2][b] = t3h; m_tpMisses[2][b] = t3m;
            }
          else if(scope == "CONTEXT")
            {
@@ -267,6 +362,9 @@ public:
                m_contextWins[r][f][b] = w;
                m_contextLosses[r][f][b] = l;
                m_contextScratches[r][f][b] = s;
+               m_contextTpHits[0][r][f][b] = t1h; m_contextTpMisses[0][r][f][b] = t1m;
+               m_contextTpHits[1][r][f][b] = t2h; m_contextTpMisses[1][r][f][b] = t2m;
+               m_contextTpHits[2][r][f][b] = t3h; m_contextTpMisses[2][r][f][b] = t3m;
               }
            }
         }
