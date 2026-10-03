@@ -199,6 +199,7 @@ string CSignalPublisher::BuildExtraJson(const TradeDecisionRecord &dec)
       "\"regime\":\"%s\",\"regime_quality\":%.1f,\"regime_age_bars\":%d,\"regime_compatible\":%s,"
       "\"target_plan_valid\":%s,\"tp1_rr\":%.2f,\"tp2_rr\":%.2f,\"tp3_rr\":%.2f,"
       "\"tp1_quality\":%.1f,\"tp2_quality\":%.1f,\"tp3_quality\":%.1f,"
+      "\"tp1_calibrated_probability\":%.1f,\"tp2_calibrated_probability\":%.1f,\"tp3_calibrated_probability\":%.1f,"
       "\"calibrated_probability\":%.1f,\"calibration_sample\":%d,"
       "\"calibration_context_used\":%s,\"calibration_has_enough_data\":%s}",
       dec.setup.setup_id, dec.setup.smc_chain_id, dec.setup.entry_top, dec.setup.entry_bottom,
@@ -212,6 +213,8 @@ string CSignalPublisher::BuildExtraJson(const TradeDecisionRecord &dec)
       dec.setup.target_plan_valid ? "true" : "false",
       dec.setup.tp1_rr, dec.setup.tp2_rr, dec.setup.tp3_rr,
       dec.setup.tp1_quality, dec.setup.tp2_quality, dec.setup.tp3_quality,
+      dec.setup.tp1_calibrated_probability, dec.setup.tp2_calibrated_probability,
+      dec.setup.tp3_calibrated_probability,
       dec.setup.calibrated_probability, dec.setup.calibration_sample,
       dec.setup.calibration_context_used ? "true" : "false",
       dec.setup.calibration_has_enough_data ? "true" : "false");
