@@ -24,6 +24,7 @@ public:
                      CTrendEngine();
    void              Init(CSwingDetector* swings, CBOS* bos, CCHOCH* choch, CCandleData* candles);
    ENUM_TREND_STATE  GetCurrentTrend();
+   int               RecentBOSAgeBars();
   };
 //+------------------------------------------------------------------+
 CTrendEngine::CTrendEngine() : m_swings(NULL), m_bos(NULL), m_choch(NULL), m_candles(NULL) {}
@@ -68,6 +69,14 @@ ENUM_TREND_STATE CTrendEngine::DetermineTrend()
 ENUM_TREND_STATE CTrendEngine::GetCurrentTrend()
   {
    return DetermineTrend();
+  }
+//+------------------------------------------------------------------+
+int CTrendEngine::RecentBOSAgeBars()
+  {
+   if(m_bos == NULL || m_bos.Count() <= 0) return -1;
+   BOSEvent recent = m_bos.GetBOS(0);
+   if(recent.bar_index < 1) return -1; // completed structure only
+   return recent.bar_index;
   }
 #endif
 //+------------------------------------------------------------------+
