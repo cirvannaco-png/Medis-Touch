@@ -134,6 +134,7 @@ input bool   InpRequireContinuationHTFAlignment = true;
 
 input group "Market Regime Policy (v2.17)"
 input bool   InpEnableRegimeGate = true;              // default live policy; disable only for controlled ablation
+input int    InpMaxRegimeTrendBOSAgeBars = 12;        // confirmed BOS freshness window for a TRENDING classification
 
 input group "SMC Extension Evidence (v2.16)"
 input string InpSMTReferenceSymbol = "";
@@ -390,6 +391,7 @@ int OnInit()
                                           InpKeyLevelWickRejectionRatio, InpKeyLevelRoundStep);
    g_scoring.ConfigureStrategySelection(InpMinSelectionScore);
    g_scoring.ConfigureRegimeGate(InpEnableRegimeGate);
+   g_scoring.ConfigureRegimeFreshness(InpMaxRegimeTrendBOSAgeBars);
 
    // v2.16: one hard structural authority sits between analysis and setup
    // generation. The causal chain itself runs on the execution/FVG TF;
