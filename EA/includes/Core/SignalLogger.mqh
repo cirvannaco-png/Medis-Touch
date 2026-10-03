@@ -299,7 +299,9 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
    // SignalID joins this row to its eventual outcome row in the Outcomes
    // CSV — just the creation timestamp + direction, unique enough for a
    // single-symbol, single-instance signal stream.
-   string signalId = StringFormat("%s_%s_%d", symbol, dir, (long)setup.creation_time);
+   string signalId = (StringLen(setup.setup_id) > 0)
+                      ? setup.setup_id
+                      : StringFormat("%s_%s_%d", symbol, dir, (long)setup.creation_time);
 
    FileWrite(handle, signalId, symbol, EnumToString(entryTF), TimeToString(setup.creation_time, TIME_DATE | TIME_MINUTES),
             session, trendLabel, dir, DoubleToString(setup.confidence, 1),
@@ -373,7 +375,9 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
 
    FileSeek(handle, 0, SEEK_END);
    string dir = (p.setup.type == ORDER_TYPE_BUY) ? "BUY" : "SELL";
-   string signalId = StringFormat("%s_%s_%d", symbol, dir, (long)p.setup.creation_time);
+   string signalId = (StringLen(p.setup.setup_id) > 0)
+                      ? p.setup.setup_id
+                      : StringFormat("%s_%s_%d", symbol, dir, (long)p.setup.creation_time);
 
    double mfeR = 0.0, maeR = 0.0;
    if(p.filled && p.riskDist > 0)
