@@ -722,12 +722,15 @@ void OnTick()
    // only AddSetup()/Update() now run a few lines later, still within the
    // same tick, still processing the same pending array.
    TradeDecisionRecord decision = g_router.Decide(chosen);
+   if(!decision.valid || decision.action == POLICY_IGNORE)
+     {
+      g_tracker.Update(g_fvgCtx);
+      return;
+     }
 
    if(InpTrackOutcomes)
       g_tracker.AddSetup(chosen, decision.decision_id);
    g_tracker.Update(g_fvgCtx);
-
-   if(!decision.valid || decision.action == POLICY_IGNORE) return;
 
    // Persist BEFORE acting — Recovery must be able to find this decision
    // even if the terminal dies immediately after an order fills.
