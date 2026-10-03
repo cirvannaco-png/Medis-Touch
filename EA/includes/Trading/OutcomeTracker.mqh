@@ -638,6 +638,7 @@ void COutcomeTracker::ProcessFilledBar(int idx, CandleData &bar0)
             m_pending[idx] = p;
             continue;
            }
+         break; // TP1 not reached — do not activate runner logic early
         }
 
       // 2c. TP2 profit protection. Once TP2 is touched after the partial,
