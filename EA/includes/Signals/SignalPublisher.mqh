@@ -182,14 +182,20 @@ string CSignalPublisher::BuildExtraJson(const TradeDecisionRecord &dec)
 
    string sweepGradeStr = EnumToString(r.sweep_grade);
    string newsRiskStr = EnumToString(r.news_risk);
+   string family = (dec.setup.reasons.bos_confirmed && dec.setup.reasons.inducement_valid)
+                    ? "SMC_CHAIN" : "SMC";
 
    return StringFormat(
-      "{\"pips_sl\":%.1f,\"pips_tp1\":%.1f,\"pips_tp2\":%.1f,\"rr_tp1\":%.2f,\"rr_tp2\":%.2f,"
+      "{\"setup_id\":\"%s\",\"chain_id\":\"%I64u\",\"entry_top\":%.5f,\"entry_bottom\":%.5f,"
+      "\"invalidation\":%.5f,\"structural_quality\":%.1f,\"pips_sl\":%.1f,\"pips_tp1\":%.1f,\"pips_tp2\":%.1f,"
+      "\"rr_tp1\":%.2f,\"rr_tp2\":%.2f,\"family\":\"%s\","
       "\"sweep_grade\":\"%s\",\"bos_strength\":%.1f,\"time_decay\":%.1f,"
       "\"chase_dist_atr\":%.2f,\"chase_ok\":%s,"
       "\"news_risk\":\"%s\",\"news_label\":\"%s\",\"news_minutes_to_event\":%d,"
       "\"calibrated_probability\":%.1f,\"calibration_sample\":%d,\"calibration_has_enough_data\":%s}",
-      pipsSl, pipsTp1, pipsTp2, rrTp1, rrTp2,
+      dec.setup.setup_id, dec.setup.smc_chain_id, dec.setup.entry_top, dec.setup.entry_bottom,
+      dec.setup.invalidation, dec.setup.structural_quality,
+      pipsSl, pipsTp1, pipsTp2, rrTp1, rrTp2, family,
       sweepGradeStr, r.bos_strength * 100.0, r.time_decay * 100.0,
       r.chase_dist_atr, r.chase_ok ? "true" : "false",
       newsRiskStr, r.news_label, r.news_minutes_to_event,
