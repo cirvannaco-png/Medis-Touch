@@ -164,7 +164,7 @@ bool CSMCChainBuilder::FindStructure(bool forBuy, BOSEvent &bosOut, CHOCHPoint &
 
    if(m_entryCtx == NULL) return false;
 
-   int bestBar = INT_MAX;
+   int bestBar = 1000000000;
 
    for(int i = 0; i < m_entryCtx.bos.Count(); i++)
      {
@@ -224,12 +224,9 @@ bool CSMCChainBuilder::FindSweep(bool forBuy, const datetime structureTime, int 
       int gap = e.bar_index - structureBar; // same TF, series-index distance
       if(gap > m_maxSweepToStructureBars) continue;
 
-      double directionalDistance = forBuy
-                                   ? (m_entryCtx.bos.Count() > 0 ? m_entryCtx.bos.GetBOS(0).price - e.price : 0.0)
-                                   : (e.price - m_entryCtx.bos.GetBOS(0).price);
-      // Prefer the closest valid causal sweep, then stronger/external evidence.
-      double rank = (e.external ? 0.20 : 0.0) + e.strength +
-                    MathMax(0.0, MathMin(directionalDistance, 1.0));
+      // Prefer the closest valid causal sweep; external pools and stronger
+      // reclaim/penetration evidence break ties.
+      double rank = (e.external ? 0.20 : 0.0) + e.strength;
       if(!found || gap < bestGap || (gap == bestGap && rank > bestStrength))
         {
          out = e;
@@ -433,13 +430,6 @@ SMCChain CSMCChainBuilder::Build(bool forBuy)
      }
    c.has_rejection = true;
 
-   if(!ValidateDisplacement(forBuy, structureBar, c.sweep.penetration_atr, c.body_ratio, c.displacement_atr))
-     {
-      c.status = CHAIN_INVALID;
-      c.failure_reason = "structure bar is not strong enough to qualify as displacement";
-      return c;
-     }
-   // The first output above is overwritten; retain actual displacement ATR.
    double displacementATR = 0.0;
    double dispBody = 0.0;
    double dispRangeATR = 0.0;
