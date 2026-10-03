@@ -41,6 +41,7 @@ private:
    // "not configured" — it round-trips to the bridge as an empty string,
    // not a fabricated label.
    string               m_weightVersion;
+   ENUM_TIMEFRAMES       m_signalTF;
 
    bool                 TransmitOne(string endpoint, const string &payload);
    bool                 TransmitOnePatch(string endpoint, const string &payload);
@@ -81,6 +82,7 @@ public:
                                         string sweepGrade, bool htfObAligned, double confidenceAtSignal,
                                         double confidenceDecayed, int decayBars);
    void                 SetWeightVersion(string v) { m_weightVersion = v; }
+   void                 SetSignalTimeframe(ENUM_TIMEFRAMES tf) { m_signalTF = tf; }
    // v2.11. Public wrapper so callers outside this class (OutcomeTracker,
    // building the signal_id an outcome must attach to) use the exact same
    // convention as Publish() itself, rather than duplicating the "MT#"
@@ -95,6 +97,7 @@ void CSignalPublisher::Init(string symbol, CSubscriberPlatform* platform, int ti
    m_timeoutMs = timeoutMs;
    m_apiKey = apiKey;
    m_weightVersion = "";
+   m_signalTF = PERIOD_CURRENT;
    if(StringLen(m_apiKey) == 0)
       Print("MedisTouch SignalPublisher: InpBridgeApiKey is blank — every WebRequest to the bridge will be ",
             "rejected with HTTP 401 until it's set to match the backend's SECRET_KEY.");
@@ -209,7 +212,8 @@ string CSignalPublisher::BuildJsonPayload(const TradeDecisionRecord &dec)
    bool isBuy = (dec.setup.type == ORDER_TYPE_BUY);
    double entry = isBuy ? dec.setup.entry_top : dec.setup.entry_bottom;
    string dir = isBuy ? "BUY" : "SELL";
-   string tf = EnumToString((ENUM_TIMEFRAMES)Period());
+   ENUM_TIMEFRAMES publishTF = (m_signalTF == PERIOD_CURRENT ? (ENUM_TIMEFRAMES)Period() : m_signalTF);
+   string tf = EnumToString(publishTF);
    StringReplace(tf, "PERIOD_", ""); // EnumToString gives "PERIOD_M15"; schema's VALID_TIMEFRAMES wants "M15"
 
    // v2.11 — promoted out of BuildExtraJson's blob into top-level fields
