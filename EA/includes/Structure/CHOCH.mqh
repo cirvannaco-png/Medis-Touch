@@ -56,7 +56,8 @@ void CCHOCH::Detect()
          SwingPoint prev = m_swings.GetHigh(i + 1);
          if(curr.price < prev.price) // lower high
            {
-            for(int bar = curr.bar_index - 1; bar >= 0; bar--)
+            int confirmationShift = curr.bar_index - m_swings.Strength();
+            for(int bar = confirmationShift; bar >= 1; bar--)
               {
                if(m_candles.GetCandle(bar).close > curr.price)
                  {
