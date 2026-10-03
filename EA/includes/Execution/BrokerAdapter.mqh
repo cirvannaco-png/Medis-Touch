@@ -307,8 +307,23 @@ bool CBrokerAdapter::MarketBuy(string symbol, double volume, double sl, double t
      {
       if(m_trade.Buy(volume, symbol, 0.0, sl, tp, comment) && LastRequestOk("MarketBuy"))
         {
+         // A successful CTrade basic check is not enough. Require the
+         // server result to contain a real deal and a real fill price before
+         // exposing this request as an executed position.
+         if(m_trade.ResultDeal() == 0)
+           {
+            Print("MedisTouch BrokerAdapter: MarketBuy returned success without a deal ticket — execution not confirmed.");
+            m_lastLatencyUs = GetMicrosecondCount() - t0;
+            return false;
+           }
          ticketOut = ResolvePositionTicket();
          fillPriceOut = m_trade.ResultPrice();
+         if(ticketOut == 0 || fillPriceOut <= 0.0)
+           {
+            Print("MedisTouch BrokerAdapter: MarketBuy deal exists but position/fill price could not be resolved — execution not confirmed.");
+            m_lastLatencyUs = GetMicrosecondCount() - t0;
+            return false;
+           }
          m_lastLatencyUs = GetMicrosecondCount() - t0;
          return true;
         }
@@ -333,8 +348,20 @@ bool CBrokerAdapter::MarketSell(string symbol, double volume, double sl, double 
      {
       if(m_trade.Sell(volume, symbol, 0.0, sl, tp, comment) && LastRequestOk("MarketSell"))
         {
+         if(m_trade.ResultDeal() == 0)
+           {
+            Print("MedisTouch BrokerAdapter: MarketSell returned success without a deal ticket — execution not confirmed.");
+            m_lastLatencyUs = GetMicrosecondCount() - t0;
+            return false;
+           }
          ticketOut = ResolvePositionTicket();
          fillPriceOut = m_trade.ResultPrice();
+         if(ticketOut == 0 || fillPriceOut <= 0.0)
+           {
+            Print("MedisTouch BrokerAdapter: MarketSell deal exists but position/fill price could not be resolved — execution not confirmed.");
+            m_lastLatencyUs = GetMicrosecondCount() - t0;
+            return false;
+           }
          m_lastLatencyUs = GetMicrosecondCount() - t0;
          return true;
         }
