@@ -161,9 +161,6 @@ bool CRiskEngine::ValidateSetup(TradeSetup &setup, double minRR, double maxSLDis
      }
    return true;
   }
-#endif
-//+------------------------------------------------------------------+
-
 //+------------------------------------------------------------------+
 bool CRiskEngine::ValidateMargin(string symbol, ENUM_ORDER_TYPE type, double lots,
                                   double price, string &reason)
@@ -197,3 +194,7 @@ bool CRiskEngine::ValidateMargin(string symbol, ENUM_ORDER_TYPE type, double lot
    return true;
   }
 //+------------------------------------------------------------------+
+
+#endif
+//+------------------------------------------------------------------+
+
