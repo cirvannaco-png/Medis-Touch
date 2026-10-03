@@ -54,7 +54,8 @@ CTradeDecision::CTradeDecision()
   }
 
 void CTradeDecision::Init(CCandleData* priceRef, CTFContext* fvgCtx, CTFContext* liqCtx, CScoringEngine* scoring,
-                          CStructuralValidator* validator, double slBufferATR, double minStopSpreadMult)
+                          CStructuralValidator* validator, double slBufferATR, double minStopSpreadMult,
+                          double targetMinRR)
   {
    m_priceRef = priceRef;
    m_fvgCtx = fvgCtx;
@@ -197,6 +198,8 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    m_scoring.EvaluateReasons(false, setup.reasons);
    setup.reasons.regime_compatible = true;
    setup.reasons.regime_reason = regimeReason;
+   setup.reasons.regime_quality = m_scoring.GetRegimeQuality();
+   setup.reasons.regime_age_bars = m_scoring.GetRegimeAgeBars();
    setup.reasons.bos_confirmed = (sv.chain.has_bos || sv.chain.has_choch);
    setup.reasons.liquidity_swept = sv.chain.has_sweep;
    setup.reasons.fresh_fvg = true;
