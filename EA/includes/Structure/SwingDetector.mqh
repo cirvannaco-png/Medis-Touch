@@ -54,7 +54,10 @@ bool CSwingDetector::IsSwingHigh(int idx)
   {
    if(m_candles == NULL) return false;
    int total = m_candles.Total();
-   if(idx < m_strength || idx >= total - m_strength) return false;
+   // A completed swing may only use closed bars. With series indexing,
+   // the newest neighbour is idx-strength; requiring it to be >=1 keeps
+   // candle 0 completely outside structural confirmation.
+   if(idx < m_strength + 1 || idx >= total - m_strength) return false;
    double high = m_candles.GetCandle(idx).high;
    for(int i = 1; i <= m_strength; i++)
      {
@@ -100,7 +103,7 @@ void CSwingDetector::Detect()
 
    // Scan from oldest scannable bar to newest so results start in
    // chronological order (oldest first).
-   for(int i = total - m_strength - 1; i >= m_strength; i--)
+   for(int i = total - m_strength - 1; i >= m_strength + 1; i--)
      {
       if(IsSwingHigh(i))
         {
