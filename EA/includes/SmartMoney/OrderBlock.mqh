@@ -152,13 +152,15 @@ void COrderBlock::Detect()
          if(z.top < z.bottom) { double t = z.top; z.top = z.bottom; z.bottom = t; }
 
          UpdateState(z);
-         if(z.state != OB_MITIGATED)
-           {
-            int n = ArraySize(m_zones);
-            ArrayResize(m_zones, n + 1);
-            m_zones[n] = z;
-            m_zoneCount++;
-           }
+
+         // Keep mitigated historical OBs so the Breaker-Block evidence
+         // engine can prove the polarity flip. NearestZone() and the
+         // live OB gate continue to ignore OB_MITIGATED zones.
+         int n = ArraySize(m_zones);
+         ArrayResize(m_zones, n + 1);
+         m_zones[n] = z;
+         m_zoneCount++;
+
          break; // only the nearest opposite-close candle counts as THE origin
         }
      }
@@ -172,7 +174,7 @@ void COrderBlock::UpdateState(OrderBlockZone &z)
   {
    if(m_candles == NULL) return;
    bool bullish = (z.dir == FVG_BULL);
-   for(int k = z.bar_index - 1; k >= 0; k--)
+   for(int k = z.bar_index - 1; k >= 1; k--)
      {
       CandleData cd = m_candles.GetCandle(k);
       bool touched = (cd.low <= z.top && cd.high >= z.bottom);
