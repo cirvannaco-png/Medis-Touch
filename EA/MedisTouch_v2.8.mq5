@@ -753,17 +753,23 @@ void OnTick()
                         decision.decision_id, lots, InpRiskPercentPerTrade);
 
          double proposedRisk = g_risk.RiskAmountForLots(_Symbol, lots, entry, chosen.stop_loss);
-         string blockReason;
-         if(!g_portfolio.AllowNewTrade(_Symbol, proposedRisk, blockReason))
-            PrintFormat("MedisTouch EA: decision #%d blocked by Portfolio Manager — %s", decision.decision_id, blockReason);
+         string marginReason;
+         if(!g_risk.ValidateMargin(_Symbol, chosen.type, lots, entry, marginReason))
+            PrintFormat("MedisTouch EA: decision #%d blocked by broker margin preflight — %s", decision.decision_id, marginReason);
          else
            {
-            ulong ticketOut = 0;
-            double maxDeviation = InpMaxEntryDeviationATR * currentAtr;
-            if(g_orders.Submit(decision, lots, InpUseMarketOrders, maxDeviation, ticketOut))
-               g_store.SaveExecution(decision.decision_id, lots, ticketOut);
+            string blockReason;
+            if(!g_portfolio.AllowNewTrade(_Symbol, proposedRisk, blockReason))
+               PrintFormat("MedisTouch EA: decision #%d blocked by Portfolio Manager — %s", decision.decision_id, blockReason);
             else
-               g_monitor.NotifyBrokerReject();
+              {
+               ulong ticketOut = 0;
+            double maxDeviation = InpMaxEntryDeviationATR * currentAtr;
+               if(g_orders.Submit(decision, lots, InpUseMarketOrders, maxDeviation, ticketOut))
+                  g_store.SaveExecution(decision.decision_id, lots, ticketOut);
+               else
+                  g_monitor.NotifyBrokerReject();
+              }
            }
         }
      }
