@@ -92,7 +92,7 @@ void CValueAreaEngine::Compute(bool forceRecompute)
 
    // Rebuilding a 24-bin histogram over 100 bars every tick is wasted
    // work — the profile only needs to change once a new bar closes.
-   datetime barTime = m_candles.GetCandle(0).time;
+   datetime barTime = m_candles.GetCandle(1).time;
    if(!forceRecompute && barTime == m_lastBarTime && m_poc != 0.0)
      {
       m_valid = true; // last computed profile still applies to this bar
@@ -100,11 +100,14 @@ void CValueAreaEngine::Compute(bool forceRecompute)
      }
 
    int total = m_candles.Total();
-   int bars = MathMin(m_lookbackBars, total);
+   // v2.16: build the profile exclusively from CLOSED bars.
+   // Live candle 0 may be compared to the frozen profile, but can never
+   // move POC/VAH/VAL itself.
+   int bars = MathMin(m_lookbackBars, total - 1);
    if(bars < 10) return;
 
    double rangeHigh = -DBL_MAX, rangeLow = DBL_MAX;
-   for(int i = 0; i < bars; i++)
+   for(int i = 1; i <= bars; i++)
      {
       CandleData cd = m_candles.GetCandle(i);
       if(cd.high > rangeHigh) rangeHigh = cd.high;
