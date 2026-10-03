@@ -66,7 +66,7 @@ bool CMarketPhase::IsDisplacementBar(int idx)
 ENUM_MARKET_PHASE CMarketPhase::Detect()
   {
    if(m_candles == NULL || m_candles.Total() < m_rangeLookback + 2) return PHASE_UNDEFINED;
-   double atr = m_candles.GetATR(0);
+   double atr = m_candles.GetATR(1);
    if(atr <= 0) return PHASE_UNDEFINED;
 
    double hh = -DBL_MAX, ll = DBL_MAX;
