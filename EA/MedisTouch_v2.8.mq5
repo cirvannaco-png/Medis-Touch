@@ -385,6 +385,7 @@ int OnInit()
                                           InpKeyLevelTouchToleranceATRMult, InpKeyLevelAbsorptionMinTouches,
                                           InpKeyLevelWickRejectionRatio, InpKeyLevelRoundStep);
    g_scoring.ConfigureStrategySelection(InpMinSelectionScore);
+   g_scoring.ConfigureRegimeGate(InpEnableRegimeGate);
 
    // v2.16: one hard structural authority sits between analysis and setup
    // generation. The causal chain itself runs on the execution/FVG TF;
@@ -411,7 +412,7 @@ int OnInit()
                     InpSMTInverseCorrelation);
 
    g_decision.Init(&g_fvgCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, &g_validator,
-                   InpSLBufferATR, InpMinStopSpreadMult);
+                   InpSLBufferATR, InpMinStopSpreadMult, InpMinRiskReward);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);
    // Deliberately the SAME values driving g_positions/g_risk below — so the
