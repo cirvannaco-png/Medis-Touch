@@ -227,13 +227,13 @@ string CSignalPublisher::BuildJsonPayload(const TradeDecisionRecord &dec)
       "{\"signal_id\":\"%s\",\"decision_id\":%d,\"symbol\":\"%s\",\"direction\":\"%s\",\"entry\":%.5f,\"sl\":%.5f,"
       "\"tp1\":%.5f,\"tp2\":%.5f,\"final_tp\":%.5f,\"confidence\":%.1f,\"reasons\":%s,\"timeframe\":\"%s\","
       "\"time\":\"%s\",\"regime\":\"%s\",\"session\":\"%s\",\"sweep_grade\":\"%s\",\"htf_ob_aligned\":%s,"
-      "\"weight_version\":\"%s\",\"extra\":%s}",
+      "\"weight_version\":\"%s\",\"expires_at\":%d,\"extra\":%s}",
       SignalIdFor(dec.decision_id), dec.decision_id, dec.symbol, dir, entry, dec.setup.stop_loss,
       dec.setup.tp1, dec.setup.tp2, dec.setup.final_tp, dec.setup.confidence,
       BuildReasonsJsonArray(dec.setup.reasons), tf,
       TimeToString(dec.decided_time, TIME_DATE | TIME_SECONDS),
       regimeStr, sessionStr, sweepGradeStr, r.htf_ob_confluence ? "true" : "false",
-      m_weightVersion, BuildExtraJson(dec));
+      m_weightVersion, (long)dec.setup.expiry_time, BuildExtraJson(dec));
   }
 //+------------------------------------------------------------------+
 bool CSignalPublisher::TransmitOne(string endpoint, const string &payload)
