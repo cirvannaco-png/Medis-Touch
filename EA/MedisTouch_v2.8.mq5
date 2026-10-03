@@ -740,8 +740,16 @@ void OnTick()
    g_tracker.Update(g_fvgCtx);
 
    // Persist BEFORE acting — Recovery must be able to find this decision
-   // even if the terminal dies immediately after an order fills.
-   g_store.Save(decision);
+   // even if the terminal dies immediately after an order fills. Execution
+   // is refused if durability fails; a signal-only notification may still
+   // be emitted with an explicit warning.
+   bool persisted = g_store.Save(decision);
+   if(!persisted && (decision.action == POLICY_EXECUTE_ONLY || decision.action == POLICY_EXECUTE_AND_SIGNAL))
+     {
+      PrintFormat("MedisTouch EA: decision #%d refused — decision store could not persist the immutable setup.", decision.decision_id);
+      g_monitor.NotifyBrokerReject();
+      return;
+     }
 
    if(decision.action == POLICY_EXECUTE_ONLY || decision.action == POLICY_EXECUTE_AND_SIGNAL)
      {
