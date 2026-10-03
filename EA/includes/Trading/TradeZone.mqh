@@ -199,8 +199,13 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    setup.reasons.bos_confirmed = (sv.chain.has_bos || sv.chain.has_choch);
    setup.reasons.liquidity_swept = sv.chain.has_sweep;
    setup.reasons.fresh_fvg = true;
+   setup.reasons.ifvg_confirmed = sv.extensions.ifvg_confirmed;
+   setup.reasons.bpr_confirmed = sv.extensions.bpr_confirmed;
+   setup.reasons.cisd_confirmed = sv.extensions.cisd_confirmed;
+   setup.reasons.breaker_block_confirmed = sv.extensions.breaker_block_confirmed;
+   setup.reasons.smt_confirmed = sv.extensions.smt_confirmed;
+   setup.reasons.extension_quality = sv.extensions.combined_quality;
    m_scoring.PopulateStrategyDiagnostics(true, setup.confidence, setup.reasons);
-   ApplyRuntimeOverlay(setup);
    m_scoring.PopulateConfidenceDiagnostics(setup.reasons, setup.confidence);
 
    m_lastSetup = setup;
@@ -246,11 +251,16 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    setup.active = true;
 
    m_scoring.EvaluateReasons(false, setup.reasons);
-   setup.reasons.bos_confirmed = true;
+   setup.reasons.bos_confirmed = (sv.chain.has_bos || sv.chain.has_choch);
    setup.reasons.liquidity_swept = sv.chain.has_sweep;
    setup.reasons.fresh_fvg = true;
+   setup.reasons.ifvg_confirmed = sv.extensions.ifvg_confirmed;
+   setup.reasons.bpr_confirmed = sv.extensions.bpr_confirmed;
+   setup.reasons.cisd_confirmed = sv.extensions.cisd_confirmed;
+   setup.reasons.breaker_block_confirmed = sv.extensions.breaker_block_confirmed;
+   setup.reasons.smt_confirmed = sv.extensions.smt_confirmed;
+   setup.reasons.extension_quality = sv.extensions.combined_quality;
    m_scoring.PopulateStrategyDiagnostics(false, setup.confidence, setup.reasons);
-   ApplyRuntimeOverlay(setup);
    m_scoring.PopulateConfidenceDiagnostics(setup.reasons, setup.confidence);
 
    m_lastSetup = setup;
