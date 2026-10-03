@@ -64,6 +64,9 @@ input double InpMinChainDisplacementBodyRatio = 0.55;
 input double InpMinChainStructureStrength = 0.45;
 input bool   InpRequireContinuationHTFAlignment = true;
 
+input group "Market Regime Policy (v2.17)"
+input bool   InpEnableRegimeGate = true;
+
 input group "Risk"
 input double InpMinRiskReward = 1.5;
 input double InpMaxSLDistanceATR = 1.5;
