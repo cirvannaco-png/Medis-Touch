@@ -220,6 +220,15 @@ public:
    // addition to the existing local-CSV LogOutcome() call.
    void              ConfigurePublishing(CSignalPublisher* publisher, string weightVersion)
      { m_publisher = publisher; m_weightVersion = weightVersion; }
+   double            GetTargetCalibratedProbability(int targetIndex, double confidence,
+                                                     ENUM_MARKET_REGIME regime, ENUM_SETUP_FAMILY family,
+                                                     int &sampleSizeOut, bool &hasEnoughDataOut,
+                                                     bool &contextUsedOut) const
+     {
+      return m_calibration.GetTargetCalibratedProbability(targetIndex, confidence, regime, family,
+                                                           sampleSizeOut, hasEnoughDataOut, contextUsedOut);
+     }
+
    double            GetCalibratedProbability(double confidence, int &sampleSizeOut, bool &hasEnoughDataOut) const
      { return m_calibration.GetCalibratedProbability(confidence, sampleSizeOut, hasEnoughDataOut); }
    const CCalibrationEngine* CalibrationEngine() const { return GetPointer(m_calibration); }
@@ -430,8 +439,10 @@ void COutcomeTracker::FinalizeExit(int idx, PendingSetup &p, string outcome, dou
          // signal time — see CalibrationEngine.mqh limitation #4 about
          // what happens to this data across a scoring-formula change.
          if(m_calibrationEnabled)
+            bool tp3Reached = (outcome == "FinalTP_Hit");
             m_calibration.Record(p.setup.confidence, p.realizedPnL,
-                                 p.setup.reasons.regime, p.setup.family);
+                                 p.setup.reasons.regime, p.setup.family,
+                                 p.tp1Hit, p.tp2Hit, tp3Reached);
         }
      }
 
