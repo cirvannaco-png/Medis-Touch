@@ -132,6 +132,8 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    m_scoring.EvaluateReasons(true, setup.reasons);
    setup.reasons.regime_compatible = true;
    setup.reasons.regime_reason = regimeReason;
+   setup.reasons.regime_quality = m_scoring.GetRegimeQuality();
+   setup.reasons.regime_age_bars = m_scoring.GetRegimeAgeBars();
    setup.reasons.bos_confirmed = (sv.chain.has_bos || sv.chain.has_choch);
    setup.reasons.liquidity_swept = sv.chain.has_sweep;
    setup.reasons.fresh_fvg = true;
