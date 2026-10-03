@@ -131,6 +131,10 @@ input double InpMinChainDisplacementATR = 1.0;
 input double InpMinChainDisplacementBodyRatio = 0.55;
 input double InpMinChainStructureStrength = 0.45;
 input bool   InpRequireContinuationHTFAlignment = true;
+
+input group "Market Regime Policy (v2.17)"
+input bool   InpEnableRegimeGate = true;              // default live policy; disable only for controlled ablation
+
 input group "SMC Extension Evidence (v2.16)"
 input string InpSMTReferenceSymbol = "";
 input bool   InpSMTInverseCorrelation = false;
