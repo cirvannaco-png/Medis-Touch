@@ -6,6 +6,7 @@
 #define STRUCTURALVALIDATOR_MQH
 
 #include "SMCChain.mqh"
+#include "../SmartMoney/SMCExtensions.mqh"
 
 struct StructuralValidationResult
   {
@@ -17,6 +18,7 @@ struct StructuralValidationResult
 
    SMCChain                    chain;
    FVGZone                     entry_fvg;
+   SMCExtensionResult          extensions;
 
    bool   htf_aligned;
    bool   htf_conflict;
@@ -32,9 +34,20 @@ class CStructuralValidator
   {
 private:
    CSMCChainBuilder m_builder;
+   CTFContext*      m_entryCtx;
    CTFContext*      m_htfCtx;
    bool             m_requireContinuationHTFAlignment;
    double           m_minContinuationHTFTrend;
+   string           m_smtReferenceSymbol;
+   int              m_ifvgMaxAgeBars;
+   int              m_bprMaxGapBars;
+   int              m_cisdLookbackBars;
+   int              m_cisdMaxRunBars;
+   int              m_breakerMaxAgeBars;
+   int              m_smtLookbackBars;
+   int              m_smtMaxDriftBars;
+   double           m_smtMinCorrelation;
+   bool             m_smtInverseCorrelation;
 
    bool ValidateHTF(bool forBuy, ENUM_SETUP_FAMILY family,
                     bool &aligned, bool &conflict, string &reason);
@@ -54,15 +67,36 @@ public:
              double minStructureStrength = 0.45,
              bool requirePremiumDiscount = true,
              bool requireContinuationHTFAlignment = true,
-             double minContinuationHTFTrendStrength = 0.0);
+             double minContinuationHTFTrendStrength = 0.0,
+             const string smtReferenceSymbol = "",
+             int ifvgMaxAgeBars = 15,
+             int bprMaxGapBars = 4,
+             int cisdLookbackBars = 12,
+             int cisdMaxRunBars = 5,
+             int breakerMaxAgeBars = 20,
+             int smtLookbackBars = 30,
+             int smtMaxDriftBars = 2,
+             double smtMinCorrelation = 0.70,
+             bool smtInverseCorrelation = false);
 
    bool Validate(bool forBuy, StructuralValidationResult &out);
   };
 
 CStructuralValidator::CStructuralValidator()
-  : m_htfCtx(NULL),
+  : m_entryCtx(NULL),
+    m_htfCtx(NULL),
     m_requireContinuationHTFAlignment(true),
-    m_minContinuationHTFTrend(0.0)
+    m_minContinuationHTFTrend(0.0),
+    m_smtReferenceSymbol(""),
+    m_ifvgMaxAgeBars(15),
+    m_bprMaxGapBars(4),
+    m_cisdLookbackBars(12),
+    m_cisdMaxRunBars(5),
+    m_breakerMaxAgeBars(20),
+    m_smtLookbackBars(30),
+    m_smtMaxDriftBars(2),
+    m_smtMinCorrelation(0.70),
+    m_smtInverseCorrelation(false)
   {}
 
 void CStructuralValidator::Init(CTFContext* entryCtx,
@@ -75,10 +109,32 @@ void CStructuralValidator::Init(CTFContext* entryCtx,
                                 double minStructureStrength,
                                 bool requirePremiumDiscount,
                                 bool requireContinuationHTFAlignment,
-                                double minContinuationHTFTrendStrength)
+                                double minContinuationHTFTrendStrength,
+                                const string smtReferenceSymbol,
+                                int ifvgMaxAgeBars,
+                                int bprMaxGapBars,
+                                int cisdLookbackBars,
+                                int cisdMaxRunBars,
+                                int breakerMaxAgeBars,
+                                int smtLookbackBars,
+                                int smtMaxDriftBars,
+                                double smtMinCorrelation,
+                                bool smtInverseCorrelation)
   {
+   m_entryCtx = entryCtx;
+   m_entryCtx = entryCtx;
    m_htfCtx = htfCtx;
    m_requireContinuationHTFAlignment = requireContinuationHTFAlignment;
+   m_smtReferenceSymbol = smtReferenceSymbol;
+   m_ifvgMaxAgeBars = MathMax(1, ifvgMaxAgeBars);
+   m_bprMaxGapBars = MathMax(1, bprMaxGapBars);
+   m_cisdLookbackBars = MathMax(3, cisdLookbackBars);
+   m_cisdMaxRunBars = MathMax(1, cisdMaxRunBars);
+   m_breakerMaxAgeBars = MathMax(1, breakerMaxAgeBars);
+   m_smtLookbackBars = MathMax(10, smtLookbackBars);
+   m_smtMaxDriftBars = MathMax(0, smtMaxDriftBars);
+   m_smtMinCorrelation = MathMax(0.0, MathMin(1.0, smtMinCorrelation));
+   m_smtInverseCorrelation = smtInverseCorrelation;
    m_minContinuationHTFTrend = MathMax(0.0, MathMin(1.0, minContinuationHTFTrend));
 
    m_builder.Init(entryCtx,
@@ -176,6 +232,20 @@ bool CStructuralValidator::Validate(bool forBuy, StructuralValidationResult &out
       out.reason = chain.failure_reason;
       return false;
      }
+
+   CSMCExtensions ext;
+   ext.Init(m_entryCtx,
+            m_smtReferenceSymbol,
+            m_ifvgMaxAgeBars,
+            m_bprMaxGapBars,
+            m_cisdLookbackBars,
+            m_cisdMaxRunBars,
+            m_breakerMaxAgeBars,
+            m_smtLookbackBars,
+            m_smtMaxDriftBars,
+            m_smtMinCorrelation,
+            m_smtInverseCorrelation);
+   out.extensions = ext.Evaluate(forBuy);
 
    string htfReason;
    if(!ValidateHTF(forBuy, chain.family, out.htf_aligned, out.htf_conflict, htfReason))
