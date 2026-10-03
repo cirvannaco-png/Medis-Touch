@@ -3,7 +3,7 @@
 //|                                            Medis Touch Indicator  |
 //+------------------------------------------------------------------+
 #property copyright "Medis Touch"
-#property version   "2.80"
+#property version   "2.16"
 #property indicator_chart_window
 #property indicator_buffers 0
 #property indicator_plots   0
@@ -37,6 +37,7 @@ input ENUM_TIMEFRAMES InpFVGTF = PERIOD_M15;    // FVG / entry-zone timeframe
 
 input group "Fair Value Gaps"
 input double InpFVGMinSizeATR = 0.1;        // Minimum FVG size as ATR fraction
+input int    InpFVGDegradeBars = 8;         // FVG becomes diagnostic-only after this age
 
 input group "Liquidity"
 input double InpInternalLiqThresholdATR = 0.2; // Internal liquidity threshold ATR
