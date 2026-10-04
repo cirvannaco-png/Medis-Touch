@@ -439,10 +439,12 @@ void COutcomeTracker::FinalizeExit(int idx, PendingSetup &p, string outcome, dou
          // signal time — see CalibrationEngine.mqh limitation #4 about
          // what happens to this data across a scoring-formula change.
          if(m_calibrationEnabled)
+           {
             bool tp3Reached = (outcome == "FinalTP_Hit");
             m_calibration.Record(p.setup.confidence, p.realizedPnL,
                                  p.setup.reasons.regime, p.setup.family,
                                  p.tp1Hit, p.tp2Hit, tp3Reached);
+           }
         }
      }
 
