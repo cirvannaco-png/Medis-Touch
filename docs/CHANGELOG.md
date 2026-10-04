@@ -1,5 +1,31 @@
 # Changelog
 
+## v2.18 — H9: empirical TP1 precision tier
+
+The 71% historical result is not reproducible from the retained StrategyTune sessions,
+so this change does not encode an invented parameter set. Instead, v2.18 turns the
+requested >87% accuracy objective into an auditable selection contract: only a setup
+that is already structurally valid, regime-valid and target-plan-valid may enter the
+precision tier, and that setup must have enough matching TP1 outcomes in the same
+confidence/regime/family context.
+
+### Added
+- TradeSetup.tp1_calibration_sample
+- TradeSetup.tp1_calibration_has_enough_data
+- TradeSetup.tp1_calibration_context_used
+- InpUseTP1PrecisionGate (OFF by default)
+- InpMinTP1PrecisionProbability (default 88.0%)
+- InpMinTP1PrecisionSample (default 50)
+- InpRequireTP1ContextCalibration (default ON)
+- TP1 precision telemetry in signal JSON and CSV output
+- regression coverage for the fail-closed precision gate
+
+### Policy
+The precision tier is deliberately opt-in. It fails closed when target data is
+insufficient, when the probability is below the configured floor, or when the
+required context-specific population is unavailable. The 88% value is a target
+selection threshold, not a claim that future trades will achieve 88%.
+
 ## v2.18 — G6: broker-side safety checks + first tests for tools/
 
 Two unrelated real gaps found by audit, fixed together since both were
