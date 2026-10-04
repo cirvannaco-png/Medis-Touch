@@ -30,11 +30,10 @@
 // forcing every bar into one of two buckets a weak signal can't actually
 // support.
 //
-// DIAGNOSTIC ONLY. Nothing reads Classify()'s return value except
-// CSV logging (see SetupReasons.regime in Core/Config.mqh) and, later,
-// the strategy-selection engine this doc argues for — which does not
-// exist yet. No entry filter, confidence calculation, or order path
-// consults this today.
+// LIVE POLICY. Classify() describes the market state; AllowsSetup()
+// is the explicit permission layer used by the live TradeDecision path.
+// Structural validity still remains upstream and cannot be rescued by
+// this detector.
 class CRegimeDetector
   {
 private:
@@ -87,8 +86,6 @@ ENUM_MARKET_REGIME CRegimeDetector::Classify()
       return REGIME_UNDEFINED;
 
    bool strongTrend = (trend == TREND_BULL_STRONG || trend == TREND_BEAR_STRONG);
-   bool weakTrend    = (trend == TREND_BULL || trend == TREND_BEAR);
-
    int recentBOSAge = m_trend.RecentBOSAgeBars();
 
    // TRENDING: BOS-confirmed directional structure, a fresh enough
@@ -153,7 +150,7 @@ int CRegimeDetector::AgeBars()
    if(m_trend == NULL) return -1;
    return m_trend.RecentBOSAgeBars();
   }
-//+------------------------------------------------------------------+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 // v2.17 action policy:
 //   TRENDING -> continuation only, in the direction of the confirmed trend
 //   RANGING  -> reversal only; seek internal liquidity mean-reversion
