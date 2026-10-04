@@ -1,5 +1,43 @@
 # Changelog
 
+## v2.19 — execution-grade precision evidence and calibration integrity
+
+v2.19 turns the 87% objective into a stricter, auditable execution policy without
+pretending that a historical percentage guarantees future performance.
+
+### Fixed
+- TP1/TP2 calibration no longer counts a raw candle touch before same-bar
+  stop/target ordering is resolved.
+- TP1 is recorded only when the TP1 partial-management milestone is actually
+  reached; TP2 is recorded only after its favorable ordering is resolved.
+- Ambiguous same-bar outcomes remain excluded from calibration.
+
+### Improved
+- Context calibration can pool adjacent confidence buckets only when regime
+  and setup family are identical, improving sample efficiency without falling
+  back immediately to unrelated global evidence.
+- The precision execution gate now requires BOTH:
+  - calibrated profitable-outcome probability >= 87%;
+  - calibrated realized TP1 milestone probability >= 87%;
+  - minimum evidence in both populations;
+  - context-conditioned evidence when required.
+- Precision-gated execution failures are now auditable through the normal
+  decision path.
+- When execution and signalling are both enabled, failing the precision tier
+  degrades EXECUTE_AND_SIGNAL to SIGNAL_ONLY rather than discarding the signal.
+- The precision tier defaults ON, while the master live-execution switch remains
+  OFF, so enabling trading does not bypass the 87% policy accidentally.
+
+### Research discipline
+The 87% threshold is a selection target, not a guarantee of future win rate.
+Acceptance still requires sufficient observations, positive expectancy in R,
+controlled drawdown, meaningful trade frequency, and untouched holdout
+validation. StrategyTune cloud compute was exhausted on October 4, 2026 during
+this pass, so these v2.19 changes were source-hardened but not granted a new
+empirical performance claim.
+
+
+
 ## v2.18 — H9: empirical TP1 precision tier
 
 The 71% historical result is not reproducible from the retained StrategyTune sessions,
