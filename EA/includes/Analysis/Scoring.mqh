@@ -729,13 +729,10 @@ double CScoringEngine::CalculateConfidence(bool forBuy)
    if(m_blockLowVolRegime)
      {
       ENUM_VOL_REGIME regime = m_volRegime.Classify(1);
-      if(regime == VOL_REGIME_LOW)
+      // Active hard gate: unknown volatility data cannot grant permission.
+      // An undefined regime is therefore treated as unverifiable and fails closed.
+      if(regime == VOL_REGIME_LOW || regime == VOL_REGIME_UNDEFINED)
          return 0.0;
-      // VOL_REGIME_UNDEFINED (not enough ATR history) fails OPEN here,
-      // deliberately inconsistent with the fail-closed CONFIRMATION rule
-      // elsewhere: this is a data-availability gap, not a claim the setup
-      // failed to confirm, and early-history warm-up shouldn't zero every
-      // setup for the first `lookback` bars of a backtest.
      }
 
    score += 5.0 * VolumeScore(forBuy);
