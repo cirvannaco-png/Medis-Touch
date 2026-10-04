@@ -306,7 +306,7 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
    // single-symbol, single-instance signal stream.
    string signalId = (StringLen(setup.setup_id) > 0)
                       ? setup.setup_id
-                      : StringFormat("%s_%s_%d", symbol, dir, (long)setup.creation_time);
+                      : StringFormat("%s_%s_%I64d", symbol, dir, (long)setup.creation_time);
 
    FileWrite(handle, signalId, symbol, EnumToString(entryTF), TimeToString(setup.creation_time, TIME_DATE | TIME_MINUTES),
             session, trendLabel, dir, DoubleToString(setup.confidence, 1),
@@ -401,7 +401,7 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
    string dir = (p.setup.type == ORDER_TYPE_BUY) ? "BUY" : "SELL";
    string signalId = (StringLen(p.setup.setup_id) > 0)
                       ? p.setup.setup_id
-                      : StringFormat("%s_%s_%d", symbol, dir, (long)p.setup.creation_time);
+                      : StringFormat("%s_%s_%I64d", symbol, dir, (long)p.setup.creation_time);
 
    // MFE/MAE R uses the same management basis as realized R:
    // sizingEntryPrice + mgmtRiskDist. entryRef remains the zone-touch
