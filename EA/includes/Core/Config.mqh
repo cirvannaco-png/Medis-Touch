@@ -413,6 +413,7 @@ struct CHOCHPoint
    datetime          time;
    double            price;
    bool              bullish;      // true = bullish CHoCH (break above last LH)
+   double            strength;     // 0-1: ATR-normalized break distance + body ratio
    int               bar_index;
   };
 
