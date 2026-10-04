@@ -139,8 +139,9 @@ def test_v217_risk_requires_validated_target_plan():
 
 def test_v217_tradezone_rejects_invalid_target_plan_before_persistence():
     c = read("EA/includes/Trading/TradeZone.mqh")
-    assert "if(!setup.target_plan_valid)" in c
-    assert "return setup;" in c
+    assert c.count("if(!setup.target_plan_valid)") == 2
+    assert c.count("setup.status = SETUP_INVALIDATED;") >= 2
+    assert c.count("setup.rejection_reason = SETUP_REJECT_REWARD;") >= 2
 
 def test_v217_indicator_uses_same_min_rr_as_live_trade_decision():
     c = read("EA/MedisTouch_Indicator_v2.8.mq5")
