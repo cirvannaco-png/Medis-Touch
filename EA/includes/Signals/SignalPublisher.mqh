@@ -201,7 +201,8 @@ string CSignalPublisher::BuildExtraJson(const TradeDecisionRecord &dec)
       "\"tp1_quality\":%.1f,\"tp2_quality\":%.1f,\"tp3_quality\":%.1f,"
       "\"tp1_calibrated_probability\":%.1f,\"tp2_calibrated_probability\":%.1f,\"tp3_calibrated_probability\":%.1f,"
       "\"calibrated_probability\":%.1f,\"calibration_sample\":%d,"
-      "\"calibration_context_used\":%s,\"calibration_has_enough_data\":%s}",
+      "\"calibration_context_used\":%s,\"calibration_has_enough_data\":%s,"
+      "\"tp1_calibration_sample\":%d,\"tp1_calibration_context_used\":%s,\"tp1_calibration_has_enough_data\":%s}",
       dec.setup.setup_id, dec.setup.smc_chain_id, dec.setup.entry_top, dec.setup.entry_bottom,
       dec.setup.invalidation, dec.setup.structural_quality,
       pipsSl, pipsTp1, pipsTp2, rrTp1, rrTp2, family,
@@ -217,7 +218,10 @@ string CSignalPublisher::BuildExtraJson(const TradeDecisionRecord &dec)
       dec.setup.tp3_calibrated_probability,
       dec.setup.calibrated_probability, dec.setup.calibration_sample,
       dec.setup.calibration_context_used ? "true" : "false",
-      dec.setup.calibration_has_enough_data ? "true" : "false");
+      dec.setup.calibration_has_enough_data ? "true" : "false",
+      dec.setup.tp1_calibration_sample,
+      dec.setup.tp1_calibration_context_used ? "true" : "false",
+      dec.setup.tp1_calibration_has_enough_data ? "true" : "false");
   }
 //+------------------------------------------------------------------+
 string CSignalPublisher::BuildJsonPayload(const TradeDecisionRecord &dec)
