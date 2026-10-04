@@ -136,6 +136,21 @@ def test_v217_risk_requires_validated_target_plan():
     c = read("EA/includes/Trading/RiskEngine.mqh")
     assert "if(!setup.target_plan_valid) return false;" in c
 
+def test_v217_tradezone_rejects_invalid_target_plan_before_persistence():
+    c = read("EA/includes/Trading/TradeZone.mqh")
+    assert "if(!setup.target_plan_valid)" in c
+    assert "return setup;" in c
+
+def test_v217_live_tp1_milestone_cannot_depend_on_be_threshold():
+    c = read("EA/includes/Execution/PositionManager.mqh")
+    assert "state == TS_FILLED && tp1Reached" in c
+    assert "ModifySLTP(ticket, entry, dec.setup.final_tp)" in c
+
+def test_v217_simulated_tp1_milestone_cannot_depend_on_be_threshold():
+    c = read("EA/includes/Trading/OutcomeTracker.mqh")
+    assert "double earlyTP1 = p.setup.tp1;" in c
+    assert "earlyTP1Touched" in c
+
 def test_v217_decision_store_persists_target_plan_validity_for_restart():
     c = read("EA/includes/Decision/DecisionStore.mqh")
     assert "string parts[25]" in c
