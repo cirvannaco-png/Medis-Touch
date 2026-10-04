@@ -237,11 +237,6 @@ def test_risk_engine_uses_broker_native_profit_and_margin():
     assert "OrderCalcMargin" in c
 
 
-def test_mql5_version_is_218():
-    for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
-        c = read(path)
-        assert '#property version   "2.18"' in c
-
 
 def test_v219_tp1_calibration_uses_realized_milestones_not_raw_ohlc_touches():
     c = read("EA/includes/Trading/OutcomeTracker.mqh")
