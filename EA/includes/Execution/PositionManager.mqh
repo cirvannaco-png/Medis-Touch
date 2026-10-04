@@ -95,7 +95,10 @@ void CPositionManager::OnTick(double currentAtr)
       if(state == TS_FILLED && r >= m_breakEvenAtR)
         {
          if(m_broker.ModifySLTP(ticket, entry, dec.setup.final_tp))
+           {
             m_orders.TransitionAt(i, TS_PROTECTED);
+            state = TS_PROTECTED; // allow TP1 milestone evaluation on this tick
+           }
         }
 
       // 2. Target-aware TP1 partial. TP1 is the first member of the
@@ -108,8 +111,20 @@ void CPositionManager::OnTick(double currentAtr)
                         ? (isBuy ? (price >= tp1) : (price <= tp1))
                         : (r >= m_partialAtR);
 
-      if(state == TS_PROTECTED && tp1Reached)
+      // TP1 is a target milestone, not a side effect of the BE
+      // configuration. If TP1 is reached before a configured BE threshold,
+      // protect at the actual fill first, then take the planned partial.
+      if((state == TS_PROTECTED || (state == TS_FILLED && tp1Reached)) && tp1Reached)
         {
+         if(state == TS_FILLED)
+           {
+            double curSL = PositionGetDouble(POSITION_SL);
+            bool improveToEntry = isBuy ? (entry > curSL) : (entry < curSL);
+            if(improveToEntry && m_broker.ModifySLTP(ticket, entry, dec.setup.final_tp))
+               m_orders.TransitionAt(i, TS_PROTECTED);
+            state = TS_PROTECTED;
+           }
+
          double vol = m_orders.VolumeAt(i) * m_partialFraction;
          double minVol = SymbolInfoDouble(dec.symbol, SYMBOL_VOLUME_MIN);
          if(vol >= minVol && m_broker.ClosePartial(ticket, vol))
