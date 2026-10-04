@@ -103,11 +103,20 @@ def test_v217_target_engine_uses_executable_entry_and_directional_liquidity():
 
 def test_v217_target_calibration_tracks_context_and_tp_hit_probability():
     c = read("EA/includes/Trading/CalibrationEngine.mqh")
-    assert "GetTargetCalibratedProbability" in c
+    assert c.count("double GetTargetCalibratedProbability(") == 1
+    assert "targetIndex < 1 || targetIndex > 3" in c
     assert "m_contextTpHits" in c
     assert "m_contextTpMisses" in c
     assert "m_tpHits" in c
     assert "m_tpMisses" in c
+    assert "if(tp1Hit) m_tpHits[0][b]++; else m_tpMisses[0][b]++;" in c
+    assert "int contextN = ch + cm;" in c
+
+def test_v217_calibration_record_scope_is_compile_safe():
+    c = read("EA/includes/Trading/OutcomeTracker.mqh")
+    assert "if(m_calibrationEnabled)" in c
+    assert "bool tp3Reached = (outcome == \"FinalTP_Hit\");" in c
+    assert "if(m_calibrationEnabled)\n           {\n            bool tp3Reached" in c
 
 
 def test_v217_calibration_gate_remains_opt_in():
