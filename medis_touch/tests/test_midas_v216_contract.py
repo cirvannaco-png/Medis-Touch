@@ -163,6 +163,16 @@ def test_v217_simulated_tp2_collision_uses_fill_policy():
     assert "ResolveOrder(isBuy, bar0, adverseLevel, p.setup.tp2, ambiguous)" in c
     assert "if(!favorableFirst)" in c
 
+def test_v217_causal_fvg_must_be_temporally_between_structure_and_displacement():
+    c = read("EA/includes/Analysis/SMCChain.mqh")
+    assert "if(fvgLatestBar < structureBar || fvgLatestBar > displacementBar)" in c
+    assert "the FVG must be formed by the" in c
+
+def test_v217_continuation_invalidation_uses_causal_displacement_not_incidental_sweep():
+    c = read("EA/includes/Analysis/SMCChain.mqh")
+    assert "bool useSweepInvalidation = (family == SETUP_FAMILY_REVERSAL && haveSweep);" in c
+    assert "CandleData thesisCandle = useSweepInvalidation" in c
+
 def test_v217_decision_store_persists_target_plan_validity_for_restart():
     c = read("EA/includes/Decision/DecisionStore.mqh")
     assert "string parts[25]" in c
