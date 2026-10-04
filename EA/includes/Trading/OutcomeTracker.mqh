@@ -620,6 +620,23 @@ void COutcomeTracker::ProcessFilledBar(int idx, CandleData &bar0)
             m_pending[idx] = p;
             continue;
            }
+         // TP1 is a structural target milestone and must not be skipped
+         // merely because the configured BE trigger sits beyond TP1. If TP1
+         // is reached first, protect at the actual sizing entry and continue
+         // into the normal partial-close state machine.
+         double earlyTP1 = p.setup.tp1;
+         if(earlyTP1 <= 0.0)
+            earlyTP1 = isBuy ? p.sizingEntryPrice + m_partialAtR * p.mgmtRiskDist
+                             : p.sizingEntryPrice - m_partialAtR * p.mgmtRiskDist;
+         bool earlyTP1Touched = isBuy ? (bar0.high >= earlyTP1) : (bar0.low <= earlyTP1);
+         if(earlyTP1Touched)
+           {
+            p.currentSL = p.sizingEntryPrice;
+            p.beDone = true;
+            m_pending[idx] = p;
+            continue;
+           }
+
          break; // nothing happened this bar
         }
 
