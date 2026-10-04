@@ -142,6 +142,10 @@ def test_v217_tradezone_rejects_invalid_target_plan_before_persistence():
     assert "if(!setup.target_plan_valid)" in c
     assert "return setup;" in c
 
+def test_v217_indicator_uses_same_min_rr_as_live_trade_decision():
+    c = read("EA/MedisTouch_Indicator_v2.8.mq5")
+    assert "InpMinRiskReward);" in c
+
 def test_v217_live_tp1_milestone_cannot_depend_on_be_threshold():
     c = read("EA/includes/Execution/PositionManager.mqh")
     assert "state == TS_FILLED && tp1Reached" in c
