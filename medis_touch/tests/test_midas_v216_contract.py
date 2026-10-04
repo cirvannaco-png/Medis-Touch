@@ -136,6 +136,19 @@ def test_v217_risk_requires_validated_target_plan():
     c = read("EA/includes/Trading/RiskEngine.mqh")
     assert "if(!setup.target_plan_valid) return false;" in c
 
+def test_v217_decision_store_persists_target_plan_validity_for_restart():
+    c = read("EA/includes/Decision/DecisionStore.mqh")
+    assert "string parts[25]" in c
+    assert "parts[24] = rec.setup.target_plan_valid ? \"1\" : \"0\";" in c
+    assert "for(int i = 1; i < 25; i++)" in c
+    assert "if(n > 24) rec.setup.target_plan_valid = (f[24] == \"1\");" in c
+
+def test_v217_outcome_mfe_mae_uses_management_risk_basis():
+    c = read("EA/includes/Core/SignalLogger.mqh")
+    assert "p.mgmtRiskDist > 0" in c
+    assert "p.mfePrice - p.sizingEntryPrice" in c
+    assert "p.sizingEntryPrice - p.maePrice" in c
+
 
 def test_risk_engine_uses_broker_native_profit_and_margin():
     c = read("EA/includes/Trading/RiskEngine.mqh")
