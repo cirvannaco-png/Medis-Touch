@@ -52,9 +52,6 @@ private:
    int m_contextWins[REGIME_SLOTS][FAMILY_SLOTS][NUM_BUCKETS];
    int m_contextLosses[REGIME_SLOTS][FAMILY_SLOTS][NUM_BUCKETS];
    int m_contextScratches[REGIME_SLOTS][FAMILY_SLOTS][NUM_BUCKETS];
-   int m_targetHits[3][NUM_BUCKETS];
-   int m_contextTargetHits[REGIME_SLOTS][FAMILY_SLOTS][3][NUM_BUCKETS];
-
    // Target-reach calibration: probability that TP1/TP2/final target was
    // touched before the setup resolved. Stored separately from profit
    // outcome because a profitable partial trade can miss the final target.
@@ -100,8 +97,6 @@ public:
       ArrayInitialize(m_contextWins, 0);
       ArrayInitialize(m_contextLosses, 0);
       ArrayInitialize(m_contextScratches, 0);
-      ArrayInitialize(m_targetHits, 0);
-      ArrayInitialize(m_contextTargetHits, 0);
       ArrayInitialize(m_tpHits, 0);
       ArrayInitialize(m_tpMisses, 0);
       ArrayInitialize(m_contextTpHits, 0);
@@ -147,15 +142,6 @@ public:
       else if(netPnL < -0.0000001) m_losses[b]++;
       else                         m_scratches[b]++;
 
-      bool targetHit[3];
-      targetHit[0] = tp1Hit; targetHit[1] = tp2Hit; targetHit[2] = tp3Hit;
-      bool targetHit[3];
-      targetHit[0] = tp1Hit;
-      targetHit[1] = tp2Hit;
-      targetHit[2] = tp3Hit;
-      for(int t = 0; t < 3; t++)
-         if(targetHit[t]) m_targetHits[t][b]++;
-
       int r, f;
       if(ContextIndex(regime, family, r, f))
         {
@@ -163,24 +149,8 @@ public:
          else if(netPnL < -0.0000001) m_contextLosses[r][f][b]++;
          else                         m_contextScratches[r][f][b]++;
 
-         for(int t = 0; t < 3; t++)
-           {
-            if(targetHit[t])
-              {
-               m_contextTpHits[t][r][f][b]++;
-              }
-            else
-              {
-               m_contextTpMisses[t][r][f][b]++;
-              }
-           }
         }
 
-      for(int t = 0; t < 3; t++)
-        {
-         if(targetHit[t]) m_tpHits[t][b]++;
-         else              m_tpMisses[t][b]++;
-        }
       Save(useCommonFolder);
      }
 
@@ -396,9 +366,6 @@ public:
             m_wins[b] = w;
             m_losses[b] = l;
             m_scratches[b] = s;
-            m_targetHits[0][b] = tp1;
-            m_targetHits[1][b] = tp2;
-            m_targetHits[2][b] = tp3;
             m_tpHits[0][b] = t1h; m_tpMisses[0][b] = t1m;
             m_tpHits[1][b] = t2h; m_tpMisses[1][b] = t2m;
             m_tpHits[2][b] = t3h; m_tpMisses[2][b] = t3m;
@@ -412,9 +379,6 @@ public:
                m_contextWins[r][f][b] = w;
                m_contextLosses[r][f][b] = l;
                m_contextScratches[r][f][b] = s;
-               m_contextTargetHits[r][f][0][b] = tp1;
-               m_contextTargetHits[r][f][1][b] = tp2;
-               m_contextTargetHits[r][f][2][b] = tp3;
                m_contextTpHits[0][r][f][b] = t1h; m_contextTpMisses[0][r][f][b] = t1m;
                m_contextTpHits[1][r][f][b] = t2h; m_contextTpMisses[1][r][f][b] = t2m;
                m_contextTpHits[2][r][f][b] = t3h; m_contextTpMisses[2][r][f][b] = t3m;
