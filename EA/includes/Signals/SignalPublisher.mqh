@@ -241,7 +241,7 @@ string CSignalPublisher::BuildJsonPayload(const TradeDecisionRecord &dec)
    string sweepGradeStr = EnumToString(r.sweep_grade);
 
    return StringFormat(
-      "{\"signal_id\":\"%s\",\"decision_id\":%d,\"symbol\":\"%s\",\"direction\":\"%s\",\"entry\":%.5f,\"sl\":%.5f,"
+      "{\"signal_id\":\"%s\",\"decision_id\":%I64d,\"symbol\":\"%s\",\"direction\":\"%s\",\"entry\":%.5f,\"sl\":%.5f,"
       "\"tp1\":%.5f,\"tp2\":%.5f,\"final_tp\":%.5f,\"confidence\":%.1f,\"reasons\":%s,\"timeframe\":\"%s\","
       "\"time\":\"%s\",\"regime\":\"%s\",\"session\":\"%s\",\"sweep_grade\":\"%s\",\"htf_ob_aligned\":%s,"
       "\"weight_version\":\"%s\",\"expires_at\":%d,\"extra\":%s}",
