@@ -119,7 +119,8 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    setup.stop_loss = setup.invalidation - m_slBufferATR * atr;
    setup.stop_loss = EnforceSpreadFloor(m_priceRef.Symbol(), setup.entry_top, setup.stop_loss, true);
 
-   CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr, setup.entry_bottom,
+   CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr,
+                                  ResolveExecutionEntry(setup),
                                   m_targetMinRR, m_scoring.GetMarketRegime());
 
    setup.raw_confidence = conf;
@@ -184,7 +185,8 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    setup.stop_loss = setup.invalidation + m_slBufferATR * atr;
    setup.stop_loss = EnforceSpreadFloor(m_priceRef.Symbol(), setup.entry_bottom, setup.stop_loss, false);
 
-   CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr, setup.entry_top,
+   CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr,
+                                  ResolveExecutionEntry(setup),
                                   m_targetMinRR, m_scoring.GetMarketRegime());
 
    setup.raw_confidence = conf;
