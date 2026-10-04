@@ -11,14 +11,14 @@
 // when it has enough data; otherwise fall back to the global bucket.
 //
 // HONEST LIMITATIONS — read before trusting the numbers this produces:
-//  1. This does NOT change trading behavior on its own. Nothing in the
-//     EA gates on calibrated probability yet — it is purely an
-//     observability layer that answers "is an 80 actually an 80?" You
+//  1. Calibration is observational data until an explicit policy gate
+//     consumes it. v2.19 uses that data in the execution precision tier,
+//     while the broader signal stream can remain enabled for evidence gathering. It
 //     have to look at the numbers and decide what to do with them (e.g.
 //     discover 90+ underperforms 80-89 and investigate why, per review
 //     item #9). Wiring a live gate off this is a deliberate next step,
 //     not something this file does implicitly.
-//  2. Sample sizes below MIN_SAMPLE (default 30) per bucket are reported
+//  2. Sample sizes below MIN_SAMPLE (default 30) per context bucket are reported
 //     but flagged low-confidence — with a live strategy this realistically
 //     means MONTHS of forward/backtest data before any bucket's number
 //     means anything. Don't trust a 5-trade bucket's win rate.
