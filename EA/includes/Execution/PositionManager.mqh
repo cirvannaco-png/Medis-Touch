@@ -114,17 +114,22 @@ void CPositionManager::OnTick(double currentAtr)
       // TP1 is a target milestone, not a side effect of the BE
       // configuration. If TP1 is reached before a configured BE threshold,
       // protect at the actual fill first, then take the planned partial.
-      if((state == TS_PROTECTED || (state == TS_FILLED && tp1Reached)) && tp1Reached)
+      bool tp1ProtectionReady = (state == TS_PROTECTED);
+      if(state == TS_FILLED && tp1Reached)
         {
-         if(state == TS_FILLED)
+         double curSL = PositionGetDouble(POSITION_SL);
+         bool improveToEntry = isBuy ? (entry > curSL) : (entry < curSL);
+         bool protectionOk = !improveToEntry || m_broker.ModifySLTP(ticket, entry, dec.setup.final_tp);
+         if(protectionOk)
            {
-            double curSL = PositionGetDouble(POSITION_SL);
-            bool improveToEntry = isBuy ? (entry > curSL) : (entry < curSL);
-            if(improveToEntry && m_broker.ModifySLTP(ticket, entry, dec.setup.final_tp))
-               m_orders.TransitionAt(i, TS_PROTECTED);
+            m_orders.TransitionAt(i, TS_PROTECTED);
             state = TS_PROTECTED;
+            tp1ProtectionReady = true;
            }
+        }
 
+      if(tp1ProtectionReady && tp1Reached)
+        {
          double vol = m_orders.VolumeAt(i) * m_partialFraction;
          double minVol = SymbolInfoDouble(dec.symbol, SYMBOL_VOLUME_MIN);
          if(vol >= minVol && m_broker.ClosePartial(ticket, vol))
