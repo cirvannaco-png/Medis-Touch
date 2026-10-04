@@ -153,6 +153,11 @@ def test_v217_telemetry_preserves_64_bit_decision_identity():
     assert '"decision_id":%I64d' in publisher
     assert '%I64d", (long)' in logger
 
+def test_v217_setup_dedup_commits_after_persistence_boundary():
+    c = read("EA/MedisTouch_v2.8.mq5")
+    assert "commit setup deduplication only after the decision boundary" in c
+    assert "retry next evaluation; do not consume the setup" in c
+    assert "g_lastSetupId = chosen.setup_id;" in c
 def test_v217_live_tp1_milestone_cannot_depend_on_be_threshold():
     c = read("EA/includes/Execution/PositionManager.mqh")
     assert "state == TS_FILLED && tp1Reached" in c
