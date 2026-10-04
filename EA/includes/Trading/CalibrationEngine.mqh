@@ -196,6 +196,28 @@ public:
             contextUsedOut = true;
             return SmoothedProbability(cw, cl);
            }
+
+         // Sample-efficiency fallback: pool only adjacent confidence
+         // buckets within the SAME regime + setup family. This does not
+         // collapse across unrelated contexts and keeps the confidence
+         // estimate local enough to avoid a global backfill when evidence
+         // is sparse.
+         int pooledW = 0, pooledL = 0;
+         int fromB = MathMax(0, b - 1);
+         int toB   = MathMin(NUM_BUCKETS - 1, b + 1);
+         for(int pb = fromB; pb <= toB; pb++)
+           {
+            pooledW += m_contextWins[r][f][pb];
+            pooledL += m_contextLosses[r][f][pb];
+           }
+         int pooledN = pooledW + pooledL;
+         if(pooledN >= m_minSample)
+           {
+            sampleSizeOut = pooledN;
+            hasEnoughDataOut = true;
+            contextUsedOut = true;
+            return SmoothedProbability(pooledW, pooledL);
+           }
         }
 
       int gw = m_wins[b], gl = m_losses[b];
@@ -236,6 +258,26 @@ public:
             hasEnoughDataOut = true;
             contextUsedOut = true;
             return SmoothedProbability(ch, cm);
+           }
+
+         // Same-context adjacent-bucket pooling for target calibration.
+         // This is deliberately narrower than global fallback: regime and
+         // setup family must match before evidence is pooled.
+         int pooledHits = 0, pooledMisses = 0;
+         int fromB = MathMax(0, b - 1);
+         int toB   = MathMin(NUM_BUCKETS - 1, b + 1);
+         for(int pb = fromB; pb <= toB; pb++)
+           {
+            pooledHits += m_contextTpHits[t][r][f][pb];
+            pooledMisses += m_contextTpMisses[t][r][f][pb];
+           }
+         int pooledN = pooledHits + pooledMisses;
+         if(pooledN >= m_minSample)
+           {
+            sampleSizeOut = pooledN;
+            hasEnoughDataOut = true;
+            contextUsedOut = true;
+            return SmoothedProbability(pooledHits, pooledMisses);
            }
         }
 
