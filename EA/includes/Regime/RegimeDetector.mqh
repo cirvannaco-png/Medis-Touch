@@ -93,6 +93,7 @@ ENUM_MARKET_REGIME CRegimeDetector::Classify()
    // elsewhere in this codebase as "thin, choppy, spread-risk-heavy" —
    // exactly the condition that makes a "trend" unreliable to trade).
    if(strongTrend && vol != VOL_REGIME_LOW &&
+      phase != PHASE_UNDEFINED &&
       recentBOSAge >= 1 && recentBOSAge <= m_maxTrendBOSAgeBars &&
       phase != PHASE_MANIPULATION && phase != PHASE_DISTRIBUTION)
       return REGIME_TRENDING;
