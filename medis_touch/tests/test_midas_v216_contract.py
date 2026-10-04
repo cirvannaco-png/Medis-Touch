@@ -241,3 +241,36 @@ def test_mql5_version_is_218():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
         assert '#property version   "2.18"' in c
+
+
+def test_v219_tp1_calibration_uses_realized_milestones_not_raw_ohlc_touches():
+    c = read("EA/includes/Trading/OutcomeTracker.mqh")
+    assert "p.tp1Hit = true;" in c
+    assert "p.tp2Hit = true;" in c
+    assert "Target milestones are set only by ProcessFilledBar()" in c
+    assert "m_pending[i].tp1Hit = true;" not in c
+    assert "m_pending[i].tp2Hit = true;" not in c
+
+
+def test_v219_precision_gate_checks_profitable_outcome_and_tp1():
+    c = read("EA/MedisTouch_v2.8.mq5")
+    assert "winProbabilityOk" in c
+    assert "tp1ProbabilityOk" in c
+    assert "minSample" in c
+    assert "tp1Sample" in c
+    assert "chosen.calibration_context_used && chosen.tp1_calibration_context_used" in c
+    assert "decision.action = POLICY_SIGNAL_ONLY;" in c
+
+
+def test_v219_calibration_pools_only_adjacent_buckets_inside_same_context():
+    c = read("EA/includes/Trading/CalibrationEngine.mqh")
+    assert "pooledW += m_contextWins[r][f][pb];" in c
+    assert "pooledHits += m_contextTpHits[t][r][f][pb];" in c
+    assert "fromB = MathMax(0, b - 1)" in c
+    assert "toB   = MathMin(NUM_BUCKETS - 1, b + 1)" in c
+
+
+def test_mql5_version_is_219():
+    for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
+        c = read(path)
+        assert '#property version   "2.19"' in c
