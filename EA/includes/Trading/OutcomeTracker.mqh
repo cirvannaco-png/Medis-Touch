@@ -336,7 +336,11 @@ void COutcomeTracker::ApplyPartial(PendingSetup &p, double triggerPrice, bool is
       double closeLots = p.lots * m_partialFraction;
       CloseSlice(p, closeLots, triggerPrice, isBuy);
      }
+   // TP1 calibration is a REALIZED milestone, not a candle-touch
+   // observation. This function is called only after the bar-level
+   // collision logic has decided TP1 was reached before the operative SL.
    p.partialDone = true;
+   p.tp1Hit = true;
   }
 //+------------------------------------------------------------------+
 bool COutcomeTracker::IntrabarReplayGeneric(bool isBuy, CandleData &bar0, double adverseLevel, double favorableLevel, bool &favorableFirst)
@@ -699,6 +703,11 @@ void COutcomeTracker::ProcessFilledBar(int idx, CandleData &bar0)
                  }
               }
 
+            // TP2 is also a realized milestone: this point is
+            // reached only after same-bar collision resolution has cleared
+            // the operative stop.
+            p.tp2Hit = true;
+
             bool improvedLock = isBuy ? (p.setup.tp1 > p.currentSL)
                                       : (p.setup.tp1 < p.currentSL);
             if(improvedLock)
@@ -707,6 +716,7 @@ void COutcomeTracker::ProcessFilledBar(int idx, CandleData &bar0)
                m_pending[idx] = p;
                continue;
               }
+            m_pending[idx] = p;
            }
         }
 
@@ -833,18 +843,9 @@ void COutcomeTracker::Update(CTFContext* fvgCtx)
         }
       m_pending[i] = p;
 
-      // TP1/TP2 stay informational touch-flags only — see file header
-      // point 2 on why they don't drive any $ event.
-      if(isBuy)
-        {
-         if(!p.tp1Hit && bar0.high >= p.setup.tp1) m_pending[i].tp1Hit = true;
-         if(!p.tp2Hit && bar0.high >= p.setup.tp2) m_pending[i].tp2Hit = true;
-        }
-      else
-        {
-         if(!p.tp1Hit && bar0.low <= p.setup.tp1) m_pending[i].tp1Hit = true;
-         if(!p.tp2Hit && bar0.low <= p.setup.tp2) m_pending[i].tp2Hit = true;
-        }
+      // Target milestones are set only by ProcessFilledBar() after
+      // the configured fill policy resolves any same-bar collision. Raw
+      // OHLC touches are NOT sufficient evidence for calibration.
 
       ProcessFilledBar(i, bar0); // may resolve and remove index i
      }
