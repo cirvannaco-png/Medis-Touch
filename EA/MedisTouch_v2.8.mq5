@@ -754,7 +754,7 @@ void OnTick()
    {
       int sample = 0; bool enough = false; bool contextUsed = false;
       chosen.tp1_calibrated_probability =
-         g_tracker.GetTargetCalibratedProbability(0, chosen.confidence, chosen.reasons.regime, chosen.family,
+         g_tracker.GetTargetCalibratedProbability(3, chosen.confidence, chosen.reasons.regime, chosen.family,
                                                   sample, enough, contextUsed);
       chosen.tp2_calibrated_probability =
          g_tracker.GetTargetCalibratedProbability(1, chosen.confidence, chosen.reasons.regime, chosen.family,
