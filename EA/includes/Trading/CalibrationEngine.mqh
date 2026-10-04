@@ -257,8 +257,8 @@ public:
             sampleSizeOut = contextN;
             hasEnoughDataOut = true;
             contextUsedOut = true;
-            int hits = m_contextTargetHits[r][f][t][b];
-            return 100.0 * (hits + 0.5) / (contextN + 1.0);
+            int hits = m_contextTpHits[t][r][f][b];
+            return SmoothedProbability(hits, m_contextTpMisses[t][r][f][b]);
            }
         }
 
@@ -266,8 +266,7 @@ public:
       sampleSizeOut = n;
       hasEnoughDataOut = (n >= m_minSample);
       contextUsedOut = false;
-      int hits = m_targetHits[t][b];
-      return 100.0 * (hits + 0.5) / (n + 1.0);
+      return SmoothedProbability(m_tpHits[t][b], m_tpMisses[t][b]);
      }
 
    string BucketSummary(int bucketIdx) const
