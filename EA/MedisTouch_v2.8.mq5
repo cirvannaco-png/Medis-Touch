@@ -12,7 +12,7 @@
 // together on the same chart (indicator for the visuals you're used to,
 // EA for the parts that touch money) or run this alone headless.
 #property copyright "Medis Touch"
-#property version   "2.17"
+#property version   "2.18"
 #property strict
 
 #include "includes/Core/Config.mqh"
@@ -221,7 +221,11 @@ input bool   InpTrackOutcomes = true;
 input int    InpMaxTrackingBars = 100;
 input int    InpCalibrationMinSample = 30;
 input bool   InpUseCalibratedGate = false;             // diagnostic/ablation gate; remains OFF until out-of-sample calibration proves useful
-input double InpMinCalibratedProbability = 55.0;       // minimum empirical probability when the calibrated gate is enabled         // v2.9: bucket sample size before GetCalibratedProbability() is trusted — see CalibrationEngine.mqh
+input double InpMinCalibratedProbability = 55.0;       // minimum empirical probability when the calibrated gate is enabled
+input bool   InpUseTP1PrecisionGate = false;               // v2.18: require an empirically verified TP1-hit precision tier
+input double InpMinTP1PrecisionProbability = 87.0;         // minimum TP1-hit probability for the precision tier
+input int    InpMinTP1PrecisionSample = 50;                // minimum target observations before the precision claim is trusted
+input bool   InpRequireTP1ContextCalibration = true;       // do not mix unrelated regimes/families when claiming 87% precision         // v2.9: bucket sample size before GetCalibratedProbability() is trusted — see CalibrationEngine.mqh
 input int    InpSessionGMTOffsetOverride = 999;
 input ENUM_FILL_POLICY InpFillPolicy = FILL_CONSERVATIVE;
 input ENUM_TIMEFRAMES  InpReplayTF = PERIOD_M1;
@@ -754,17 +758,40 @@ void OnTick()
    // resolved observations; otherwise the field remains the smoothed
    // fallback returned by the calibration engine.
    {
-      int sample = 0; bool enough = false; bool contextUsed = false;
+      int tp1Sample = 0; bool tp1Enough = false; bool tp1ContextUsed = false;
       chosen.tp1_calibrated_probability =
          g_tracker.GetTargetCalibratedProbability(1, chosen.confidence, chosen.reasons.regime, chosen.family,
-                                                  sample, enough, contextUsed);
+                                                  tp1Sample, tp1Enough, tp1ContextUsed);
+      chosen.tp1_calibration_sample = tp1Sample;
+      chosen.tp1_calibration_has_enough_data = tp1Enough;
+      chosen.tp1_calibration_context_used = tp1ContextUsed;
+
+      int tp2Sample = 0; bool tp2Enough = false; bool tp2ContextUsed = false;
       chosen.tp2_calibrated_probability =
          g_tracker.GetTargetCalibratedProbability(2, chosen.confidence, chosen.reasons.regime, chosen.family,
-                                                  sample, enough, contextUsed);
+                                                  tp2Sample, tp2Enough, tp2ContextUsed);
+
+      int tp3Sample = 0; bool tp3Enough = false; bool tp3ContextUsed = false;
       chosen.tp3_calibrated_probability =
          g_tracker.GetTargetCalibratedProbability(3, chosen.confidence, chosen.reasons.regime, chosen.family,
-                                                  sample, enough, contextUsed);
+                                                  tp3Sample, tp3Enough, tp3ContextUsed);
    }
+
+   if(InpUseTP1PrecisionGate)
+     {
+      bool sampleOk = chosen.tp1_calibration_has_enough_data &&
+                      chosen.tp1_calibration_sample >= MathMax(1, InpMinTP1PrecisionSample);
+      bool contextOk = !InpRequireTP1ContextCalibration || chosen.tp1_calibration_context_used;
+      bool probabilityOk = chosen.tp1_calibrated_probability >= InpMinTP1PrecisionProbability;
+      if(!sampleOk || !contextOk || !probabilityOk)
+        {
+         // Fail closed: an 87% precision claim is invalid when the matching
+         // target population is too small, context-mixed, or below threshold.
+         g_lastSetupId = chosen.setup_id;
+         g_lastLoggedTime = chosen.creation_time;
+         return;
+        }
+     }
 
    if(InpUseCalibratedGate && chosen.calibration_has_enough_data &&
       chosen.calibrated_probability < InpMinCalibratedProbability)
