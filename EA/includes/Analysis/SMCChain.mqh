@@ -442,9 +442,11 @@ SMCChain CSMCChainBuilder::Build(bool forBuy)
       c.has_bos = hasBos;
       c.has_choch = hasChoch;
       c.family = family;
-      c.structure_strength = hasChoch ? 1.0 : bos.strength;
+      c.structure_strength = hasChoch ? choch.strength : bos.strength;
 
-      if(hasBos && c.structure_strength < m_minStructureStrength)
+      // BOS and CHoCH are both structural events. A weak CHoCH is not a
+      // free pass merely because its label says "transition".
+      if(c.structure_strength < m_minStructureStrength)
         {
          minStructureBar = structureBar + 1;
          continue;
