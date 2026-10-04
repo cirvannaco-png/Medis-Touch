@@ -12,7 +12,7 @@
 // together on the same chart (indicator for the visuals you're used to,
 // EA for the parts that touch money) or run this alone headless.
 #property copyright "Medis Touch"
-#property version   "2.18"
+#property version   "2.19"
 #property strict
 
 #include "includes/Core/Config.mqh"
@@ -223,9 +223,9 @@ input int    InpCalibrationMinSample = 30;
 input bool   InpUseCalibratedGate = false;             // diagnostic/ablation gate; remains OFF until out-of-sample calibration proves useful
 input double InpMinCalibratedProbability = 55.0;       // minimum empirical probability when the calibrated gate is enabled
 input bool   InpUseTP1PrecisionGate = false;               // v2.18: require an empirically verified TP1-hit precision tier
-input double InpMinTP1PrecisionProbability = 88.0;         // minimum TP1-hit probability for the precision tier
+input double InpMinTP1PrecisionProbability = 87.0;         // minimum empirical precision for both profitable outcome and TP1 milestone
 input int    InpMinTP1PrecisionSample = 50;                // minimum target observations before the precision claim is trusted
-input bool   InpRequireTP1ContextCalibration = true;       // do not mix unrelated regimes/families when claiming 87% precision         // v2.9: bucket sample size before GetCalibratedProbability() is trusted — see CalibrationEngine.mqh
+input bool   InpRequireTP1ContextCalibration = true;       // precision gate requires same-regime/family calibration; v2.19 may pool adjacent confidence buckets only
 input int    InpSessionGMTOffsetOverride = 999;
 input ENUM_FILL_POLICY InpFillPolicy = FILL_CONSERVATIVE;
 input ENUM_TIMEFRAMES  InpReplayTF = PERIOD_M1;
@@ -283,7 +283,7 @@ input string InpBridgeApiKey = "";              // must match telegram-bridge's 
 // "which weight set produced this," which is the prerequisite for the
 // statistical gating / promotion layer (steps 4-5) ever being able to
 // tell one weight set's expectancy apart from another's in signal_outcomes.
-input string InpWeightSetVersion = "v2.10-baseline";
+input string InpWeightSetVersion = "SMC-CAUSAL-2.19";
 // v2.11 — the operator's OWN bridge endpoint, for ConfigSync polling
 // only. Deliberately separate from the subscriber-fan-out CSV
 // (SubscriberPlatform.mqh) — that list is for broadcasting signals to
@@ -777,33 +777,11 @@ void OnTick()
                                                   tp3Sample, tp3Enough, tp3ContextUsed);
    }
 
-   if(InpUseTP1PrecisionGate)
-     {
-      bool sampleOk = chosen.tp1_calibration_has_enough_data &&
-                      chosen.tp1_calibration_sample >= MathMax(1, InpMinTP1PrecisionSample);
-      bool contextOk = !InpRequireTP1ContextCalibration || chosen.tp1_calibration_context_used;
-      bool probabilityOk = chosen.tp1_calibrated_probability >= InpMinTP1PrecisionProbability;
-      if(!sampleOk || !contextOk || !probabilityOk)
-        {
-         // Fail closed: an 87% precision claim is invalid when the matching
-         // target population is too small, context-mixed, or below threshold.
-         g_lastSetupId = chosen.setup_id;
-         g_lastLoggedTime = chosen.creation_time;
-         return;
-        }
-     }
-
-   if(InpUseCalibratedGate && chosen.calibration_has_enough_data &&
-      chosen.calibrated_probability < InpMinCalibratedProbability)
-     {
-      // Calibration may filter an already structurally-valid/regime-valid
-      // setup, but can never rescue an invalid one. Kept opt-in so no
-      // unvalidated probability threshold silently changes live behavior.
-      g_lastSetupId = chosen.setup_id;
-      g_lastLoggedTime = chosen.creation_time;
-      return;
-     }
-
+   // Precision is evaluated after policy routing so it can be used
+   // to protect REAL execution without suppressing the broader signal stream.
+   // The gate is fail-closed for execution: it requires both an empirically
+   // supported profitable-outcome rate and an empirically supported TP1
+   // milestone rate in the same market regime/setup family.
    if(InpLogSignals)
      {
       ENUM_TREND_STATE t = g_trendCtx.trend.GetCurrentTrend();
@@ -829,7 +807,62 @@ void OnTick()
       return;
      }
 
-   if(InpTrackOutcomes)
+   if(InpUseTP1PrecisionGate &&
+      (decision.action == POLICY_EXECUTE_ONLY || decision.action == POLICY_EXECUTE_AND_SIGNAL))
+     {
+      bool minSample = (chosen.calibration_sample >= MathMax(1, InpMinTP1PrecisionSample)) &&
+                       chosen.calibration_has_enough_data;
+      bool tp1Sample = (chosen.tp1_calibration_sample >= MathMax(1, InpMinTP1PrecisionSample)) &&
+                       chosen.tp1_calibration_has_enough_data;
+
+      bool contextOk = !InpRequireTP1ContextCalibration ||
+                       (chosen.calibration_context_used && chosen.tp1_calibration_context_used);
+
+      bool winProbabilityOk = chosen.calibrated_probability >= InpMinTP1PrecisionProbability;
+      bool tp1ProbabilityOk = chosen.tp1_calibrated_probability >= InpMinTP1PrecisionProbability;
+
+      bool precisionPass = minSample && tp1Sample && contextOk &&
+                           winProbabilityOk && tp1ProbabilityOk;
+
+      if(!precisionPass)
+        {
+         decision.reason = StringFormat(
+            "87%% precision tier failed: win=%.1f%% n=%d ctx=%s; TP1=%.1f%% n=%d ctx=%s",
+            chosen.calibrated_probability,
+            chosen.calibration_sample,
+            chosen.calibration_context_used ? "YES" : "NO",
+            chosen.tp1_calibrated_probability,
+            chosen.tp1_calibration_sample,
+            chosen.tp1_calibration_context_used ? "YES" : "NO");
+
+         // Preserve qualified signals for subscribers while blocking the
+         // financially consequential execution leg. EXECUTE_ONLY becomes
+         // IGNORE; EXECUTE_AND_SIGNAL degrades safely to SIGNAL_ONLY.
+         if(decision.action == POLICY_EXECUTE_AND_SIGNAL && InpEnableSignals)
+           {
+            decision.action = POLICY_SIGNAL_ONLY;
+            decision.valid = true;
+           }
+         else
+           {
+            decision.action = POLICY_IGNORE;
+            decision.valid = false;
+           }
+        }
+     }
+
+   if(InpUseCalibratedGate && decision.action != POLICY_IGNORE &&
+      chosen.calibration_has_enough_data &&
+      chosen.calibrated_probability < InpMinCalibratedProbability)
+     {
+      decision.reason = StringFormat("calibrated win gate failed: %.1f%% < %.1f%%",
+                                     chosen.calibrated_probability,
+                                     InpMinCalibratedProbability);
+      decision.action = POLICY_IGNORE;
+      decision.valid = false;
+     }
+
+   if(InpTrackOutcomes && decision.action != POLICY_IGNORE)
       g_tracker.AddSetup(chosen, decision.decision_id);
    g_tracker.Update(g_fvgCtx);
 
