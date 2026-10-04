@@ -194,7 +194,7 @@ bool CDecisionStore::ParseDecision(const string line, TradeDecisionRecord &rec)
    rec.action              = (n > 11) ? (ENUM_TRADE_POLICY)(int)StringToInteger(f[11]) : POLICY_EXECUTE_ONLY;
    rec.reduce_risk         = (n > 12) ? (f[12] == "1") : false;
 
-   // v2.16 fields are appended. Old rows remain recoverable but are marked
+   // v2.17 fields are appended. Old rows remain recoverable but are marked
    // structurally unknown rather than pretending the new validator approved them.
    if(n > 13) rec.setup.setup_id = f[13];
    if(n > 14) rec.setup.smc_chain_id = (ulong)StringToInteger(f[14]);
