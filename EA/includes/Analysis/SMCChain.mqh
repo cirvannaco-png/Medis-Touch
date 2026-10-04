@@ -337,9 +337,16 @@ bool CSMCChainBuilder::FindCausalFVG(bool forBuy, int structureBar, int displace
       if(gapToStructure > maxGapBars && gapToDisplacement > maxGapBars)
          continue;
 
-      // For reversal chains, the FVG must not predate the sweep. Because
-      // series indices increase into the past, larger-than-sweep indices
-      // would be older than the causal sweep.
+      // Causal ordering is strict: the FVG must be formed by the
+      // displacement/structure sequence, not merely be spatially nearby.
+      // In series indexing, smaller numbers are newer, so the FVG completion
+      // must lie between the confirmed structure event and its displacement.
+      if(fvgLatestBar < structureBar || fvgLatestBar > displacementBar)
+         continue;
+
+      // For reversal chains, the FVG must also post-date the sweep. Because
+      // series indices increase into the past, anything older than the sweep
+      // cannot be caused by the sweep/displacement sequence.
       if(sweepBar >= 1 && fvgLatestBar > sweepBar - 1)
          continue;
 
@@ -498,7 +505,12 @@ SMCChain CSMCChainBuilder::Build(bool forBuy)
          continue;
         }
 
-      CandleData thesisCandle = haveSweep
+      // Reversal invalidation belongs to the causal sweep. For a
+      // continuation, use the causal displacement instead of any unrelated
+      // nearby sweep; otherwise a coincidental sweep can widen the stop and
+      // silently destroy the setup's intended risk geometry.
+      bool useSweepInvalidation = (family == SETUP_FAMILY_REVERSAL && haveSweep);
+      CandleData thesisCandle = useSweepInvalidation
                                  ? m_entryCtx.candles.GetCandle(c.sweep.bar_index)
                                  : m_entryCtx.candles.GetCandle(dispBar);
       c.invalidation_price = forBuy ? thesisCandle.low : thesisCandle.high;
@@ -524,7 +536,10 @@ SMCChain CSMCChainBuilder::Build(bool forBuy)
       double sweepQ = haveSweep ? MathMax(0.0, MathMin(c.rejection_ratio, 1.0)) : 0.0;
       double dispQ = MathMax(0.0, MathMin(c.displacement_atr / 2.5, 1.0));
       double structQ = MathMax(0.0, MathMin(c.structure_strength, 1.0));
-      double fvgQ = MathMax(0.0, MathMin(c.fvg.width, 1.0));
+      double fvgATR = m_entryCtx.candles.GetATR(MathMax(1, c.fvg.bar_index));
+      double fvgQ = (fvgATR > 0.0)
+                    ? MathMax(0.0, MathMin(c.fvg.width / fvgATR, 1.0))
+                    : 0.0;
       double freshQ = c.freshness_ok ? 1.0 : 0.0;
       double locQ = c.location_ok ? 1.0 : 0.0;
 
