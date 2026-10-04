@@ -153,6 +153,10 @@ def test_v217_telemetry_preserves_64_bit_decision_identity():
     assert '"decision_id":%I64d' in publisher
     assert '%I64d", (long)' in logger
 
+def test_v217_low_vol_gate_fails_closed_on_undefined_regime():
+    c = read("EA/includes/Analysis/Scoring.mqh")
+    assert "if(regime == VOL_REGIME_LOW || regime == VOL_REGIME_UNDEFINED)" in c
+
 def test_v217_setup_dedup_commits_after_persistence_boundary():
     c = read("EA/MedisTouch_v2.8.mq5")
     assert "commit setup deduplication only after the decision boundary" in c
