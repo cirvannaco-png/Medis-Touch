@@ -63,7 +63,6 @@ bool CTargetSelector::NearestBeyond(CTFContext* liqCtx, bool wantInternal, bool 
       if(!onRightSide) continue;
       double distance = MathAbs(price - entryPrice);
       if(minDistance > 0.0 && distance + 1e-10 < minDistance) continue;
-      if(!onRightSide) continue;
       if(haveExclude)
         {
          bool beyondPrior = forBuy ? (price > excludeBeyond) : (price < excludeBeyond);
