@@ -157,6 +157,12 @@ def test_v217_simulated_tp1_milestone_cannot_depend_on_be_threshold():
     assert "double earlyTP1 = p.setup.tp1;" in c
     assert "earlyTP1Touched" in c
 
+def test_v217_simulated_tp2_collision_uses_fill_policy():
+    c = read("EA/includes/Trading/OutcomeTracker.mqh")
+    assert "Ambiguous_SLandTP2" in c
+    assert "ResolveOrder(isBuy, bar0, adverseLevel, p.setup.tp2, ambiguous)" in c
+    assert "if(!favorableFirst)" in c
+
 def test_v217_decision_store_persists_target_plan_validity_for_restart():
     c = read("EA/includes/Decision/DecisionStore.mqh")
     assert "string parts[25]" in c
