@@ -127,7 +127,12 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    // let an unvalidated/fallback target ladder proceed to logging, persistence,
    // or execution; RiskEngine repeats this gate later as defense in depth.
    if(!setup.target_plan_valid)
+     {
+      setup.active = false;
+      setup.status = SETUP_INVALIDATED;
+      setup.rejection_reason = SETUP_REJECT_REWARD;
       return setup;
+     }
 
    setup.raw_confidence = conf;
    setup.confidence = conf;
@@ -194,6 +199,14 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr,
                                   ResolveExecutionEntry(setup),
                                   m_targetMinRR, m_scoring.GetMarketRegime());
+
+   if(!setup.target_plan_valid)
+     {
+      setup.active = false;
+      setup.status = SETUP_INVALIDATED;
+      setup.rejection_reason = SETUP_REJECT_REWARD;
+      return setup;
+     }
 
    setup.raw_confidence = conf;
    setup.confidence = conf;
