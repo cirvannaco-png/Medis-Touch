@@ -122,7 +122,6 @@ void CStructuralValidator::Init(CTFContext* entryCtx,
                                 bool smtInverseCorrelation)
   {
    m_entryCtx = entryCtx;
-   m_entryCtx = entryCtx;
    m_htfCtx = htfCtx;
    m_requireContinuationHTFAlignment = requireContinuationHTFAlignment;
    m_smtReferenceSymbol = smtReferenceSymbol;
