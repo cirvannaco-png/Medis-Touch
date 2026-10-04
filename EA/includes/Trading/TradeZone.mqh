@@ -123,6 +123,12 @@ TradeSetup CTradeDecision::GenerateBuySetup()
                                   ResolveExecutionEntry(setup),
                                   m_targetMinRR, m_scoring.GetMarketRegime());
 
+   // Targets are part of the executable contract, not presentation. Do not
+   // let an unvalidated/fallback target ladder proceed to logging, persistence,
+   // or execution; RiskEngine repeats this gate later as defense in depth.
+   if(!setup.target_plan_valid)
+      return setup;
+
    setup.raw_confidence = conf;
    setup.confidence = conf;
    setup.structural_valid = sv.valid;
