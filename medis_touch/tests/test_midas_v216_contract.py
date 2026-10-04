@@ -84,13 +84,57 @@ def test_decision_store_persists_v216_provenance():
         assert field in c
 
 
+def test_v217_regime_gate_is_explicit_and_closed_bar_based():
+    c = read("EA/includes/Regime/RegimeDetector.mqh")
+    assert "bool                 AllowsSetup" in c
+    assert "return REGIME_UNDEFINED;" in c
+    assert "market transition: wait for regime resolution" in c
+    assert "RecentBOSAgeBars" in c
+
+
+def test_v217_target_engine_uses_executable_entry_and_directional_liquidity():
+    c = read("EA/includes/Trading/TradeZone.mqh")
+    assert "ResolveExecutionEntry(setup)" in c
+    t = read("EA/includes/Trading/Targets.mqh")
+    assert "ENUM_LIQ_TYPE wantedType" in t
+    assert "setup.target_plan_valid" in t
+    assert "setup.tp1_quality" in t
+
+
+def test_v217_target_calibration_tracks_context_and_tp_hit_probability():
+    c = read("EA/includes/Trading/CalibrationEngine.mqh")
+    assert "GetTargetCalibratedProbability" in c
+    assert "m_contextTpHits" in c
+    assert "m_contextTpMisses" in c
+    assert "m_tpHits" in c
+    assert "m_tpMisses" in c
+
+
+def test_v217_calibration_gate_remains_opt_in():
+    c = read("EA/MedisTouch_v2.8.mq5")
+    assert "InpUseCalibratedGate = false" in c
+    assert "GetContextCalibratedProbability" in c
+
+
+def test_v217_position_management_matches_target_plan():
+    c = read("EA/includes/Execution/PositionManager.mqh")
+    assert "dec.setup.tp1" in c
+    assert "dec.setup.tp2" in c
+    assert "lockSL = tp1" in c
+
+
+def test_v217_risk_requires_validated_target_plan():
+    c = read("EA/includes/Trading/RiskEngine.mqh")
+    assert "if(!setup.target_plan_valid) return false;" in c
+
+
 def test_risk_engine_uses_broker_native_profit_and_margin():
     c = read("EA/includes/Trading/RiskEngine.mqh")
     assert "OrderCalcProfit" in c
     assert "OrderCalcMargin" in c
 
 
-def test_mql5_version_is_216():
+def test_mql5_version_is_217():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
-        assert '#property version   "2.16"' in c
+        assert '#property version   "2.17"' in c
