@@ -126,7 +126,7 @@ def test_v218_tp1_precision_gate_is_explicit_and_fail_closed():
     assert "tp1_calibration_sample" in cfg
     assert "tp1_calibration_context_used" in cfg
     assert "InpUseTP1PrecisionGate = false" in main
-    assert "InpMinTP1PrecisionProbability = 87.0" in main
+    assert "InpMinTP1PrecisionProbability = 88.0" in main
     assert "InpMinTP1PrecisionSample = 50" in main
     assert "InpRequireTP1ContextCalibration = true" in main
     assert "sampleOk" in main
