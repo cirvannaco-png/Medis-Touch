@@ -773,12 +773,14 @@ void COutcomeTracker::Update(CTFContext* fvgCtx)
       m_pending[i] = p;
 
       // --- Fill confirmation gate ---
+      bool justFilledThisBar = false;
       if(!p.filled)
         {
          bool touchedEntry = isBuy ? (bar0.low <= p.entryRef) : (bar0.high >= p.entryRef);
          if(touchedEntry)
            {
             p.filled = true;
+            justFilledThisBar = true;
             p.fillTime = bar0.time;
             p.barsToFill = p.barsElapsed;
             p.mfePrice = p.entryRef;
@@ -793,6 +795,13 @@ void COutcomeTracker::Update(CTFContext* fvgCtx)
                p.totalSlippageCost = m_slippagePoints * PointSize() * p.lots * valuePerUnit;
               }
             m_pending[i] = p;
+
+            // OHLC cannot tell whether the target/stop was reached before or
+            // after the entry within this same candle. Do not manufacture an
+            // ordering assumption: the fill is recorded now, and management
+            // starts from the next bar unless a dedicated intrabar sequencer
+            // is used.
+            continue;
            }
          else
            {
