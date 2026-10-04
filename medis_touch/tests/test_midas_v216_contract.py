@@ -90,6 +90,7 @@ def test_v217_regime_gate_is_explicit_and_closed_bar_based():
     assert "return REGIME_UNDEFINED;" in c
     assert "market transition: wait for regime resolution" in c
     assert "RecentBOSAgeBars" in c
+    assert "phase != PHASE_UNDEFINED" in c
 
 
 def test_v217_target_engine_uses_executable_entry_and_directional_liquidity():
