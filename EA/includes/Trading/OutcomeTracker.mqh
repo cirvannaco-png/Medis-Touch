@@ -680,6 +680,25 @@ void COutcomeTracker::ProcessFilledBar(int idx, CandleData &bar0)
          bool tp2Touched = isBuy ? (bar0.high >= p.setup.tp2) : (bar0.low <= p.setup.tp2);
          if(tp2Touched && p.setup.tp1 > 0.0)
            {
+            // If the bar also touches the operative SL, resolve the order
+            // under the configured fill policy instead of giving TP2
+            // precedence merely because this branch runs first.
+            if(adverseTouched)
+              {
+               bool ambiguous;
+               bool favorableFirst = ResolveOrder(isBuy, bar0, adverseLevel, p.setup.tp2, ambiguous);
+               if(ambiguous)
+                 {
+                  FinalizeExit(idx, p, "Ambiguous_SLandTP2", bar0.close, true, true);
+                  return;
+                 }
+               if(!favorableFirst)
+                 {
+                  FinalizeExit(idx, p, SLHitLabel(p), adverseLevel, false, false);
+                  return;
+                 }
+              }
+
             bool improvedLock = isBuy ? (p.setup.tp1 > p.currentSL)
                                       : (p.setup.tp1 < p.currentSL);
             if(improvedLock)
