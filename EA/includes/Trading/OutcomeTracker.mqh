@@ -773,14 +773,12 @@ void COutcomeTracker::Update(CTFContext* fvgCtx)
       m_pending[i] = p;
 
       // --- Fill confirmation gate ---
-      bool justFilledThisBar = false;
       if(!p.filled)
         {
          bool touchedEntry = isBuy ? (bar0.low <= p.entryRef) : (bar0.high >= p.entryRef);
          if(touchedEntry)
            {
             p.filled = true;
-            justFilledThisBar = true;
             p.fillTime = bar0.time;
             p.barsToFill = p.barsElapsed;
             p.mfePrice = p.entryRef;
