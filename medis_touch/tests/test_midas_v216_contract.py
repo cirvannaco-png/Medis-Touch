@@ -120,6 +120,21 @@ def test_v217_calibration_record_scope_is_compile_safe():
     assert "if(m_calibrationEnabled)\n           {\n            bool tp3Reached" in c
 
 
+def test_v218_tp1_precision_gate_is_explicit_and_fail_closed():
+    cfg = read("EA/includes/Core/Config.mqh")
+    main = read("EA/MedisTouch_v2.8.mq5")
+    assert "tp1_calibration_sample" in cfg
+    assert "tp1_calibration_context_used" in cfg
+    assert "InpUseTP1PrecisionGate = false" in main
+    assert "InpMinTP1PrecisionProbability = 87.0" in main
+    assert "InpMinTP1PrecisionSample = 50" in main
+    assert "InpRequireTP1ContextCalibration = true" in main
+    assert "sampleOk" in main
+    assert "contextOk" in main
+    assert "probabilityOk" in main
+    assert "if(!sampleOk || !contextOk || !probabilityOk)" in main
+
+
 def test_v217_calibration_gate_remains_opt_in():
     c = read("EA/MedisTouch_v2.8.mq5")
     assert "InpUseCalibratedGate = false" in c
@@ -222,7 +237,7 @@ def test_risk_engine_uses_broker_native_profit_and_margin():
     assert "OrderCalcMargin" in c
 
 
-def test_mql5_version_is_217():
+def test_mql5_version_is_218():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
-        assert '#property version   "2.17"' in c
+        assert '#property version   "2.18"' in c
