@@ -8,7 +8,7 @@
 #ifndef CONFIG_MQH
 #define CONFIG_MQH
 
-#define MIDAS_ENGINE_VERSION "2.17"
+#define MIDAS_ENGINE_VERSION "2.18"
 #define MIDAS_SCHEMA_VERSION 4
 #define MIDAS_SETUP_CONTRACT_VERSION 2
 #define MIDAS_WEIGHT_SET_VERSION "SMC-CAUSAL-2.17"
@@ -626,6 +626,9 @@ struct TradeSetup
    double            tp2_quality;
    double            tp3_quality;
    double            tp1_calibrated_probability;
+   int               tp1_calibration_sample;
+   bool              tp1_calibration_has_enough_data;
+   bool              tp1_calibration_context_used;
    double            tp2_calibrated_probability;
    double            tp3_calibrated_probability;
   };
