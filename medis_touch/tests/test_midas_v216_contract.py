@@ -173,6 +173,15 @@ def test_v217_continuation_invalidation_uses_causal_displacement_not_incidental_
     assert "bool useSweepInvalidation = (family == SETUP_FAMILY_REVERSAL && haveSweep);" in c
     assert "CandleData thesisCandle = useSweepInvalidation" in c
 
+def test_v217_choch_has_measurable_strength_and_hard_threshold():
+    cfg = read("EA/includes/Core/Config.mqh")
+    choch = read("EA/includes/Structure/CHOCH.mqh")
+    chain = read("EA/includes/Analysis/SMCChain.mqh")
+    assert "double            strength;" in cfg
+    assert "bull.strength =" in choch
+    assert "bear.strength =" in choch
+    assert "if(c.structure_strength < m_minStructureStrength)" in chain
+
 def test_v217_decision_store_persists_target_plan_validity_for_restart():
     c = read("EA/includes/Decision/DecisionStore.mqh")
     assert "string parts[25]" in c
