@@ -149,7 +149,17 @@ public:
          else if(netPnL < -0.0000001) m_contextLosses[r][f][b]++;
          else                         m_contextScratches[r][f][b]++;
 
+         // Every resolved, non-ambiguous trade has an observable answer for
+         // each target: it either reached that target before resolution or it
+         // did not. Keep target calibration independent of win/loss outcome.
+         if(tp1Hit) m_contextTpHits[0][r][f][b]++; else m_contextTpMisses[0][r][f][b]++;
+         if(tp2Hit) m_contextTpHits[1][r][f][b]++; else m_contextTpMisses[1][r][f][b]++;
+         if(tp3Hit) m_contextTpHits[2][r][f][b]++; else m_contextTpMisses[2][r][f][b]++;
         }
+
+      if(tp1Hit) m_tpHits[0][b]++; else m_tpMisses[0][b]++;
+      if(tp2Hit) m_tpHits[1][b]++; else m_tpMisses[1][b]++;
+      if(tp3Hit) m_tpHits[2][b]++; else m_tpMisses[2][b]++;
 
       Save(useCommonFolder);
      }
@@ -196,44 +206,9 @@ public:
       return SmoothedProbability(gw, gl);
      }
 
-   double GetTargetCalibratedProbability(int targetIndex, double confidence,
-                                                  ENUM_MARKET_REGIME regime,
-                                                  ENUM_SETUP_FAMILY family,
-                                                  int &sampleSizeOut,
-                                                  bool &hasEnoughDataOut,
-                                                  bool &contextUsedOut) const
-     {
-      if(targetIndex < 0 || targetIndex > 2)
-        {
-         sampleSizeOut = 0; hasEnoughDataOut = false; contextUsedOut = false;
-         return 50.0;
-        }
-
-      int b = BucketIndex(confidence);
-      int r, f;
-      if(ContextIndex(regime, family, r, f))
-        {
-         int ch = m_contextTpHits[targetIndex][r][f][b];
-         int cm = m_contextTpMisses[targetIndex][r][f][b];
-         int ct = ch + cm;
-         if(ct >= m_minSample)
-           {
-            sampleSizeOut = ct;
-            hasEnoughDataOut = true;
-            contextUsedOut = true;
-            return SmoothedProbability(ch, cm);
-           }
-        }
-
-      int gh = m_tpHits[targetIndex][b];
-      int gm = m_tpMisses[targetIndex][b];
-      int gt = gh + gm;
-      sampleSizeOut = gt;
-      hasEnoughDataOut = (gt >= m_minSample);
-      contextUsedOut = false;
-      return SmoothedProbability(gh, gm);
-     }
-
+   // Target IDs are canonicalized as 1=TP1, 2=TP2, 3=final TP.
+   // This keeps the public API human-readable while the storage arrays remain
+   // zero-based internally.
    double GetTargetCalibratedProbability(int targetIndex, double confidence,
                                                 ENUM_MARKET_REGIME regime,
                                                 ENUM_SETUP_FAMILY family,
@@ -246,27 +221,31 @@ public:
          sampleSizeOut = 0; hasEnoughDataOut = false; contextUsedOut = false;
          return 50.0;
         }
+
       int b = BucketIndex(confidence);
       int t = targetIndex - 1;
       int r, f;
       if(ContextIndex(regime, family, r, f))
         {
-         int contextN = m_contextWins[r][f][b] + m_contextLosses[r][f][b];
+         int ch = m_contextTpHits[t][r][f][b];
+         int cm = m_contextTpMisses[t][r][f][b];
+         int contextN = ch + cm;
          if(contextN >= m_minSample)
            {
             sampleSizeOut = contextN;
             hasEnoughDataOut = true;
             contextUsedOut = true;
-            int hits = m_contextTpHits[t][r][f][b];
-            return SmoothedProbability(hits, m_contextTpMisses[t][r][f][b]);
+            return SmoothedProbability(ch, cm);
            }
         }
 
-      int n = m_wins[b] + m_losses[b];
+      int hits = m_tpHits[t][b];
+      int misses = m_tpMisses[t][b];
+      int n = hits + misses;
       sampleSizeOut = n;
       hasEnoughDataOut = (n >= m_minSample);
       contextUsedOut = false;
-      return SmoothedProbability(m_tpHits[t][b], m_tpMisses[t][b]);
+      return SmoothedProbability(hits, misses);
      }
 
    string BucketSummary(int bucketIdx) const
