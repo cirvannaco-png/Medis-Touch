@@ -722,8 +722,10 @@ void OnTick()
    if(!chosen.active || !chosen.structural_valid) return;
    if(StringLen(chosen.setup_id) == 0) return;
    if(chosen.setup_id == g_lastSetupId) return; // deterministic event identity, not TimeCurrent()
-   g_lastSetupId = chosen.setup_id;
-   g_lastLoggedTime = chosen.creation_time;
+
+   // v2.17: commit setup deduplication only after the decision boundary.
+   // A persistence/execution preflight failure remains retryable rather than
+   // silently consuming an otherwise valid deterministic setup.
 
    // v2.16: persist an explicit absolute expiry for transport/back-end
    // consumers while the local lifecycle still uses closed-bar counts.
@@ -771,6 +773,7 @@ void OnTick()
       // setup, but can never rescue an invalid one. Kept opt-in so no
       // unvalidated probability threshold silently changes live behavior.
       g_lastSetupId = chosen.setup_id;
+      g_lastLoggedTime = chosen.creation_time;
       return;
      }
 
@@ -792,6 +795,9 @@ void OnTick()
    TradeDecisionRecord decision = g_router.Decide(chosen);
    if(!decision.valid || decision.action == POLICY_IGNORE)
      {
+      // Intentional policy rejection is terminal for this deterministic event.
+      g_lastSetupId = chosen.setup_id;
+      g_lastLoggedTime = chosen.creation_time;
       g_tracker.Update(g_fvgCtx);
       return;
      }
@@ -807,10 +813,15 @@ void OnTick()
    bool persisted = g_store.Save(decision);
    if(!persisted && (decision.action == POLICY_EXECUTE_ONLY || decision.action == POLICY_EXECUTE_AND_SIGNAL))
      {
-      PrintFormat("MedisTouch EA: decision #%d refused — decision store could not persist the immutable setup.", decision.decision_id);
+      PrintFormat("MedisTouch EA: decision #%I64d refused — decision store could not persist the immutable setup.", decision.decision_id);
       g_monitor.NotifyBrokerReject();
-      return;
+      return; // retry next evaluation; do not consume the setup
      }
+
+   // The immutable decision is now durable (or intentionally signal-only).
+   // Only this boundary commits deterministic setup consumption.
+   g_lastSetupId = chosen.setup_id;
+   g_lastLoggedTime = chosen.creation_time;
 
    if(decision.action == POLICY_EXECUTE_ONLY || decision.action == POLICY_EXECUTE_AND_SIGNAL)
      {
@@ -820,12 +831,12 @@ void OnTick()
                                             decision.reduce_risk, InpAllowMinLotOverride, exceededRiskBudget,
                                             g_riskGuard.SizeMultiplier());
       if(lots <= 0)
-         PrintFormat("MedisTouch EA: decision #%d skipped — %.2f%% risk at this stop distance is below the broker's minimum lot for %s.",
+         PrintFormat("MedisTouch EA: decision #%I64d skipped — %.2f%% risk at this stop distance is below the broker's minimum lot for %s.",
                      decision.decision_id, InpRiskPercentPerTrade, _Symbol);
       else
         {
          if(exceededRiskBudget)
-            PrintFormat("MedisTouch EA: decision #%d executing at broker-minimum lot (%.2f) — actual risk exceeds InpRiskPercentPerTrade (%.2f%%).",
+            PrintFormat("MedisTouch EA: decision #%I64d executing at broker-minimum lot (%.2f) — actual risk exceeds InpRiskPercentPerTrade (%.2f%%).",
                         decision.decision_id, lots, InpRiskPercentPerTrade);
 
          double proposedRisk = g_risk.RiskAmountForLots(_Symbol, lots, entry, chosen.stop_loss);
