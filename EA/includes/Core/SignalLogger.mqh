@@ -403,13 +403,16 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
                       ? p.setup.setup_id
                       : StringFormat("%s_%s_%d", symbol, dir, (long)p.setup.creation_time);
 
+   // MFE/MAE R uses the same management basis as realized R:
+   // sizingEntryPrice + mgmtRiskDist. entryRef remains the zone-touch
+   // reference and is logged separately for fill-analysis.
    double mfeR = 0.0, maeR = 0.0;
-   if(p.filled && p.riskDist > 0)
+   if(p.filled && p.mgmtRiskDist > 0)
      {
-      double mfeDist = (p.setup.type == ORDER_TYPE_BUY) ? (p.mfePrice - p.entryRef) : (p.entryRef - p.mfePrice);
-      double maeDist = (p.setup.type == ORDER_TYPE_BUY) ? (p.entryRef - p.maePrice) : (p.maePrice - p.entryRef);
-      mfeR = mfeDist / p.riskDist;
-      maeR = maeDist / p.riskDist;
+      double mfeDist = (p.setup.type == ORDER_TYPE_BUY) ? (p.mfePrice - p.sizingEntryPrice) : (p.sizingEntryPrice - p.mfePrice);
+      double maeDist = (p.setup.type == ORDER_TYPE_BUY) ? (p.sizingEntryPrice - p.maePrice) : (p.maePrice - p.sizingEntryPrice);
+      mfeR = mfeDist / p.mgmtRiskDist;
+      maeR = maeDist / p.mgmtRiskDist;
      }
 
    // Realized R uses mgmtRiskDist (the same basis the simulator's
