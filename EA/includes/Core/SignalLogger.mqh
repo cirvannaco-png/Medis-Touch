@@ -293,7 +293,8 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
                "RegimeCompatible", "RegimeReason", "RegimeQuality", "RegimeAgeBars", "TargetPlanValid",
                "TP1_R", "TP2_R", "TP3_R", "TP1_Quality", "TP2_Quality", "TP3_Quality",
                "TP1_CalibratedProbability", "TP2_CalibratedProbability", "TP3_CalibratedProbability",
-               "CalibratedProbability", "CalibrationSample", "CalibrationContextUsed");
+               "CalibratedProbability", "CalibrationSample", "CalibrationContextUsed",
+               "TP1_CalibrationSample", "TP1_CalibrationContextUsed", "TP1_CalibrationHasEnoughData");
       m_headerWritten = true;
      }
 
@@ -349,7 +350,10 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
             DoubleToString(setup.tp3_calibrated_probability, 1),
             DoubleToString(setup.calibrated_probability, 1),
             setup.calibration_sample,
-            setup.calibration_context_used ? "Yes" : "No");
+            setup.calibration_context_used ? "Yes" : "No",
+            setup.tp1_calibration_sample,
+            setup.tp1_calibration_context_used ? "Yes" : "No",
+            setup.tp1_calibration_has_enough_data ? "Yes" : "No");
 
    FileClose(handle);
    return true;
