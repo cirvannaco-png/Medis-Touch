@@ -538,10 +538,9 @@ SMCChain CSMCChainBuilder::Build(bool forBuy)
       double sweepQ = haveSweep ? MathMax(0.0, MathMin(c.rejection_ratio, 1.0)) : 0.0;
       double dispQ = MathMax(0.0, MathMin(c.displacement_atr / 2.5, 1.0));
       double structQ = MathMax(0.0, MathMin(c.structure_strength, 1.0));
-      double fvgATR = m_entryCtx.candles.GetATR(MathMax(1, c.fvg.bar_index));
-      double fvgQ = (fvgATR > 0.0)
-                    ? MathMax(0.0, MathMin(c.fvg.width / fvgATR, 1.0))
-                    : 0.0;
+      // FVGZone.width is already normalized by the formation candle ATR
+      // inside CFVG::Detect(). Do not divide it by a price ATR again.
+      double fvgQ = MathMax(0.0, MathMin(c.fvg.width, 1.0));
       double freshQ = c.freshness_ok ? 1.0 : 0.0;
       double locQ = c.location_ok ? 1.0 : 0.0;
 
