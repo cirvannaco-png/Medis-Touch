@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.22 — FVG timing and quality correctness
+
+### Fixed
+- FVG age is now measured from the first closed bar that completes the three-candle
+  imbalance, eliminating a one-bar premature aging/expiry penalty.
+- SMC chain FVG age uses the same completion-bar convention as the FVG engine.
+- Causal-chain FVG quality no longer divides the already ATR-normalized FVG width by
+  another price ATR. The width is normalized exactly once.
+
+### Why it matters
+These are not threshold optimizations. They correct two measurement errors in the
+structural substrate itself. The first could suppress otherwise fresh setups; the
+second could systematically understate FVG quality and therefore distort validated
+confidence.
+
+No profitability or 87% performance claim is made until MetaEditor/MT5 compilation,
+full broker-data backtesting, and untouched holdout validation are completed.
+
+
+
 ## v2.21 — calibration feedback-loop hardening
 
 v2.21 removes a subtle deadlock in the 87% execution-precision architecture:
