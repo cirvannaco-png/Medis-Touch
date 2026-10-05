@@ -298,3 +298,23 @@ def test_v221_precision_gate_tracks_before_execution_filter():
     tracking = c.index("if(InpTrackOutcomes)\n      g_tracker.AddSetup(chosen, decision.decision_id);")
     assert tracking < gate
     assert "v2.21: shadow-track every policy-valid setup BEFORE the execution" in c
+
+
+def test_v222_fvg_age_is_measured_from_closed_completion_bar():
+    fvg = read("EA/includes/SmartMoney/FVG.mqh")
+    chain = read("EA/includes/Analysis/SMCChain.mqh")
+    assert "zone.bar_index - 2" in fvg
+    assert "z.bar_index - 2" in chain
+
+
+def test_v222_fvg_quality_is_not_double_normalized():
+    c = read("EA/includes/Analysis/SMCChain.mqh")
+    assert "FVGZone.width is already normalized" in c
+    assert "MathMin(c.fvg.width, 1.0)" in c
+    assert "c.fvg.width / fvgATR" not in c
+
+
+def test_mql5_version_is_222():
+    for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
+        c = read(path)
+        assert '#property version   "2.22"' in c
