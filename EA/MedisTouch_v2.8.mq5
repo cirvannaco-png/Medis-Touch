@@ -12,7 +12,7 @@
 // together on the same chart (indicator for the visuals you're used to,
 // EA for the parts that touch money) or run this alone headless.
 #property copyright "Medis Touch"
-#property version   "2.25"
+#property version   "2.26"
 #property strict
 
 #include "includes/Core/Config.mqh"
@@ -59,7 +59,8 @@ input group "Liquidity"
 input double InpInternalLiqThresholdATR = 0.2;
 
 input group "Risk (setup validation)"
-input double InpMinRiskReward = 1.5;
+input double InpMinRiskReward = 1.5;          // minimum RR required by the overall target plan
+input double InpMinTP1RiskReward = 1.25;     // TP1 partial milestone minimum RR; final plan still requires InpMinRiskReward
 input double InpMaxSLDistanceATR = 1.5;
 input double InpSLBufferATR = 0.25;        // invalidation margin beyond FVG far edge, in ATR (audit #23 fix)
 input double InpMinStopSpreadMult = 3.0;   // floor: SL distance from entry never below (current spread * this) -- check against real Pepperstone/Exness spread in Tester
@@ -284,7 +285,7 @@ input string InpBridgeApiKey = "";              // must match telegram-bridge's 
 // "which weight set produced this," which is the prerequisite for the
 // statistical gating / promotion layer (steps 4-5) ever being able to
 // tell one weight set's expectancy apart from another's in signal_outcomes.
-input string InpWeightSetVersion = "SMC-CAUSAL-2.25";
+input string InpWeightSetVersion = "SMC-CAUSAL-2.26";
 // v2.11 — the operator's OWN bridge endpoint, for ConfigSync polling
 // only. Deliberately separate from the subscriber-fan-out CSV
 // (SubscriberPlatform.mqh) — that list is for broadcasting signals to
@@ -425,7 +426,7 @@ int OnInit()
                     InpSMTInverseCorrelation);
 
    g_decision.Init(&g_fvgCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, &g_validator,
-                   InpSLBufferATR, InpMinStopSpreadMult, InpMinRiskReward);
+                   InpSLBufferATR, InpMinStopSpreadMult, InpMinRiskReward, InpMinTP1RiskReward);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);
    // Deliberately the SAME values driving g_positions/g_risk below — so the
