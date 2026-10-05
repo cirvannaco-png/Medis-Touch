@@ -337,3 +337,25 @@ def test_mql5_version_is_223():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
         assert '#property version   "2.23"' in c
+
+
+def test_v224_single_direction_risk_validation_uses_closed_bar_atr():
+    main = read("EA/MedisTouch_v2.8.mq5")
+    assert "ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, analysisAtr)" in main
+    assert "ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, analysisAtr)" in main
+    assert "ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr)" not in main
+    assert "ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr)" not in main
+
+
+def test_v224_entry_drift_rejects_only_adverse_motion():
+    om = read("EA/includes/Execution/OrderManager.mqh")
+    assert "double adverseDrift" in om
+    assert "A better-than-theoretical" in om
+    assert "if(adverseDrift > maxEntryDeviation)" in om
+    assert "double deviation = MathAbs(marketPrice - entry)" not in om
+
+
+def test_mql5_version_is_224():
+    for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
+        c = read(path)
+        assert '#property version   "2.24"' in c
