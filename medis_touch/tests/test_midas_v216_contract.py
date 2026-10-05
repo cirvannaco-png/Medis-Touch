@@ -269,3 +269,24 @@ def test_mql5_version_is_219():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
         assert '#property version   "2.19"' in c
+
+
+def test_v220_tradezone_uses_validated_causal_chain_confidence():
+    scoring = read("EA/includes/Analysis/Scoring.mqh")
+    zone = read("EA/includes/Trading/TradeZone.mqh")
+    assert "CalculateValidatedConfidence(bool forBuy, const SMCChain &chain)" in scoring
+    assert "if(chain.status != CHAIN_VALID" in scoring
+    assert "double score = 70.0 * quality / 100.0;" in scoring
+    assert "score += 15.0 * TrendScore(forBuy);" in scoring
+    assert "score += 15.0 * FVGScore(forBuy);" not in scoring
+    assert "m_scoring.CalculateValidatedConfidence(true, sv.chain)" in zone
+    assert "m_scoring.CalculateValidatedConfidence(false, sv.chain)" in zone
+
+
+def test_v220_calibration_population_is_versioned_with_new_confidence_semantics():
+    cfg = read("EA/includes/Core/Config.mqh")
+    main = read("EA/MedisTouch_v2.8.mq5")
+    assert 'MIDAS_ENGINE_VERSION "2.20"' in cfg
+    assert 'MIDAS_WEIGHT_SET_VERSION "SMC-CAUSAL-2.20"' in cfg
+    assert 'InpWeightSetVersion = "SMC-CAUSAL-2.20"' in main
+    assert '#property version   "2.20"' in main
