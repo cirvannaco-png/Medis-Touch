@@ -168,9 +168,13 @@ bool CRiskEngine::ValidateSetup(TradeSetup &setup, double minRR, double maxSLDis
    // (Core/Config.mqh) — one source of truth so this can't drift again.
    double entry = ResolveExecutionEntry(setup);
    double slDist = MathAbs(entry - setup.stop_loss);
-   double tpDist = MathAbs(setup.tp1 - entry);
-   if(slDist <= 0 || tpDist <= 0) return false;
-   if(tpDist / slDist < minRR) return false;
+   double tp1Dist = MathAbs(setup.tp1 - entry);
+   double finalDist = MathAbs(setup.final_tp - entry);
+   if(slDist <= 0 || tp1Dist <= 0 || finalDist <= 0) return false;
+   // TP1 is deliberately allowed to be the closer high-probability partial.
+   // Validate the configured overall RR against the final target; the
+   // target engine already validated TP1 against its dedicated TP1 minimum.
+   if(finalDist / slDist < minRR) return false;
 
    // FIX: maxSLDistanceATR was accepted as a parameter but never actually
    // checked against anything — a dead input that gave the impression of
