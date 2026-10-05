@@ -12,7 +12,7 @@
 // together on the same chart (indicator for the visuals you're used to,
 // EA for the parts that touch money) or run this alone headless.
 #property copyright "Medis Touch"
-#property version   "2.23"
+#property version   "2.24"
 #property strict
 
 #include "includes/Core/Config.mqh"
@@ -283,7 +283,7 @@ input string InpBridgeApiKey = "";              // must match telegram-bridge's 
 // "which weight set produced this," which is the prerequisite for the
 // statistical gating / promotion layer (steps 4-5) ever being able to
 // tell one weight set's expectancy apart from another's in signal_outcomes.
-input string InpWeightSetVersion = "SMC-CAUSAL-2.23";
+input string InpWeightSetVersion = "SMC-CAUSAL-2.24";
 // v2.11 — the operator's OWN bridge endpoint, for ConfigSync polling
 // only. Deliberately separate from the subscriber-fan-out CSV
 // (SubscriberPlatform.mqh) — that list is for broadcasting signals to
@@ -714,12 +714,12 @@ void OnTick()
      }
    else if(buySetup.active)
      {
-      if(g_risk.ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr))
+      if(g_risk.ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, analysisAtr))
          chosen = buySetup;
      }
    else if(sellSetup.active)
      {
-      if(g_risk.ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr))
+      if(g_risk.ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, analysisAtr))
          chosen = sellSetup;
      }
 
