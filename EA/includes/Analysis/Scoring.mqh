@@ -284,6 +284,11 @@ public:
    // v2.15 addition. Passthrough to CStrategySelector::Configure().
    void              ConfigureStrategySelection(double minSelectionScore = 60.0);
    double            CalculateConfidence(bool forBuy);
+   // v2.20: confidence substrate for an already validated causal SMC chain.
+   // The chain owns sweep/displacement/structure/FVG/location coherence;
+   // independent confluence (HTF trend, volume, Fibonacci, VA, HTF OB) is
+   // layered on top without re-running a second inducement/FVG vote.
+   double            CalculateValidatedConfidence(bool forBuy, const SMCChain &chain);
    void              EvaluateReasons(bool forBuy, SetupReasons &out);
    // v2.10. Call right after EvaluateReasons() with the confidence the
    // additive model actually returned; fills the four v2.10 diagnostic
@@ -751,6 +756,75 @@ double CScoringEngine::CalculateConfidence(bool forBuy)
    // 100 now only occurs when every component is actually maxed.
    const double MAX_RAW_SCORE = 120.0;
    double normalized = (score / MAX_RAW_SCORE) * 100.0;
+   return MathMin(MathMax(normalized, 0.0), 100.0);
+  }
+//+------------------------------------------------------------------+
+double CScoringEngine::CalculateValidatedConfidence(bool forBuy, const SMCChain &chain)
+  {
+   if(!m_sessionFilter.IsAllowed()) return 0.0;
+   if(chain.status != CHAIN_VALID || chain.direction != (forBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL))
+      return 0.0;
+   if(chain.quality < 0.0) return 0.0;
+
+   double quality = MathMax(0.0, MathMin(100.0, chain.quality));
+   // 70 points are reserved for the causal chain itself. Its internal
+   // composition already covers sweep/rejection, displacement, structure,
+   // causal FVG, freshness and premium/discount location.
+   double score = 70.0 * quality / 100.0;
+
+   // Independent evidence only. Deliberately DO NOT add FVGScore() or the
+   // legacy inducement score here — doing so double-counts the same causal
+   // structure the validator already proved.
+   score += 15.0 * TrendScore(forBuy);
+
+   if(m_newsFilter != NULL)
+     {
+      string newsLabel; int newsMinutes;
+      ENUM_NEWS_RISK tier = m_newsFilter.GetRiskTier(newsLabel, newsMinutes);
+      if(tier == NEWS_WARNING)
+         score *= m_newsWarningMultiplier;
+     }
+
+   double price = CurrentPrice();
+
+   if(m_requireVolumeConfirmation)
+     {
+      if(m_bosCtx == NULL || m_bosCtx.volume.RVOL(1) < m_rvolThreshold)
+         return 0.0;
+     }
+   if(m_requireFibonacciZone)
+     {
+      if(price <= 0 || m_bosCtx == NULL ||
+         !m_bosCtx.fibonacci.InPullbackZone(forBuy, price, m_fibZoneMinPct, m_fibZoneMaxPct))
+         return 0.0;
+     }
+   if(m_requireValueAreaLocation)
+     {
+      if(price <= 0 || m_srCtx == NULL || !m_srCtx.valueArea.IsValid() ||
+         !m_srCtx.valueArea.LocationOK(forBuy, price))
+         return 0.0;
+     }
+   if(m_requireHtfOB)
+     {
+      if(OBScore(forBuy) <= 0.0)
+         return 0.0;
+     }
+   if(m_blockLowVolRegime)
+     {
+      ENUM_VOL_REGIME regime = m_volRegime.Classify(1);
+      if(regime == VOL_REGIME_LOW || regime == VOL_REGIME_UNDEFINED)
+         return 0.0;
+     }
+
+   // Five-point capped bonuses are independent confluence, not structural
+   // validity. The maximum validated score is 105.
+   score += 5.0 * VolumeScore(forBuy);
+   score += 5.0 * FibonacciScore(forBuy);
+   score += 5.0 * ValueAreaScore(forBuy);
+   score += 5.0 * OBScore(forBuy);
+
+   const double MAX_VALIDATED_SCORE = 105.0;
+   double normalized = (score / MAX_VALIDATED_SCORE) * 100.0;
    return MathMin(MathMax(normalized, 0.0), 100.0);
   }
 //+------------------------------------------------------------------+
