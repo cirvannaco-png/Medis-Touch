@@ -101,7 +101,7 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    if(!m_scoring.IsRegimeCompatible(true, sv.family, regimeReason))
       return setup;
 
-   double conf = m_scoring.CalculateConfidence(true);
+   double conf = m_scoring.CalculateValidatedConfidence(true, sv.chain);
    if(conf < 50.0) return setup;
 
    double atr = m_fvgCtx.candles.GetATR(1);
@@ -178,7 +178,7 @@ TradeSetup CTradeDecision::GenerateSellSetup()
    if(!m_scoring.IsRegimeCompatible(false, sv.family, regimeReason))
       return setup;
 
-   double conf = m_scoring.CalculateConfidence(false);
+   double conf = m_scoring.CalculateValidatedConfidence(false, sv.chain);
    if(conf < 50.0) return setup;
 
    double atr = m_fvgCtx.candles.GetATR(1);
