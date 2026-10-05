@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.25 — bounded asymmetric entry drift
+
+### Fixed
+- Market-entry staleness is now evaluated with separate adverse and favorable
+  bounds instead of a single symmetric absolute-distance threshold.
+- Default adverse drift remains 0.15 ATR.
+- Favorable drift is allowed up to 0.25 ATR, recovering better fills without
+  allowing an entry to drift arbitrarily far from the validated zone.
+- Both limits use the confirmed decision ATR rather than the forming-bar ATR.
+
+### Rationale
+A symmetric absolute-distance rule incorrectly treated a materially better fill
+as stale, reducing opportunity without protecting risk. Unlimited favorable drift
+would create a different problem by allowing entries far outside the validated
+FVG zone. The bounded asymmetric policy addresses both failure modes.
+
+No profitability or 87% performance claim is made.
+
+
+
 ## v2.24 — execution drift and closed-bar risk hardening
 
 ### Fixed
