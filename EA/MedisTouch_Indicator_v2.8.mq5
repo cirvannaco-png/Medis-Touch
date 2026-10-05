@@ -58,11 +58,14 @@ input double InpSMTMinCorrelation = 0.70;
 input group "SMC Chain Validation (v2.16)"
 input int    InpMaxSweepToStructureBars = 8;
 input int    InpMaxStructureToFVGBars = 2;
-input int    InpMaxFVGAgeBars = 15;
-input double InpMinChainDisplacementATR = 1.0;
+input int    InpMaxFVGAgeBars = 8;
+input double InpMinChainDisplacementATR = 1.10;
 input double InpMinChainDisplacementBodyRatio = 0.55;
-input double InpMinChainStructureStrength = 0.45;
+input double InpMinChainStructureStrength = 0.50;
 input bool   InpRequireContinuationHTFAlignment = true;
+input double InpMinStructuralQuality = 60.0;
+input double InpMinChainRejectionRatio = 0.30;
+input double InpMinDirectionalAdvantage = 5.0;
 
 input group "Market Regime Policy (v2.17)"
 input bool   InpEnableRegimeGate = true;
@@ -228,6 +231,7 @@ int OnInit()
                     InpMinChainDisplacementBodyRatio,
                     InpMinChainStructureStrength,
                     InpRequirePremiumDiscount,
+                    InpMinChainRejectionRatio,
                     InpRequireContinuationHTFAlignment,
                     0.0,
                     InpSMTReferenceSymbol,
@@ -242,7 +246,8 @@ int OnInit()
                     InpSMTInverseCorrelation);
 
    g_decision.Init(&g_fvgCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, &g_validator,
-                   InpSLBufferATR, InpMinStopSpreadMult, InpMinRiskReward, InpMinTP1RiskReward);
+                   InpSLBufferATR, InpMinStopSpreadMult, InpMinRiskReward, InpMinTP1RiskReward,
+                   InpMinStructuralQuality);
    g_visuals.Init(&g_objMan);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);
@@ -278,12 +283,13 @@ int OnCalculate(const int rates_total,
    TradeSetup sellSetup = g_decision.GenerateSellSetup();
 
    g_lastSetup.active = false;
-   if(buySetup.active && (!sellSetup.active || buySetup.confidence >= sellSetup.confidence))
+   double confDelta = buySetup.confidence - sellSetup.confidence;
+   if(buySetup.active && (!sellSetup.active || confDelta >= InpMinDirectionalAdvantage))
      {
       if(g_risk.ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, currentATR))
          g_lastSetup = buySetup;
      }
-   else if(sellSetup.active)
+   else if(sellSetup.active && (-confDelta >= InpMinDirectionalAdvantage))
      {
       if(g_risk.ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, currentATR))
          g_lastSetup = sellSetup;
