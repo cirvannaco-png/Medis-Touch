@@ -58,6 +58,7 @@ input double InpSMTMinCorrelation = 0.70;
 input group "SMC Chain Validation (v2.16)"
 input int    InpMaxSweepToStructureBars = 8;
 input int    InpMaxStructureToFVGBars = 2;
+input int    InpMaxChainStructureAgeBars = 5;     // confirmed-bar BOS age ceiling
 input int    InpMaxFVGAgeBars = 8;
 input double InpMinChainDisplacementATR = 1.10;
 input double InpMinChainDisplacementBodyRatio = 0.55;
@@ -226,6 +227,7 @@ int OnInit()
    g_validator.Init(g_fvgCtx, g_trendCtx,
                     InpMaxSweepToStructureBars,
                     InpMaxStructureToFVGBars,
+                    InpMaxChainStructureAgeBars,
                     InpMaxFVGAgeBars,
                     InpMinChainDisplacementATR,
                     InpMinChainDisplacementBodyRatio,
