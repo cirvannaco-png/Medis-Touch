@@ -114,7 +114,16 @@ void CTargetSelector::AssignTargets(TradeSetup &setup, CTFContext* liqCtx, strin
    if(atr <= 0.0 || riskDist <= 0.0 || minRR <= 0.0) return;
 
    double minimumDistance = minRR * riskDist;
-   double fallbackStep = MathMax(atr, minimumDistance);
+   // Fallback targets use explicit RR tiers rather than repeatedly adding the
+   // minimum distance. With minRR=1.5 this yields a controlled 1.5R / 2.0R /
+   // 3.0R ladder instead of the old 1.5R / 3.0R / 4.5R compounding.
+   double fallbackTp1RR = MathMax(minRR, 1.5);
+   double fallbackTp2RR = MathMax(MathMax(fallbackTp1RR + 0.5, 2.0), minRR + 0.5);
+   double fallbackTp3RR = MathMax(MathMax(fallbackTp2RR + 0.75, 3.0), minRR + 1.5);
+
+   double fallbackTp1Distance = fallbackTp1RR * riskDist;
+   double fallbackTp2Distance = fallbackTp2RR * riskDist;
+   double fallbackTp3Distance = fallbackTp3RR * riskDist;
 
    double tp1 = 0.0, tp2 = 0.0, tp3 = 0.0;
    int src1 = 0, src2 = 0, src3 = 0;
@@ -136,7 +145,7 @@ void CTargetSelector::AssignTargets(TradeSetup &setup, CTFContext* liqCtx, strin
 
    if(tp1 <= 0.0)
      {
-      tp1 = forBuy ? entryPrice + fallbackStep : entryPrice - fallbackStep;
+      tp1 = forBuy ? entryPrice + fallbackTp1Distance : entryPrice - fallbackTp1Distance;
       src1 = 0;
      }
 
@@ -157,7 +166,11 @@ void CTargetSelector::AssignTargets(TradeSetup &setup, CTFContext* liqCtx, strin
         }
       else
         {
-         tp2 = forBuy ? tp1 + fallbackStep : tp1 - fallbackStep;
+         tp2 = forBuy ? entryPrice + fallbackTp2Distance : entryPrice - fallbackTp2Distance;
+         // If TP1 came from a distant liquidity pool, preserve strict
+         // monotonicity by moving TP2 beyond that observed level.
+         if(forBuy && tp2 <= tp1) tp2 = tp1 + 0.5 * riskDist;
+         if(!forBuy && tp2 >= tp1) tp2 = tp1 - 0.5 * riskDist;
          src2 = 0;
         }
      }
@@ -174,7 +187,11 @@ void CTargetSelector::AssignTargets(TradeSetup &setup, CTFContext* liqCtx, strin
      }
    else
      {
-      tp3 = forBuy ? tp2 + fallbackStep : tp2 - fallbackStep;
+      tp3 = forBuy ? entryPrice + fallbackTp3Distance : entryPrice - fallbackTp3Distance;
+      // A liquidity-derived TP2 may exceed the nominal tier; never move TP3
+      // backward. Keep at least 0.75R beyond TP2 in that case.
+      if(forBuy && tp3 <= tp2) tp3 = tp2 + 0.75 * riskDist;
+      if(!forBuy && tp3 >= tp2) tp3 = tp2 - 0.75 * riskDist;
       src3 = 0;
      }
 
