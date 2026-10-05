@@ -3,7 +3,7 @@
 //|                                            Medis Touch Indicator  |
 //+------------------------------------------------------------------+
 #property copyright "Medis Touch"
-#property version   "2.25"
+#property version   "2.26"
 #property indicator_chart_window
 #property indicator_buffers 0
 #property indicator_plots   0
@@ -70,6 +70,7 @@ input int    InpMaxRegimeTrendBOSAgeBars = 12;
 
 input group "Risk"
 input double InpMinRiskReward = 1.5;
+input double InpMinTP1RiskReward = 1.25;
 input double InpMaxSLDistanceATR = 1.5;
 input double InpSLBufferATR = 0.25;        // invalidation margin beyond FVG far edge, in ATR (audit #23 fix)
 input double InpMinStopSpreadMult = 3.0;   // floor: SL distance from entry never below (current spread * this) -- check against real Pepperstone/Exness spread in Tester
@@ -241,7 +242,7 @@ int OnInit()
                     InpSMTInverseCorrelation);
 
    g_decision.Init(&g_fvgCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, &g_validator,
-                   InpSLBufferATR, InpMinStopSpreadMult, InpMinRiskReward);
+                   InpSLBufferATR, InpMinStopSpreadMult, InpMinRiskReward, InpMinTP1RiskReward);
    g_visuals.Init(&g_objMan);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);
