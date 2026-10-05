@@ -318,3 +318,19 @@ def test_mql5_version_is_222():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
         assert '#property version   "2.22"' in c
+
+
+def test_v223_target_fallback_is_non_compounding_and_monotonic():
+    t = read("EA/includes/Trading/Targets.mqh")
+    assert "fallbackTp1RR = MathMax(minRR, 1.5)" in t
+    assert "fallbackTp2RR = MathMax(MathMax(fallbackTp1RR + 0.5, 2.0), minRR + 0.5)" in t
+    assert "fallbackTp3RR = MathMax(MathMax(fallbackTp2RR + 0.75, 3.0), minRR + 1.5)" in t
+    assert "entryPrice + fallbackTp2Distance" in t
+    assert "entryPrice + fallbackTp3Distance" in t
+    assert "1.5R / 3.0R / 4.5R" in t
+
+
+def test_mql5_version_is_223():
+    for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
+        c = read(path)
+        assert '#property version   "2.23"' in c
