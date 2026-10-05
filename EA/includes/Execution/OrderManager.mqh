@@ -198,11 +198,18 @@ bool COrderManager::Submit(const TradeDecisionRecord &decision, double volume, b
       if(SymbolInfoTick(decision.symbol, tick))
         {
          double marketPrice = (decision.setup.type == ORDER_TYPE_BUY) ? tick.ask : tick.bid;
-         double deviation = MathAbs(marketPrice - entry);
-         if(deviation > maxEntryDeviation)
+         // Only ADVERSE drift invalidates the setup. A better-than-theoretical
+         // fill is not stale: for a buy, a price below the zone's worse edge
+         // improves R/R; for a sell, a price above the zone's worse edge does
+         // the same. The old absolute-distance check discarded those valid
+         // opportunities and reduced frequency without protecting risk.
+         double adverseDrift = (decision.setup.type == ORDER_TYPE_BUY)
+                               ? (marketPrice - entry)
+                               : (entry - marketPrice);
+         if(adverseDrift > maxEntryDeviation)
            {
-            PrintFormat("MedisTouch OrderManager: decision #%d rejected — market price %.5f has drifted %.5f from decision entry %.5f (max allowed %.5f). Signal is stale.",
-                        decision.decision_id, marketPrice, deviation, entry, maxEntryDeviation);
+            PrintFormat("MedisTouch OrderManager: decision #%d rejected — adverse market drift %.5f from decision entry %.5f (max allowed %.5f).",
+                        decision.decision_id, adverseDrift, entry, maxEntryDeviation);
             return false;
            }
         }
