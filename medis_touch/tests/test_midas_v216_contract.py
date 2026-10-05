@@ -129,9 +129,10 @@ def test_v219_tp1_precision_gate_is_explicit_and_fail_closed():
     assert "InpMinTP1PrecisionProbability = 87.0" in main
     assert "InpMinTP1PrecisionSample = 50" in main
     assert "InpRequireTP1ContextCalibration = true" in main
-    assert "sampleOk" in main
+    assert "minSample" in main
     assert "contextOk" in main
-    assert "probabilityOk" in main
+    assert "winProbabilityOk" in main
+    assert "tp1ProbabilityOk" in main
     assert "if(!precisionPass)" in main
 
 
@@ -160,13 +161,37 @@ def test_v217_tradezone_rejects_invalid_target_plan_before_persistence():
 
 def test_v217_indicator_uses_same_min_rr_as_live_trade_decision():
     c = read("EA/MedisTouch_Indicator_v2.8.mq5")
-    assert "InpMinRiskReward);" in c
+    assert "ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, currentATR)" in c
+    assert "ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, currentATR)" in c
 
 def test_v217_telemetry_preserves_64_bit_decision_identity():
     publisher = read("EA/includes/Signals/SignalPublisher.mqh")
     logger = read("EA/includes/Core/SignalLogger.mqh")
     assert '"decision_id":%I64d' in publisher
-    assert '%I64d", (long)' in logger
+    assert "%I64d" in logger
+
+def test_v227_precision_hardening_is_explicit_and_shared_by_ea_and_indicator():
+    ea = read("EA/MedisTouch_v2.8.mq5")
+    ind = read("EA/MedisTouch_Indicator_v2.8.mq5")
+    chain = read("EA/includes/Analysis/SMCChain.mqh")
+    validator = read("EA/includes/Analysis/StructuralValidator.mqh")
+    zone = read("EA/includes/Trading/TradeZone.mqh")
+    targets = read("EA/includes/Trading/Targets.mqh")
+    assert "InpMinStructuralQuality = 60.0" in ea
+    assert "InpMinChainRejectionRatio = 0.30" in ea
+    assert "InpMaxFVGAgeBars = 8" in ea
+    assert "InpMinChainDisplacementATR = 1.10" in ea
+    assert "InpMinChainStructureStrength = 0.50" in ea
+    assert "InpMinDirectionalAdvantage = 5.0" in ea
+    assert "InpMinStructuralQuality = 60.0" in ind
+    assert "InpMinChainRejectionRatio = 0.30" in ind
+    assert "m_minRejectionRatio" in chain
+    assert "ratio >= m_minRejectionRatio" in chain
+    assert "m_minStructuralQuality" in zone
+    assert "sv.structural_quality < m_minStructuralQuality" in zone
+    assert "minRejectionRatio" in validator
+    assert "tp1MinRR * riskDist" in targets
+
 
 def test_v217_low_vol_gate_fails_closed_on_undefined_regime():
     c = read("EA/includes/Analysis/Scoring.mqh")
@@ -268,7 +293,7 @@ def test_v219_calibration_pools_only_adjacent_buckets_inside_same_context():
 def test_mql5_version_is_219():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
-        assert '#property version   "2.23"' in c
+        assert '#property version   "2.27"' in c
 
 
 def test_v220_tradezone_uses_validated_causal_chain_confidence():
@@ -289,10 +314,10 @@ def test_v220_tradezone_uses_validated_causal_chain_confidence():
 def test_v220_calibration_population_is_versioned_with_new_confidence_semantics():
     cfg = read("EA/includes/Core/Config.mqh")
     main = read("EA/MedisTouch_v2.8.mq5")
-    assert 'MIDAS_ENGINE_VERSION "2.24"' in cfg
-    assert 'MIDAS_WEIGHT_SET_VERSION "SMC-CAUSAL-2.24"' in cfg
-    assert 'InpWeightSetVersion = "SMC-CAUSAL-2.24"' in main
-    assert '#property version   "2.24"' in main
+    assert 'MIDAS_ENGINE_VERSION "2.27"' in cfg
+    assert 'MIDAS_WEIGHT_SET_VERSION "SMC-CAUSAL-2.27"' in cfg
+    assert 'InpWeightSetVersion = "SMC-CAUSAL-2.27"' in main
+    assert '#property version   "2.27"' in main
 
 
 def test_v221_precision_gate_tracks_before_execution_filter():
@@ -325,12 +350,13 @@ def test_mql5_version_is_222():
 
 def test_v223_target_fallback_is_non_compounding_and_monotonic():
     t = read("EA/includes/Trading/Targets.mqh")
-    assert "fallbackTp1RR = MathMax(minRR, 1.5)" in t
+    assert "fallbackTp1RR = MathMax(tp1MinRR, 1.25)" in t
+    assert "entryPrice, tp1MinRR * riskDist" in t
     assert "fallbackTp2RR = MathMax(MathMax(fallbackTp1RR + 0.5, 2.0), minRR + 0.5)" in t
     assert "fallbackTp3RR = MathMax(MathMax(fallbackTp2RR + 0.75, 3.0), minRR + 1.5)" in t
     assert "entryPrice + fallbackTp2Distance" in t
     assert "entryPrice + fallbackTp3Distance" in t
-    assert "1.5R / 3.0R / 4.5R" in t
+    assert "1.5R / 2.0R / 3.0R" in t
 
 
 def test_mql5_version_is_223():
@@ -350,7 +376,7 @@ def test_v224_single_direction_risk_validation_uses_closed_bar_atr():
 def test_v224_entry_drift_rejects_only_adverse_motion():
     om = read("EA/includes/Execution/OrderManager.mqh")
     assert "double adverseDrift" in om
-    assert "A better-than-theoretical" in om
+    assert "Asymmetric bounded drift" in om
     assert "if(adverseDrift > maxEntryDeviation)" in om
     assert "double deviation = MathAbs(marketPrice - entry)" not in om
 
@@ -379,4 +405,4 @@ def test_v225_entry_drift_is_asymmetric_but_bounded():
 def test_mql5_version_is_225():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
-        assert '#property version   "2.25"' in c
+        assert '#property version   "2.27"' in c
