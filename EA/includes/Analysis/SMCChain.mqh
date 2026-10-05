@@ -323,7 +323,7 @@ bool CSMCChainBuilder::FindCausalFVG(bool forBuy, int structureBar, int displace
       if(z.state != FVG_FRESH && z.state != FVG_TESTED) continue;
       if(z.bar_index < 1) continue;
 
-      int age = MathMax(0, z.bar_index - 1);
+      int age = MathMax(0, z.bar_index - 2);
       if(age > m_maxFVGAgeBars) continue;
 
       // FVG bar_index is the middle candle of the three-candle pattern.
