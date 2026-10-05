@@ -428,7 +428,8 @@ int OnInit()
                     InpSMTInverseCorrelation);
 
    g_decision.Init(&g_fvgCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, &g_validator,
-                   InpSLBufferATR, InpMinStopSpreadMult, InpMinRiskReward, InpMinTP1RiskReward);
+                   InpSLBufferATR, InpMinStopSpreadMult, InpMinRiskReward, InpMinTP1RiskReward,
+                   InpMinStructuralQuality);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);
    // Deliberately the SAME values driving g_positions/g_risk below — so the
