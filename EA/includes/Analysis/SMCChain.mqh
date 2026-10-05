@@ -68,6 +68,7 @@ private:
    double      m_minDisplacementATR;
    double      m_minDisplacementBodyRatio;
    double      m_minStructureStrength;
+   double      m_minRejectionRatio;
    bool        m_requirePremiumDiscount;
 
    bool FindStructure(bool forBuy, int minBar, BOSEvent &bosOut, CHOCHPoint &chochOut,
@@ -93,7 +94,8 @@ public:
              double minDisplacementATR = 1.0,
              double minDisplacementBodyRatio = 0.55,
              double minStructureStrength = 0.45,
-             bool requirePremiumDiscount = true);
+             bool requirePremiumDiscount = true,
+             double minRejectionRatio = 0.30);
 
    SMCChain Build(bool forBuy);
    string StatusToString(ENUM_CHAIN_STATUS status) const;
@@ -107,6 +109,7 @@ CSMCChainBuilder::CSMCChainBuilder()
     m_minDisplacementATR(1.0),
     m_minDisplacementBodyRatio(0.55),
     m_minStructureStrength(0.45),
+    m_minRejectionRatio(0.30),
     m_requirePremiumDiscount(true)
   {}
 
@@ -117,7 +120,8 @@ void CSMCChainBuilder::Init(CTFContext* entryCtx,
                             double minDisplacementATR,
                             double minDisplacementBodyRatio,
                             double minStructureStrength,
-                            bool requirePremiumDiscount)
+                            bool requirePremiumDiscount,
+                            double minRejectionRatio)
   {
    m_entryCtx = entryCtx;
    m_maxSweepToStructureBars = MathMax(1, maxSweepToStructureBars);
@@ -126,6 +130,7 @@ void CSMCChainBuilder::Init(CTFContext* entryCtx,
    m_minDisplacementATR = MathMax(0.1, minDisplacementATR);
    m_minDisplacementBodyRatio = MathMax(0.1, MathMin(1.0, minDisplacementBodyRatio));
    m_minStructureStrength = MathMax(0.0, MathMin(1.0, minStructureStrength));
+   m_minRejectionRatio = MathMax(0.0, MathMin(1.0, minRejectionRatio));
    m_requirePremiumDiscount = requirePremiumDiscount;
   }
 
@@ -258,7 +263,7 @@ bool CSMCChainBuilder::ValidateRejection(bool forBuy, const LiquidityEvent &swee
 
    // Require a completed reclaim. The liquidity detector already requires
    // close-back-inside; this adds a minimum amount of actual rejection.
-   return (ratio >= 0.20);
+   return (ratio >= m_minRejectionRatio);
   }
 
 bool CSMCChainBuilder::FindDisplacement(bool forBuy, int structureBar, int sweepBar,
