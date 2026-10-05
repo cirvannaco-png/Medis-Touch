@@ -30,7 +30,7 @@ private:
 
 public:
    static void       AssignTargets(TradeSetup &setup, CTFContext* liqCtx, string symbol,
-                                   double atr, double entryPrice, double minRR = 1.5,
+                                   double atr, double entryPrice, double minRR = 1.5, double tp1MinRR = 1.25,
                                    ENUM_MARKET_REGIME regime = REGIME_UNDEFINED);
   };
 //+------------------------------------------------------------------+
@@ -102,7 +102,7 @@ bool CTargetSelector::WeeklyLevel(string symbol, bool forBuy, double &outPrice)
   }
 //+------------------------------------------------------------------+
 void CTargetSelector::AssignTargets(TradeSetup &setup, CTFContext* liqCtx, string symbol,
-                                    double atr, double entryPrice, double minRR,
+                                    double atr, double entryPrice, double minRR, double tp1MinRR,
                                     ENUM_MARKET_REGIME regime)
   {
    setup.target_plan_valid = false;
@@ -117,7 +117,7 @@ void CTargetSelector::AssignTargets(TradeSetup &setup, CTFContext* liqCtx, strin
    // Fallback targets use explicit RR tiers rather than repeatedly adding the
    // minimum distance. With minRR=1.5 this yields a controlled 1.5R / 2.0R /
    // 3.0R ladder instead of the old 1.5R / 3.0R / 4.5R compounding.
-   double fallbackTp1RR = MathMax(minRR, 1.5);
+   double fallbackTp1RR = MathMax(tp1MinRR, 1.25);
    double fallbackTp2RR = MathMax(MathMax(fallbackTp1RR + 0.5, 2.0), minRR + 0.5);
    double fallbackTp3RR = MathMax(MathMax(fallbackTp2RR + 0.75, 3.0), minRR + 1.5);
 
@@ -134,13 +134,13 @@ void CTargetSelector::AssignTargets(TradeSetup &setup, CTFContext* liqCtx, strin
 
    if(preferExternalFirst)
      {
-      if(NearestBeyond(liqCtx, false, forBuy, entryPrice, minimumDistance, 0.0, false, tp1)) src1 = 2;
-      else if(NearestBeyond(liqCtx, true, forBuy, entryPrice, minimumDistance, 0.0, false, tp1)) src1 = 1;
+      if(NearestBeyond(liqCtx, false, forBuy, entryPrice, tp1MinimumDistance, 0.0, false, tp1)) src1 = 2;
+      else if(NearestBeyond(liqCtx, true, forBuy, entryPrice, tp1MinimumDistance, 0.0, false, tp1)) src1 = 1;
      }
    else
      {
-      if(NearestBeyond(liqCtx, true, forBuy, entryPrice, minimumDistance, 0.0, false, tp1)) src1 = 1;
-      else if(NearestBeyond(liqCtx, false, forBuy, entryPrice, minimumDistance, 0.0, false, tp1)) src1 = 2;
+      if(NearestBeyond(liqCtx, true, forBuy, entryPrice, tp1MinimumDistance, 0.0, false, tp1)) src1 = 1;
+      else if(NearestBeyond(liqCtx, false, forBuy, entryPrice, tp1MinimumDistance, 0.0, false, tp1)) src1 = 2;
      }
 
    if(tp1 <= 0.0)
@@ -211,9 +211,10 @@ void CTargetSelector::AssignTargets(TradeSetup &setup, CTFContext* liqCtx, strin
    bool directional = forBuy ? (tp1 > entryPrice && tp2 > tp1 && tp3 > tp2)
                              : (tp1 < entryPrice && tp2 < tp1 && tp3 < tp2);
    setup.target_plan_valid = directional &&
-                             setup.tp1_rr >= minRR &&
-                             setup.tp2_rr >= setup.tp1_rr &&
-                             setup.tp3_rr >= setup.tp2_rr;
+                             setup.tp1_rr >= tp1MinRR &&
+                             setup.tp2_rr >= minRR &&
+                             setup.tp3_rr >= setup.tp2_rr &&
+                             setup.tp3_rr >= minRR;
   }
 #endif
 //+------------------------------------------------------------------+
