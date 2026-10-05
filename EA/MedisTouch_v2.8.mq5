@@ -414,6 +414,7 @@ int OnInit()
                     InpMinChainDisplacementBodyRatio,
                     InpMinChainStructureStrength,
                     InpRequirePremiumDiscount,
+                    InpMinChainRejectionRatio,
                     InpRequireContinuationHTFAlignment,
                     0.0,
                     InpSMTReferenceSymbol,
