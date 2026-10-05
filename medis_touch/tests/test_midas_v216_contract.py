@@ -290,3 +290,11 @@ def test_v220_calibration_population_is_versioned_with_new_confidence_semantics(
     assert 'MIDAS_WEIGHT_SET_VERSION "SMC-CAUSAL-2.20"' in cfg
     assert 'InpWeightSetVersion = "SMC-CAUSAL-2.20"' in main
     assert '#property version   "2.20"' in main
+
+
+def test_v221_precision_gate_tracks_before_execution_filter():
+    c = read("EA/MedisTouch_v2.8.mq5")
+    gate = c.index("if(InpUseTP1PrecisionGate &&")
+    tracking = c.index("if(InpTrackOutcomes)\n      g_tracker.AddSetup(chosen, decision.decision_id);")
+    assert tracking < gate
+    assert "v2.21: shadow-track every policy-valid setup BEFORE the execution" in c
