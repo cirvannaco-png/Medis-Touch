@@ -41,6 +41,7 @@ private:
    // "not configured" — it round-trips to the bridge as an empty string,
    // not a fabricated label.
    string               m_weightVersion;
+   ENUM_TIMEFRAMES       m_signalTF;
 
    bool                 TransmitOne(string endpoint, const string &payload);
    bool                 TransmitOnePatch(string endpoint, const string &payload);
@@ -81,6 +82,7 @@ public:
                                         string sweepGrade, bool htfObAligned, double confidenceAtSignal,
                                         double confidenceDecayed, int decayBars);
    void                 SetWeightVersion(string v) { m_weightVersion = v; }
+   void                 SetSignalTimeframe(ENUM_TIMEFRAMES tf) { m_signalTF = tf; }
    // v2.11. Public wrapper so callers outside this class (OutcomeTracker,
    // building the signal_id an outcome must attach to) use the exact same
    // convention as Publish() itself, rather than duplicating the "MT#"
@@ -95,6 +97,7 @@ void CSignalPublisher::Init(string symbol, CSubscriberPlatform* platform, int ti
    m_timeoutMs = timeoutMs;
    m_apiKey = apiKey;
    m_weightVersion = "";
+   m_signalTF = PERIOD_CURRENT;
    if(StringLen(m_apiKey) == 0)
       Print("MedisTouch SignalPublisher: InpBridgeApiKey is blank — every WebRequest to the bridge will be ",
             "rejected with HTTP 401 until it's set to match the backend's SECRET_KEY.");
@@ -182,19 +185,43 @@ string CSignalPublisher::BuildExtraJson(const TradeDecisionRecord &dec)
 
    string sweepGradeStr = EnumToString(r.sweep_grade);
    string newsRiskStr = EnumToString(r.news_risk);
+   string family = "SMC";
+   if(dec.setup.family == SETUP_FAMILY_REVERSAL) family = "SMC_REVERSAL";
+   else if(dec.setup.family == SETUP_FAMILY_CONTINUATION) family = "SMC_CONTINUATION";
 
    return StringFormat(
-      "{\"pips_sl\":%.1f,\"pips_tp1\":%.1f,\"pips_tp2\":%.1f,\"rr_tp1\":%.2f,\"rr_tp2\":%.2f,"
+      "{\"setup_id\":\"%s\",\"chain_id\":\"%I64u\",\"entry_top\":%.5f,\"entry_bottom\":%.5f,"
+      "\"invalidation\":%.5f,\"structural_quality\":%.1f,\"pips_sl\":%.1f,\"pips_tp1\":%.1f,\"pips_tp2\":%.1f,"
+      "\"rr_tp1\":%.2f,\"rr_tp2\":%.2f,\"family\":\"%s\","
       "\"sweep_grade\":\"%s\",\"bos_strength\":%.1f,\"time_decay\":%.1f,"
       "\"chase_dist_atr\":%.2f,\"chase_ok\":%s,"
       "\"news_risk\":\"%s\",\"news_label\":\"%s\",\"news_minutes_to_event\":%d,"
-      "\"calibrated_probability\":%.1f,\"calibration_sample\":%d,\"calibration_has_enough_data\":%s}",
-      pipsSl, pipsTp1, pipsTp2, rrTp1, rrTp2,
+      "\"regime\":\"%s\",\"regime_quality\":%.1f,\"regime_age_bars\":%d,\"regime_compatible\":%s,"
+      "\"target_plan_valid\":%s,\"tp1_rr\":%.2f,\"tp2_rr\":%.2f,\"tp3_rr\":%.2f,"
+      "\"tp1_quality\":%.1f,\"tp2_quality\":%.1f,\"tp3_quality\":%.1f,"
+      "\"tp1_calibrated_probability\":%.1f,\"tp2_calibrated_probability\":%.1f,\"tp3_calibrated_probability\":%.1f,"
+      "\"calibrated_probability\":%.1f,\"calibration_sample\":%d,"
+      "\"calibration_context_used\":%s,\"calibration_has_enough_data\":%s,"
+      "\"tp1_calibration_sample\":%d,\"tp1_calibration_context_used\":%s,\"tp1_calibration_has_enough_data\":%s}",
+      dec.setup.setup_id, dec.setup.smc_chain_id, dec.setup.entry_top, dec.setup.entry_bottom,
+      dec.setup.invalidation, dec.setup.structural_quality,
+      pipsSl, pipsTp1, pipsTp2, rrTp1, rrTp2, family,
       sweepGradeStr, r.bos_strength * 100.0, r.time_decay * 100.0,
       r.chase_dist_atr, r.chase_ok ? "true" : "false",
       newsRiskStr, r.news_label, r.news_minutes_to_event,
+      EnumToString(r.regime), r.regime_quality, r.regime_age_bars,
+      r.regime_compatible ? "true" : "false",
+      dec.setup.target_plan_valid ? "true" : "false",
+      dec.setup.tp1_rr, dec.setup.tp2_rr, dec.setup.tp3_rr,
+      dec.setup.tp1_quality, dec.setup.tp2_quality, dec.setup.tp3_quality,
+      dec.setup.tp1_calibrated_probability, dec.setup.tp2_calibrated_probability,
+      dec.setup.tp3_calibrated_probability,
       dec.setup.calibrated_probability, dec.setup.calibration_sample,
-      dec.setup.calibration_has_enough_data ? "true" : "false");
+      dec.setup.calibration_context_used ? "true" : "false",
+      dec.setup.calibration_has_enough_data ? "true" : "false",
+      dec.setup.tp1_calibration_sample,
+      dec.setup.tp1_calibration_context_used ? "true" : "false",
+      dec.setup.tp1_calibration_has_enough_data ? "true" : "false");
   }
 //+------------------------------------------------------------------+
 string CSignalPublisher::BuildJsonPayload(const TradeDecisionRecord &dec)
@@ -202,7 +229,8 @@ string CSignalPublisher::BuildJsonPayload(const TradeDecisionRecord &dec)
    bool isBuy = (dec.setup.type == ORDER_TYPE_BUY);
    double entry = isBuy ? dec.setup.entry_top : dec.setup.entry_bottom;
    string dir = isBuy ? "BUY" : "SELL";
-   string tf = EnumToString((ENUM_TIMEFRAMES)Period());
+   ENUM_TIMEFRAMES publishTF = (m_signalTF == PERIOD_CURRENT ? (ENUM_TIMEFRAMES)Period() : m_signalTF);
+   string tf = EnumToString(publishTF);
    StringReplace(tf, "PERIOD_", ""); // EnumToString gives "PERIOD_M15"; schema's VALID_TIMEFRAMES wants "M15"
 
    // v2.11 — promoted out of BuildExtraJson's blob into top-level fields
@@ -217,16 +245,16 @@ string CSignalPublisher::BuildJsonPayload(const TradeDecisionRecord &dec)
    string sweepGradeStr = EnumToString(r.sweep_grade);
 
    return StringFormat(
-      "{\"signal_id\":\"%s\",\"decision_id\":%d,\"symbol\":\"%s\",\"direction\":\"%s\",\"entry\":%.5f,\"sl\":%.5f,"
+      "{\"signal_id\":\"%s\",\"decision_id\":%I64d,\"symbol\":\"%s\",\"direction\":\"%s\",\"entry\":%.5f,\"sl\":%.5f,"
       "\"tp1\":%.5f,\"tp2\":%.5f,\"final_tp\":%.5f,\"confidence\":%.1f,\"reasons\":%s,\"timeframe\":\"%s\","
       "\"time\":\"%s\",\"regime\":\"%s\",\"session\":\"%s\",\"sweep_grade\":\"%s\",\"htf_ob_aligned\":%s,"
-      "\"weight_version\":\"%s\",\"extra\":%s}",
+      "\"weight_version\":\"%s\",\"expires_at\":%d,\"extra\":%s}",
       SignalIdFor(dec.decision_id), dec.decision_id, dec.symbol, dir, entry, dec.setup.stop_loss,
       dec.setup.tp1, dec.setup.tp2, dec.setup.final_tp, dec.setup.confidence,
       BuildReasonsJsonArray(dec.setup.reasons), tf,
       TimeToString(dec.decided_time, TIME_DATE | TIME_SECONDS),
       regimeStr, sessionStr, sweepGradeStr, r.htf_ob_confluence ? "true" : "false",
-      m_weightVersion, BuildExtraJson(dec));
+      m_weightVersion, (long)dec.setup.expiry_time, BuildExtraJson(dec));
   }
 //+------------------------------------------------------------------+
 bool CSignalPublisher::TransmitOne(string endpoint, const string &payload)

@@ -202,13 +202,33 @@ public:
    // v2.10. Half-life, in unfilled bars, of the diagnostic confidence
    // decay. 12 bars is the spec's starting point, not a fitted value.
    void              ConfigureConfidenceDecay(double halfLifeBars = 12.0) { m_decayHalfLifeBars = halfLifeBars; }
-   void              ConfigureCalibration(bool enabled, int minSample = 30) { m_calibrationEnabled = enabled; m_calibration.Init(m_symbol, minSample); }
+   void              ConfigureCalibration(bool enabled, int minSample = 30)
+     {
+      m_calibrationEnabled = enabled;
+      m_calibration.Init(m_symbol, minSample, false, MIDAS_WEIGHT_SET_VERSION);
+     }
+   double            GetContextCalibratedProbability(double confidence, ENUM_MARKET_REGIME regime,
+                                                     ENUM_SETUP_FAMILY family, int &sampleSizeOut,
+                                                     bool &hasEnoughDataOut, bool &contextUsedOut) const
+     {
+      return m_calibration.GetContextCalibratedProbability(confidence, regime, family,
+                                                            sampleSizeOut, hasEnoughDataOut, contextUsedOut);
+     }
    // v2.11. OFF by default (NULL publisher) — call once after Init(),
    // same pattern as ConfigureSimulation/ConfigureCalibration. When set,
    // FinalizeExit() and Resolve() push every outcome to the bridge in
    // addition to the existing local-CSV LogOutcome() call.
    void              ConfigurePublishing(CSignalPublisher* publisher, string weightVersion)
      { m_publisher = publisher; m_weightVersion = weightVersion; }
+   double            GetTargetCalibratedProbability(int targetIndex, double confidence,
+                                                     ENUM_MARKET_REGIME regime, ENUM_SETUP_FAMILY family,
+                                                     int &sampleSizeOut, bool &hasEnoughDataOut,
+                                                     bool &contextUsedOut) const
+     {
+      return m_calibration.GetTargetCalibratedProbability(targetIndex, confidence, regime, family,
+                                                           sampleSizeOut, hasEnoughDataOut, contextUsedOut);
+     }
+
    double            GetCalibratedProbability(double confidence, int &sampleSizeOut, bool &hasEnoughDataOut) const
      { return m_calibration.GetCalibratedProbability(confidence, sampleSizeOut, hasEnoughDataOut); }
    const CCalibrationEngine* CalibrationEngine() const { return GetPointer(m_calibration); }
@@ -316,7 +336,11 @@ void COutcomeTracker::ApplyPartial(PendingSetup &p, double triggerPrice, bool is
       double closeLots = p.lots * m_partialFraction;
       CloseSlice(p, closeLots, triggerPrice, isBuy);
      }
+   // TP1 calibration is a REALIZED milestone, not a candle-touch
+   // observation. This function is called only after the bar-level
+   // collision logic has decided TP1 was reached before the operative SL.
    p.partialDone = true;
+   p.tp1Hit = true;
   }
 //+------------------------------------------------------------------+
 bool COutcomeTracker::IntrabarReplayGeneric(bool isBuy, CandleData &bar0, double adverseLevel, double favorableLevel, bool &favorableFirst)
@@ -419,7 +443,12 @@ void COutcomeTracker::FinalizeExit(int idx, PendingSetup &p, string outcome, dou
          // signal time — see CalibrationEngine.mqh limitation #4 about
          // what happens to this data across a scoring-formula change.
          if(m_calibrationEnabled)
-            m_calibration.Record(p.setup.confidence, p.realizedPnL);
+           {
+            bool tp3Reached = (outcome == "FinalTP_Hit");
+            m_calibration.Record(p.setup.confidence, p.realizedPnL,
+                                 p.setup.reasons.regime, p.setup.family,
+                                 p.tp1Hit, p.tp2Hit, tp3Reached);
+           }
         }
      }
 
@@ -595,15 +624,35 @@ void COutcomeTracker::ProcessFilledBar(int idx, CandleData &bar0)
             m_pending[idx] = p;
             continue;
            }
+         // TP1 is a structural target milestone and must not be skipped
+         // merely because the configured BE trigger sits beyond TP1. If TP1
+         // is reached first, protect at the actual sizing entry and continue
+         // into the normal partial-close state machine.
+         double earlyTP1 = p.setup.tp1;
+         if(earlyTP1 <= 0.0)
+            earlyTP1 = isBuy ? p.sizingEntryPrice + m_partialAtR * p.mgmtRiskDist
+                             : p.sizingEntryPrice - m_partialAtR * p.mgmtRiskDist;
+         bool earlyTP1Touched = isBuy ? (bar0.high >= earlyTP1) : (bar0.low <= earlyTP1);
+         if(earlyTP1Touched)
+           {
+            p.currentSL = p.sizingEntryPrice;
+            p.beDone = true;
+            m_pending[idx] = p;
+            continue;
+           }
+
          break; // nothing happened this bar
         }
 
-      // 2b. Partial stage (only reachable once breakeven is done, same
-      // order CPositionManager enforces).
+      // 2b. Target-aware TP1 partial (mirrors CPositionManager).
+      // Legacy m_partialAtR remains only as a fallback for pre-v2.17
+      // restored decisions that have no valid TP1.
       if(!p.partialDone)
         {
-         double partialTrigger = isBuy ? p.sizingEntryPrice + m_partialAtR * p.mgmtRiskDist
-                                        : p.sizingEntryPrice - m_partialAtR * p.mgmtRiskDist;
+         double partialTrigger = p.setup.tp1;
+         if(partialTrigger <= 0.0)
+            partialTrigger = isBuy ? p.sizingEntryPrice + m_partialAtR * p.mgmtRiskDist
+                                   : p.sizingEntryPrice - m_partialAtR * p.mgmtRiskDist;
          bool partialTouched = isBuy ? (bar0.high >= partialTrigger) : (bar0.low <= partialTrigger);
 
          if(adverseTouched && partialTouched)
@@ -623,7 +672,52 @@ void COutcomeTracker::ProcessFilledBar(int idx, CandleData &bar0)
             m_pending[idx] = p;
             continue;
            }
-         break;
+         break; // TP1 not reached — do not activate runner logic early
+        }
+
+      // 2c. TP2 profit protection. Once TP2 is touched after the partial,
+      // move the operative stop to TP1. This intentionally does not close
+      // another slice; it locks in the target-plan's first realized
+      // milestone while leaving the runner available for final_tp.
+      if(p.partialDone && p.setup.tp2 > 0.0)
+        {
+         bool tp2Touched = isBuy ? (bar0.high >= p.setup.tp2) : (bar0.low <= p.setup.tp2);
+         if(tp2Touched && p.setup.tp1 > 0.0)
+           {
+            // If the bar also touches the operative SL, resolve the order
+            // under the configured fill policy instead of giving TP2
+            // precedence merely because this branch runs first.
+            if(adverseTouched)
+              {
+               bool ambiguous;
+               bool favorableFirst = ResolveOrder(isBuy, bar0, adverseLevel, p.setup.tp2, ambiguous);
+               if(ambiguous)
+                 {
+                  FinalizeExit(idx, p, "Ambiguous_SLandTP2", bar0.close, true, true);
+                  return;
+                 }
+               if(!favorableFirst)
+                 {
+                  FinalizeExit(idx, p, SLHitLabel(p), adverseLevel, false, false);
+                  return;
+                 }
+              }
+
+            // TP2 is also a realized milestone: this point is
+            // reached only after same-bar collision resolution has cleared
+            // the operative stop.
+            p.tp2Hit = true;
+
+            bool improvedLock = isBuy ? (p.setup.tp1 > p.currentSL)
+                                      : (p.setup.tp1 < p.currentSL);
+            if(improvedLock)
+              {
+               p.currentSL = p.setup.tp1;
+               m_pending[idx] = p;
+               continue;
+              }
+            m_pending[idx] = p;
+           }
         }
 
       // 3. Pure runner — the stop only trails (never widens). A hit on
@@ -709,6 +803,13 @@ void COutcomeTracker::Update(CTFContext* fvgCtx)
                p.totalSlippageCost = m_slippagePoints * PointSize() * p.lots * valuePerUnit;
               }
             m_pending[i] = p;
+
+            // OHLC cannot tell whether the target/stop was reached before or
+            // after the entry within this same candle. Do not manufacture an
+            // ordering assumption: the fill is recorded now, and management
+            // starts from the next bar unless a dedicated intrabar sequencer
+            // is used.
+            continue;
            }
          else
            {
@@ -742,18 +843,9 @@ void COutcomeTracker::Update(CTFContext* fvgCtx)
         }
       m_pending[i] = p;
 
-      // TP1/TP2 stay informational touch-flags only — see file header
-      // point 2 on why they don't drive any $ event.
-      if(isBuy)
-        {
-         if(!p.tp1Hit && bar0.high >= p.setup.tp1) m_pending[i].tp1Hit = true;
-         if(!p.tp2Hit && bar0.high >= p.setup.tp2) m_pending[i].tp2Hit = true;
-        }
-      else
-        {
-         if(!p.tp1Hit && bar0.low <= p.setup.tp1) m_pending[i].tp1Hit = true;
-         if(!p.tp2Hit && bar0.low <= p.setup.tp2) m_pending[i].tp2Hit = true;
-        }
+      // Target milestones are set only by ProcessFilledBar() after
+      // the configured fill policy resolves any same-bar collision. Raw
+      // OHLC touches are NOT sufficient evidence for calibration.
 
       ProcessFilledBar(i, bar0); // may resolve and remove index i
      }

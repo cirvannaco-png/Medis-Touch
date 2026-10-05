@@ -137,6 +137,8 @@ private:
    // v2.15: no Init() needed — see Strategies/StrategySelector.mqh, this
    // class only reads values the three engines above already computed.
    CStrategySelector        m_strategySelector;
+   bool                     m_regimeGateEnabled;
+
 
    double            OBScore(bool forBuy);
 
@@ -282,6 +284,11 @@ public:
    // v2.15 addition. Passthrough to CStrategySelector::Configure().
    void              ConfigureStrategySelection(double minSelectionScore = 60.0);
    double            CalculateConfidence(bool forBuy);
+   // v2.20: confidence substrate for an already validated causal SMC chain.
+   // The chain owns sweep/displacement/structure/FVG/location coherence;
+   // independent confluence (HTF trend, volume, Fibonacci, VA, HTF OB) is
+   // layered on top without re-running a second inducement/FVG vote.
+   double            CalculateValidatedConfidence(bool forBuy, const SMCChain &chain);
    void              EvaluateReasons(bool forBuy, SetupReasons &out);
    // v2.10. Call right after EvaluateReasons() with the confidence the
    // additive model actually returned; fills the four v2.10 diagnostic
@@ -299,6 +306,16 @@ public:
    // PopulateConfidenceDiagnostics() — v2.15 needs it to compare against
    // the three strategy scores computed in this same call.
    void              PopulateStrategyDiagnostics(bool forBuy, double confidence, SetupReasons &out);
+   // v2.17: expose the same regime detector used by diagnostics so the live
+   // decision path has one market-state source of truth instead of creating
+   // a second independent detector at the EA layer.
+   ENUM_MARKET_REGIME GetMarketRegime() { return m_regimeDetector.Classify(); }
+   bool              IsRegimeCompatible(bool forBuy, ENUM_SETUP_FAMILY family, string &reason);
+   void              ConfigureRegimeGate(bool enabled) { m_regimeGateEnabled = enabled; }
+   void              ConfigureRegimeFreshness(int maxTrendBOSAgeBars = 12)
+                       { m_regimeDetector.ConfigureFreshness(maxTrendBOSAgeBars); }
+   double            GetRegimeQuality() { return m_regimeDetector.Quality(); }
+   int               GetRegimeAgeBars() { return m_regimeDetector.AgeBars(); }
    InducementResult  GetInducement(bool forBuy) { return m_inducement.Validate(forBuy); }
    ENUM_MARKET_PHASE GetPhase() { return m_phase.Detect(); }
   };
@@ -313,7 +330,8 @@ CScoringEngine::CScoringEngine() : m_trendCtx(NULL), m_bosCtx(NULL), m_liqCtx(NU
                                     m_blockLowVolRegime(false),
                                     m_fvgMaxDistATR(1.25), m_requireChaseFilter(false), m_maxChaseDistATR(0.75),
                                     m_newsFilter(NULL), m_newsWarningMultiplier(0.85),
-                                    m_contradictionWeight(0.25), m_envWeight(1.0), m_execWeight(1.0)
+                                    m_contradictionWeight(0.25), m_envWeight(1.0), m_execWeight(1.0),
+                                    m_regimeGateEnabled(true)
   {
    // Session filter defaults to ON — see ConfigureSessionFilter()'s
    // comment. Unlike the other v2.8 gates this isn't a new, unbacktested
@@ -456,7 +474,7 @@ void CScoringEngine::ConfigureNewsAwareness(CNewsFilter* newsFilter, int warnMin
 double CScoringEngine::CurrentPrice()
   {
    if(m_priceRef == NULL || m_priceRef.Total() == 0) return 0.0;
-   return m_priceRef.GetCandle(0).close;
+   return m_priceRef.GetCandle(1).close;
   }
 //+------------------------------------------------------------------+
 double CScoringEngine::TrendScore(bool forBuy)
@@ -519,7 +537,7 @@ double CScoringEngine::FVGScore(bool forBuy)
   {
    if(m_fvgCtx == NULL || m_fvgCtx.candles.Total() == 0) return 0.0;
    double price = CurrentPrice();
-   double atr = m_fvgCtx.candles.GetATR(0);
+   double atr = m_fvgCtx.candles.GetATR(1);
    if(price <= 0 || atr <= 0) return 0.0;
    ENUM_FVG_DIR wantDir = forBuy ? FVG_BULL : FVG_BEAR;
 
@@ -548,7 +566,7 @@ double CScoringEngine::SRScore(bool forBuy)
   {
    if(m_srCtx == NULL || m_srCtx.candles.Total() == 0) return 0.0;
    double price = CurrentPrice();
-   double atr = m_srCtx.candles.GetATR(0);
+   double atr = m_srCtx.candles.GetATR(1);
    if(price <= 0 || atr <= 0) return 0.0;
 
    for(int i = 0; i < m_srCtx.sr.Count(); i++)
@@ -610,7 +628,7 @@ double CScoringEngine::OBScore(bool forBuy)
    if(m_htfObCtx == NULL) return 0.0;
    double price = CurrentPrice();
    if(price <= 0) return 0.0;
-   double atr = m_htfObCtx.candles.GetATR(0);
+   double atr = m_htfObCtx.candles.GetATR(1);
    if(atr <= 0) return 0.0;
 
    OrderBlockZone z;
@@ -643,7 +661,7 @@ double CScoringEngine::CalculateConfidence(bool forBuy)
    if(m_requireChaseFilter && ind.bosBarIndex >= 0 && m_bosCtx != NULL)
      {
       double price = CurrentPrice();
-      double atr = m_bosCtx.candles.GetATR(0);
+      double atr = m_bosCtx.candles.GetATR(1);
       if(price > 0 && atr > 0)
         {
          double chaseDist = forBuy ? (price - ind.bosClosePrice) : (ind.bosClosePrice - price);
@@ -715,14 +733,11 @@ double CScoringEngine::CalculateConfidence(bool forBuy)
      }
    if(m_blockLowVolRegime)
      {
-      ENUM_VOL_REGIME regime = m_volRegime.Classify(0);
-      if(regime == VOL_REGIME_LOW)
+      ENUM_VOL_REGIME regime = m_volRegime.Classify(1);
+      // Active hard gate: unknown volatility data cannot grant permission.
+      // An undefined regime is therefore treated as unverifiable and fails closed.
+      if(regime == VOL_REGIME_LOW || regime == VOL_REGIME_UNDEFINED)
          return 0.0;
-      // VOL_REGIME_UNDEFINED (not enough ATR history) fails OPEN here,
-      // deliberately inconsistent with the fail-closed CONFIRMATION rule
-      // elsewhere: this is a data-availability gap, not a claim the setup
-      // failed to confirm, and early-history warm-up shouldn't zero every
-      // setup for the first `lookback` bars of a backtest.
      }
 
    score += 5.0 * VolumeScore(forBuy);
@@ -744,6 +759,75 @@ double CScoringEngine::CalculateConfidence(bool forBuy)
    return MathMin(MathMax(normalized, 0.0), 100.0);
   }
 //+------------------------------------------------------------------+
+double CScoringEngine::CalculateValidatedConfidence(bool forBuy, const SMCChain &chain)
+  {
+   if(!m_sessionFilter.IsAllowed()) return 0.0;
+   if(chain.status != CHAIN_VALID || chain.direction != (forBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL))
+      return 0.0;
+   if(chain.quality < 0.0) return 0.0;
+
+   double quality = MathMax(0.0, MathMin(100.0, chain.quality));
+   // 70 points are reserved for the causal chain itself. Its internal
+   // composition already covers sweep/rejection, displacement, structure,
+   // causal FVG, freshness and premium/discount location.
+   double score = 70.0 * quality / 100.0;
+
+   // Independent evidence only. Deliberately DO NOT add FVGScore() or the
+   // legacy inducement score here — doing so double-counts the same causal
+   // structure the validator already proved.
+   score += 15.0 * TrendScore(forBuy);
+
+   if(m_newsFilter != NULL)
+     {
+      string newsLabel; int newsMinutes;
+      ENUM_NEWS_RISK tier = m_newsFilter.GetRiskTier(newsLabel, newsMinutes);
+      if(tier == NEWS_WARNING)
+         score *= m_newsWarningMultiplier;
+     }
+
+   double price = CurrentPrice();
+
+   if(m_requireVolumeConfirmation)
+     {
+      if(m_bosCtx == NULL || m_bosCtx.volume.RVOL(1) < m_rvolThreshold)
+         return 0.0;
+     }
+   if(m_requireFibonacciZone)
+     {
+      if(price <= 0 || m_bosCtx == NULL ||
+         !m_bosCtx.fibonacci.InPullbackZone(forBuy, price, m_fibZoneMinPct, m_fibZoneMaxPct))
+         return 0.0;
+     }
+   if(m_requireValueAreaLocation)
+     {
+      if(price <= 0 || m_srCtx == NULL || !m_srCtx.valueArea.IsValid() ||
+         !m_srCtx.valueArea.LocationOK(forBuy, price))
+         return 0.0;
+     }
+   if(m_requireHtfOB)
+     {
+      if(OBScore(forBuy) <= 0.0)
+         return 0.0;
+     }
+   if(m_blockLowVolRegime)
+     {
+      ENUM_VOL_REGIME regime = m_volRegime.Classify(1);
+      if(regime == VOL_REGIME_LOW || regime == VOL_REGIME_UNDEFINED)
+         return 0.0;
+     }
+
+   // Five-point capped bonuses are independent confluence, not structural
+   // validity. The maximum validated score is 105.
+   score += 5.0 * VolumeScore(forBuy);
+   score += 5.0 * FibonacciScore(forBuy);
+   score += 5.0 * ValueAreaScore(forBuy);
+   score += 5.0 * OBScore(forBuy);
+
+   const double MAX_VALIDATED_SCORE = 105.0;
+   double normalized = (score / MAX_VALIDATED_SCORE) * 100.0;
+   return MathMin(MathMax(normalized, 0.0), 100.0);
+  }
+//+------------------------------------------------------------------+
 double CScoringEngine::PipSize()
   {
    if(m_priceRef == NULL) return 0.0001;
@@ -751,6 +835,16 @@ double CScoringEngine::PipSize()
    // everywhere (Telegram payload, dashboard) instead of a locally
    // re-derived one. Behavior is unchanged — same formula as before.
    return CPipCalculator::PipSize(m_priceRef.Symbol());
+  }
+//+------------------------------------------------------------------+
+bool CScoringEngine::IsRegimeCompatible(bool forBuy, ENUM_SETUP_FAMILY family, string &reason)
+  {
+   if(!m_regimeGateEnabled)
+     {
+      reason = "regime gate disabled (ablation mode)";
+      return true;
+     }
+   return m_regimeDetector.AllowsSetup(forBuy, family, reason);
   }
 //+------------------------------------------------------------------+
 void CScoringEngine::EvaluateReasons(bool forBuy, SetupReasons &out)
@@ -798,12 +892,12 @@ void CScoringEngine::EvaluateReasons(bool forBuy, SetupReasons &out)
    out.htf_ob_confluence = (OBScore(forBuy) > 0.0);
    if(m_htfObCtx != NULL && price > 0)
      {
-      double atr = m_htfObCtx.candles.GetATR(0);
+      double atr = m_htfObCtx.candles.GetATR(1);
       OrderBlockZone z;
       if(atr > 0 && m_htfObCtx.orderBlock.NearestZone(forBuy ? FVG_BULL : FVG_BEAR, price, atr, m_obDistATRMax, z))
          out.htf_ob_state = z.state;
      }
-   out.vol_regime = m_volRegime.Classify(0);
+   out.vol_regime = m_volRegime.Classify(1);
    out.session = m_sessionFilter.CurrentSession();
    out.session_ok = m_sessionFilter.IsAllowed();
 
@@ -816,7 +910,7 @@ void CScoringEngine::EvaluateReasons(bool forBuy, SetupReasons &out)
    out.chase_ok = true;
    if(ind.bosBarIndex >= 0 && m_bosCtx != NULL && price > 0)
      {
-      double atrB = m_bosCtx.candles.GetATR(0);
+      double atrB = m_bosCtx.candles.GetATR(1);
       if(atrB > 0)
         {
          out.chase_dist_atr = (forBuy ? (price - ind.bosClosePrice) : (ind.bosClosePrice - price)) / atrB;

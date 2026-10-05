@@ -208,7 +208,7 @@ bool CBrokerAdapter::ValidateStopDistance(string symbol, double refPrice, double
       return false;
      }
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   if(point <= 0.0) return true; // can't validate without a point size -- a symbol-info failure unrelated to stops shouldn't block the trade
+   if(point <= 0.0) return false; // fail closed: missing point size means stop validity is unknowable
 
    long stopsLevelPts  = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
    long freezeLevelPts = SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL);
@@ -307,8 +307,23 @@ bool CBrokerAdapter::MarketBuy(string symbol, double volume, double sl, double t
      {
       if(m_trade.Buy(volume, symbol, 0.0, sl, tp, comment) && LastRequestOk("MarketBuy"))
         {
+         // A successful CTrade basic check is not enough. Require the
+         // server result to contain a real deal and a real fill price before
+         // exposing this request as an executed position.
+         if(m_trade.ResultDeal() == 0)
+           {
+            Print("MedisTouch BrokerAdapter: MarketBuy returned success without a deal ticket — execution not confirmed.");
+            m_lastLatencyUs = GetMicrosecondCount() - t0;
+            return false;
+           }
          ticketOut = ResolvePositionTicket();
          fillPriceOut = m_trade.ResultPrice();
+         if(ticketOut == 0 || fillPriceOut <= 0.0)
+           {
+            Print("MedisTouch BrokerAdapter: MarketBuy deal exists but position/fill price could not be resolved — execution not confirmed.");
+            m_lastLatencyUs = GetMicrosecondCount() - t0;
+            return false;
+           }
          m_lastLatencyUs = GetMicrosecondCount() - t0;
          return true;
         }
@@ -333,8 +348,20 @@ bool CBrokerAdapter::MarketSell(string symbol, double volume, double sl, double 
      {
       if(m_trade.Sell(volume, symbol, 0.0, sl, tp, comment) && LastRequestOk("MarketSell"))
         {
+         if(m_trade.ResultDeal() == 0)
+           {
+            Print("MedisTouch BrokerAdapter: MarketSell returned success without a deal ticket — execution not confirmed.");
+            m_lastLatencyUs = GetMicrosecondCount() - t0;
+            return false;
+           }
          ticketOut = ResolvePositionTicket();
          fillPriceOut = m_trade.ResultPrice();
+         if(ticketOut == 0 || fillPriceOut <= 0.0)
+           {
+            Print("MedisTouch BrokerAdapter: MarketSell deal exists but position/fill price could not be resolved — execution not confirmed.");
+            m_lastLatencyUs = GetMicrosecondCount() - t0;
+            return false;
+           }
          m_lastLatencyUs = GetMicrosecondCount() - t0;
          return true;
         }
@@ -385,8 +412,8 @@ bool CBrokerAdapter::PlaceLimit(string symbol, ENUM_ORDER_TYPE type, double volu
 bool CBrokerAdapter::CancelOrder(ulong ticket)
   {
    if(!IsConnected()) return false; // G6 FIX
-   if(m_trade.OrderDelete(ticket)) return true;
-   LastRequestOk("CancelOrder");
+   if(m_trade.OrderDelete(ticket) && LastRequestOk("CancelOrder"))
+      return true;
    return false;
   }
 //+------------------------------------------------------------------+
@@ -409,8 +436,8 @@ bool CBrokerAdapter::ModifySLTP(ulong ticket, double sl, double tp)
    double refPrice = isBuy ? SymbolInfoDouble(symbol, SYMBOL_BID) : SymbolInfoDouble(symbol, SYMBOL_ASK); // the price a close would fill at
    if(!ValidateStopDistance(symbol, refPrice, sl, tp, isBuy, "ModifySLTP")) return false;
 
-   if(m_trade.PositionModify(ticket, sl, tp)) return true;
-   LastRequestOk("ModifySLTP");
+   if(m_trade.PositionModify(ticket, sl, tp) && LastRequestOk("ModifySLTP"))
+      return true;
    return false;
   }
 //+------------------------------------------------------------------+
@@ -423,8 +450,8 @@ bool CBrokerAdapter::ClosePartial(ulong ticket, double volume)
       return false;
      }
    if(!IsMarketOpenForTrading(PositionGetString(POSITION_SYMBOL), false)) return false; // requireFullOpen=false -- CLOSEONLY is fine for a close, DISABLED still isn't
-   if(m_trade.PositionClosePartial(ticket, volume)) return true;
-   LastRequestOk("ClosePartial");
+   if(m_trade.PositionClosePartial(ticket, volume) && LastRequestOk("ClosePartial"))
+      return true;
    return false;
   }
 //+------------------------------------------------------------------+
@@ -437,8 +464,8 @@ bool CBrokerAdapter::CloseFull(ulong ticket)
       return false;
      }
    if(!IsMarketOpenForTrading(PositionGetString(POSITION_SYMBOL), false)) return false;
-   if(m_trade.PositionClose(ticket)) return true;
-   LastRequestOk("CloseFull");
+   if(m_trade.PositionClose(ticket) && LastRequestOk("CloseFull"))
+      return true;
    return false;
   }
 #endif

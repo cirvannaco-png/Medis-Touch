@@ -8,6 +8,11 @@
 #ifndef CONFIG_MQH
 #define CONFIG_MQH
 
+#define MIDAS_ENGINE_VERSION "2.26"
+#define MIDAS_SCHEMA_VERSION 4
+#define MIDAS_SETUP_CONTRACT_VERSION 2
+#define MIDAS_WEIGHT_SET_VERSION "SMC-CAUSAL-2.26"
+
 #include "NewsFilter.mqh" // for ENUM_NEWS_RISK, used by SetupReasons (v2.9)
 
 // --- Enums ---
@@ -30,7 +35,9 @@ enum ENUM_FVG_STATE
   {
    FVG_FRESH,
    FVG_TESTED,
+   FVG_DEGRADED,
    FVG_MITIGATED,
+   FVG_EXPIRED,
    FVG_INVALIDATED
   };
 
@@ -218,6 +225,40 @@ enum ENUM_SELECTED_STRATEGY
 // boolean sweepFound treats a 1-tick liquidity poke and a violent
 // displacement-sweep-rejection identically; this doesn't. See
 // CInducement::GradeSweep() for the scoring components.
+enum ENUM_SETUP_STATUS
+  {
+   SETUP_NEW = 0,
+   SETUP_ACTIVE,
+   SETUP_STALE,
+   SETUP_INVALIDATED,
+   SETUP_EXPIRED,
+   SETUP_FILLED,
+   SETUP_CANCELLED,
+   SETUP_SUPERSEDED,
+   SETUP_COMPLETED
+  };
+
+enum ENUM_SETUP_REJECTION_REASON
+  {
+   SETUP_REJECT_NONE = 0,
+   SETUP_REJECT_DATA,
+   SETUP_REJECT_NO_CHAIN,
+   SETUP_REJECT_CHAIN_INCOMPLETE,
+   SETUP_REJECT_CHAIN_AMBIGUOUS,
+   SETUP_REJECT_STRUCTURE,
+   SETUP_REJECT_LOCATION,
+   SETUP_REJECT_FRESHNESS,
+   SETUP_REJECT_INVALIDATION,
+   SETUP_REJECT_REWARD
+  };
+
+enum ENUM_SETUP_FAMILY
+  {
+   SETUP_FAMILY_NONE = 0,
+   SETUP_FAMILY_REVERSAL,
+   SETUP_FAMILY_CONTINUATION
+  };
+
 enum ENUM_SWEEP_GRADE
   {
    SWEEP_GRADE_NONE,   // no sweep (Validate() already returns early in this case)
@@ -372,6 +413,7 @@ struct CHOCHPoint
    datetime          time;
    double            price;
    bool              bullish;      // true = bullish CHoCH (break above last LH)
+   double            strength;     // 0-1: ATR-normalized break distance + body ratio
    int               bar_index;
   };
 
@@ -503,6 +545,10 @@ struct SetupReasons
    // Mean Reversion and the Key-Level Price Action engine are the next
    // two modules, not yet built; see docs/CHANGELOG.md v2.12 entry.
    ENUM_MARKET_REGIME   regime;              // regime read at setup creation
+   bool                 regime_compatible;   // v2.17: action permission for this setup family/direction
+   string               regime_reason;      // auditable reason for permission/WAIT
+   double               regime_quality;     // v2.17: deterministically-derived regime stability/quality, 0..100
+   int                  regime_age_bars;    // age of most recent confirmed BOS used by the classifier
    double               momentum_score;      // 0-100: directional persistence + BOS strength composite, see MomentumBreakout.mqh
    double               breakout_score;      // 0-100: quality of the most recent BOS as a breakout, independent of momentum_score
    ENUM_BREAKOUT_CLASS  breakout_class;      // classification of that same BOS event
@@ -524,31 +570,67 @@ struct SetupReasons
    // failure mode of blending every score into one number.
    ENUM_SELECTED_STRATEGY selected_strategy;       // which strategy's read was strongest for this regime
    double                 selected_strategy_score;  // that strategy's own score, on its own scale (0-100 for all five candidates)
+
+   // v2.16 extension evidence. Computed on confirmed bars; diagnostic
+   // until independent ablation/holdout testing promotes any component.
+   bool                   ifvg_confirmed;
+   bool                   bpr_confirmed;
+   bool                   cisd_confirmed;
+   bool                   breaker_block_confirmed;
+   bool                   smt_confirmed;
+   double                 extension_quality;
   };
 
 struct TradeSetup
   {
-   ENUM_ORDER_TYPE   type;         // ORDER_TYPE_BUY or ORDER_TYPE_SELL
-   double            entry_top;
-   double            entry_bottom;
-   double            stop_loss;
+   // --- Canonical identity / lifecycle (v2.16) ---
+   string            setup_id;             // deterministic identity of the market event chain
+   ulong             smc_chain_id;         // causal SMC chain identity
+   ENUM_SETUP_STATUS status;
+   ENUM_SETUP_REJECTION_REASON rejection_reason;
+   ENUM_SETUP_FAMILY family;
+
+   // --- Setup thesis ---
+   ENUM_ORDER_TYPE   type;                 // ORDER_TYPE_BUY or ORDER_TYPE_SELL
+   double            entry_top;            // zone ceiling
+   double            entry_bottom;         // zone floor
+   double            invalidation;         // thesis boundary; NOT the broker SL
+   double            stop_loss;            // executable protective order
    double            tp1;
    double            tp2;
    double            final_tp;
-   double            confidence;
+
+   // --- Model outputs ---
+   double            raw_confidence;
+   double            confidence;            // effective policy-facing confidence, 0..100
+   bool              structural_valid;     // HARD structural verdict; never implied by confidence
+   double            structural_quality;    // 0..100; cannot override invalid structure
+
    datetime          creation_time;
+   datetime          expiry_time;
    bool              active;
+
    SetupReasons      reasons;
-   // v2.9: populated by the EA right after g_tracker.GetCalibratedProbability()
-   // is called on the chosen setup (see MedisTouch_v2.8.mq5) — NOT set by
-   // the scoring engine itself, since calibration data lives in
-   // COutcomeTracker, not Scoring.mqh. calibration_sample==0 means "no
-   // calibration data for this bucket yet"; always check
-   // calibration_has_enough_data before treating calibrated_probability
-   // as meaningful (see CalibrationEngine.mqh).
-   double            calibrated_probability;   // 0-100, empirical win rate for this confidence bucket
+
+   // --- Empirical calibration (diagnostic until explicitly promoted) ---
+   double            calibrated_probability;
    int               calibration_sample;
    bool              calibration_has_enough_data;
+   bool              calibration_context_used; // v2.17: context-conditioned probability was supported by enough data
+   // --- v2.17 target-management diagnostics ---
+   bool              target_plan_valid;
+   double            tp1_rr;
+   double            tp2_rr;
+   double            tp3_rr;
+   double            tp1_quality;          // 0-100 target-path quality, diagnostic only
+   double            tp2_quality;
+   double            tp3_quality;
+   double            tp1_calibrated_probability;
+   int               tp1_calibration_sample;
+   bool              tp1_calibration_has_enough_data;
+   bool              tp1_calibration_context_used;
+   double            tp2_calibrated_probability;
+   double            tp3_calibrated_probability;
   };
 
 // Single source of truth for "what price does this setup actually fill

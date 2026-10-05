@@ -56,13 +56,22 @@ void CCHOCH::Detect()
          SwingPoint prev = m_swings.GetHigh(i + 1);
          if(curr.price < prev.price) // lower high
            {
-            for(int bar = curr.bar_index - 1; bar >= 0; bar--)
+            int confirmationShift = curr.bar_index - m_swings.Strength();
+            for(int bar = confirmationShift; bar >= 1; bar--)
               {
                if(m_candles.GetCandle(bar).close > curr.price)
                  {
-                  bull.time = m_candles.GetCandle(bar).time;
+                  CandleData breakCandle = m_candles.GetCandle(bar);
+                  bull.time = breakCandle.time;
                   bull.price = curr.price;
                   bull.bullish = true;
+                  double atr = m_candles.GetATR(bar);
+                  double range = breakCandle.high - breakCandle.low;
+                  double body = range > 0.0 ? MathAbs(breakCandle.close - breakCandle.open) / range : 0.0;
+                  double breakATR = atr > 0.0 ? MathAbs(breakCandle.close - curr.price) / atr : 0.0;
+                  bull.strength = (atr > 0.0 && range > 0.0)
+                                  ? MathMin(1.0, 0.6 * MathMin(breakATR / 0.5, 1.0) + 0.4 * body)
+                                  : 0.0;
                   bull.bar_index = bar;
                   haveBull = true;
                   break;
@@ -87,9 +96,17 @@ void CCHOCH::Detect()
               {
                if(m_candles.GetCandle(bar).close < curr.price)
                  {
-                  bear.time = m_candles.GetCandle(bar).time;
+                  CandleData breakCandle = m_candles.GetCandle(bar);
+                  bear.time = breakCandle.time;
                   bear.price = curr.price;
                   bear.bullish = false;
+                  double atr = m_candles.GetATR(bar);
+                  double range = breakCandle.high - breakCandle.low;
+                  double body = range > 0.0 ? MathAbs(breakCandle.close - breakCandle.open) / range : 0.0;
+                  double breakATR = atr > 0.0 ? MathAbs(breakCandle.close - curr.price) / atr : 0.0;
+                  bear.strength = (atr > 0.0 && range > 0.0)
+                                  ? MathMin(1.0, 0.6 * MathMin(breakATR / 0.5, 1.0) + 0.4 * body)
+                                  : 0.0;
                   bear.bar_index = bar;
                   haveBear = true;
                   break;

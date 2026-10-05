@@ -1,5 +1,206 @@
 # Changelog
 
+## v2.25 — bounded asymmetric entry drift
+
+### Fixed
+- Market-entry staleness is now evaluated with separate adverse and favorable
+  bounds instead of a single symmetric absolute-distance threshold.
+- Default adverse drift remains 0.15 ATR.
+- Favorable drift is allowed up to 0.25 ATR, recovering better fills without
+  allowing an entry to drift arbitrarily far from the validated zone.
+- Both limits use the confirmed decision ATR rather than the forming-bar ATR.
+
+### Rationale
+A symmetric absolute-distance rule incorrectly treated a materially better fill
+as stale, reducing opportunity without protecting risk. Unlimited favorable drift
+would create a different problem by allowing entries far outside the validated
+FVG zone. The bounded asymmetric policy addresses both failure modes.
+
+No profitability or 87% performance claim is made.
+
+
+
+## v2.24 — execution drift and closed-bar risk hardening
+
+### Fixed
+- Single-direction risk validation now always uses the confirmed-bar ATR,
+  eliminating a live-bar volatility input that could change risk acceptance
+  mid-formation.
+- Market-entry staleness checks now reject only adverse movement relative to
+  the theoretical executable entry. Favorable price movement is allowed
+  instead of being incorrectly classified as stale.
+- This preserves risk discipline while recovering valid fills that were
+  previously rejected by a symmetric absolute-deviation rule.
+
+### Validation
+Regression coverage was added for both invariants. No profitability or
+87% accuracy claim is made; MetaEditor/MT5 compilation and holdout testing
+remain required.
+
+
+
+## v2.23 — target fallback geometry hardening
+
+### Fixed
+- When no suitable liquidity/weekly anchor exists, fallback targets no longer
+  compound the minimum RR distance at every tier.
+- With the default 1.5R minimum, the fallback path now aims for approximately
+  1.5R TP1, 2.0R TP2 and 3.0R final TP, while preserving strict monotonicity.
+- Distant liquidity-derived TP1/TP2 levels are still respected; the fallback
+  only moves the next tier outward when needed.
+
+### Rationale
+The previous fallback could turn a valid entry into an unnecessarily distant
+profit ladder (1.5R -> 3R -> 4.5R). That can reduce target-hit precision without
+improving entry quality. The revised ladder separates entry validity from
+overly ambitious fallback geometry.
+
+This is a research/engineering correction, not evidence of an 87% future win
+rate. MT5/MetaEditor and untouched holdout validation remain required.
+
+
+
+## v2.22 — FVG timing and quality correctness
+
+### Fixed
+- FVG age is now measured from the first closed bar that completes the three-candle
+  imbalance, eliminating a one-bar premature aging/expiry penalty.
+- SMC chain FVG age uses the same completion-bar convention as the FVG engine.
+- Causal-chain FVG quality no longer divides the already ATR-normalized FVG width by
+  another price ATR. The width is normalized exactly once.
+
+### Why it matters
+These are not threshold optimizations. They correct two measurement errors in the
+structural substrate itself. The first could suppress otherwise fresh setups; the
+second could systematically understate FVG quality and therefore distort validated
+confidence.
+
+No profitability or 87% performance claim is made until MetaEditor/MT5 compilation,
+full broker-data backtesting, and untouched holdout validation are completed.
+
+
+
+## v2.21 — calibration feedback-loop hardening
+
+v2.21 removes a subtle deadlock in the 87% execution-precision architecture:
+policy-valid setups are now shadow-tracked before the precision decision is applied.
+
+### Fixed
+- EXECUTE_ONLY setups rejected by the precision gate are no longer omitted from
+  the OutcomeTracker population.
+- The system can therefore accumulate objective TP1/profitability evidence while
+  execution remains blocked below the empirical precision threshold.
+- Shadow tracking does not place an order; it records the same immutable setup for
+  simulated outcome attribution.
+
+### Policy
+The 87% gate remains fail-closed for financially consequential execution. The
+feedback path is now:
+validated setup -> policy decision -> shadow outcome tracking -> precision gate
+-> execution or signal-only degradation.
+
+No performance guarantee is implied; MT5/MetaEditor compilation and holdout
+backtesting remain mandatory.
+
+
+
+## v2.20 — causal-chain confidence architecture
+
+The production confidence model is now explicitly downstream of the validated SMC
+chain. This removes a major source of evidence duplication between the structural
+validator and the scoring engine.
+
+### Changed
+- TradeZone now derives policy-facing confidence from the already validated causal
+  SMC chain instead of re-running the independent inducement score.
+- The causal chain contributes the structural 70-point substrate: sweep/rejection,
+  displacement, structure, causal FVG, freshness and location coherence.
+- Independent confluence remains separate: HTF trend, volume, Fibonacci, Value Area
+  and HTF Order Block.
+- The validated confidence path no longer adds the generic FVG score on top of the
+  causal FVG, preventing double-counting of the same price-imbalance evidence.
+- A new 105-point validated-confidence normalization is used, preserving relative
+  ranking while preventing a duplicated structural component from inflating scores.
+- Calibration/weight-set version is bumped to SMC-CAUSAL-2.20 so previous confidence
+  populations cannot be silently mixed with the new score definition.
+
+### Engineering rationale
+The prior architecture had two authorities describing nearly the same market event:
+the StructuralValidator proved a causal chain, while ScoringEngine independently
+recomputed inducement/FVG evidence. v2.20 makes the chain the structural source of
+truth and reserves scoring for ranking independent confluence.
+
+### Validation status
+The source contract and regression tests were updated. MetaEditor/MT5 compilation and
+full broker-data backtesting remain mandatory before production deployment. No 87%
+future-performance claim is made.
+
+
+
+## v2.19 — execution-grade precision evidence and calibration integrity
+
+v2.19 turns the 87% objective into a stricter, auditable execution policy without
+pretending that a historical percentage guarantees future performance.
+
+### Fixed
+- TP1/TP2 calibration no longer counts a raw candle touch before same-bar
+  stop/target ordering is resolved.
+- TP1 is recorded only when the TP1 partial-management milestone is actually
+  reached; TP2 is recorded only after its favorable ordering is resolved.
+- Ambiguous same-bar outcomes remain excluded from calibration.
+
+### Improved
+- Context calibration can pool adjacent confidence buckets only when regime
+  and setup family are identical, improving sample efficiency without falling
+  back immediately to unrelated global evidence.
+- The precision execution gate now requires BOTH:
+  - calibrated profitable-outcome probability >= 87%;
+  - calibrated realized TP1 milestone probability >= 87%;
+  - minimum evidence in both populations;
+  - context-conditioned evidence when required.
+- Precision-gated execution failures are now auditable through the normal
+  decision path.
+- When execution and signalling are both enabled, failing the precision tier
+  degrades EXECUTE_AND_SIGNAL to SIGNAL_ONLY rather than discarding the signal.
+- The precision tier defaults ON, while the master live-execution switch remains
+  OFF, so enabling trading does not bypass the 87% policy accidentally.
+
+### Research discipline
+The 87% threshold is a selection target, not a guarantee of future win rate.
+Acceptance still requires sufficient observations, positive expectancy in R,
+controlled drawdown, meaningful trade frequency, and untouched holdout
+validation. StrategyTune cloud compute was exhausted on October 4, 2026 during
+this pass, so these v2.19 changes were source-hardened but not granted a new
+empirical performance claim.
+
+
+
+## v2.18 — H9: empirical TP1 precision tier
+
+The 71% historical result is not reproducible from the retained StrategyTune sessions,
+so this change does not encode an invented parameter set. Instead, v2.18 turns the
+requested >87% accuracy objective into an auditable selection contract: only a setup
+that is already structurally valid, regime-valid and target-plan-valid may enter the
+precision tier, and that setup must have enough matching TP1 outcomes in the same
+confidence/regime/family context.
+
+### Added
+- TradeSetup.tp1_calibration_sample
+- TradeSetup.tp1_calibration_has_enough_data
+- TradeSetup.tp1_calibration_context_used
+- InpUseTP1PrecisionGate (OFF by default)
+- InpMinTP1PrecisionProbability (default 88.0%)
+- InpMinTP1PrecisionSample (default 50)
+- InpRequireTP1ContextCalibration (default ON)
+- TP1 precision telemetry in signal JSON and CSV output
+- regression coverage for the fail-closed precision gate
+
+### Policy
+The precision tier is deliberately opt-in. It fails closed when target data is
+insufficient, when the probability is below the configured floor, or when the
+required context-specific population is unavailable. The 88% value is a target
+selection threshold, not a claim that future trades will achieve 88%.
+
 ## v2.18 — G6: broker-side safety checks + first tests for tools/
 
 Two unrelated real gaps found by audit, fixed together since both were

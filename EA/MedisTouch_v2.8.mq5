@@ -12,7 +12,7 @@
 // together on the same chart (indicator for the visuals you're used to,
 // EA for the parts that touch money) or run this alone headless.
 #property copyright "Medis Touch"
-#property version   "2.80"
+#property version   "2.26"
 #property strict
 
 #include "includes/Core/Config.mqh"
@@ -53,16 +53,19 @@ input ENUM_TIMEFRAMES InpFVGTF = PERIOD_M15;
 
 input group "Fair Value Gaps"
 input double InpFVGMinSizeATR = 0.1;
+input int    InpFVGDegradeBars = 8;
 
 input group "Liquidity"
 input double InpInternalLiqThresholdATR = 0.2;
 
 input group "Risk (setup validation)"
-input double InpMinRiskReward = 1.5;
+input double InpMinRiskReward = 1.5;          // minimum RR required by the overall target plan
+input double InpMinTP1RiskReward = 1.25;     // TP1 partial milestone minimum RR; final plan still requires InpMinRiskReward
 input double InpMaxSLDistanceATR = 1.5;
 input double InpSLBufferATR = 0.25;        // invalidation margin beyond FVG far edge, in ATR (audit #23 fix)
 input double InpMinStopSpreadMult = 3.0;   // floor: SL distance from entry never below (current spread * this) -- check against real Pepperstone/Exness spread in Tester
-input double InpMaxEntryDeviationATR = 0.15; // reject a market order if price drifted this many ATR from decision entry (audit #25 fix)
+input double InpMaxEntryDeviationATR = 0.15; // maximum ADVERSE market-entry drift in ATR from validated executable entry
+input double InpMaxFavorableEntryDeviationATR = 0.25; // maximum FAVORABLE drift in ATR; prevents entering far outside the validated zone while allowing better fills
 
 input group "Inducement Engine"
 input int    InpImpulseLookbackBars = 40;
@@ -119,7 +122,35 @@ input int    InpMaxBarsSinceBOS = 5;               // Decay-to-zero cutoff (0/90
 input bool   InpRequireChaseFilter = false;        // Gate: OFF by default — reject setups that ran too far past BOS before entry
 input double InpMaxChaseDistATR = 0.75;            // Max (price - BOS close)/ATR in the trade direction before rejecting as "chased"
 input double InpFVGMaxDistATR = 1.25;              // FVG proximity cap — tightened default from the old hardcoded 3.0 (see Scoring.mqh)
-input double InpMinDirectionalAdvantage = 0.0;     // v2.9: min confidence-point edge BUY must have over SELL (or vice versa) to be selected; 0 = old ">="-only behavior, unvalidated nonzero values need ablation testing (review item "directional competition")
+input double InpMinDirectionalAdvantage = 0.0;
+
+// --- v2.16 causal SMC chain validation ----------------------------
+input group "SMC Chain Validation (v2.16)"
+input int    InpMaxSweepToStructureBars = 8;
+input int    InpMaxStructureToFVGBars = 2;
+input int    InpMaxFVGAgeBars = 15;
+input double InpMinChainDisplacementATR = 1.0;
+input double InpMinChainDisplacementBodyRatio = 0.55;
+input double InpMinChainStructureStrength = 0.45;
+input bool   InpRequireContinuationHTFAlignment = true;
+
+input group "Market Regime Policy (v2.17)"
+input bool   InpEnableRegimeGate = true;              // default live policy; disable only for controlled ablation
+input int    InpMaxRegimeTrendBOSAgeBars = 12;        // confirmed BOS freshness window for a TRENDING classification
+
+input group "SMC Extension Evidence (v2.16)"
+input string InpSMTReferenceSymbol = "";
+input bool   InpSMTInverseCorrelation = false;
+input int    InpIFVGMaxAgeBars = 15;
+input int    InpBPRMaxGapBars = 4;
+input int    InpCISDLookbackBars = 12;
+input int    InpCISDMaxRunBars = 5;
+input int    InpBreakerMaxAgeBars = 20;
+input int    InpSMTLookbackBars = 30;
+input int    InpSMTMaxDriftBars = 2;
+input double InpSMTMinCorrelation = 0.70;
+
+     // v2.9: min confidence-point edge BUY must have over SELL (or vice versa) to be selected; 0 = old ">="-only behavior, unvalidated nonzero values need ablation testing (review item "directional competition")
 
 input group "Signal Lifecycle (v2.9)"
 input bool   InpPublishLifecycleUpdates = false;   // OFF by default — requires the bridge to be on migration 0004+; a pre-0004 bridge will 404 the PATCH endpoint
@@ -190,7 +221,13 @@ input group "Logging"
 input bool   InpLogSignals = true;
 input bool   InpTrackOutcomes = true;
 input int    InpMaxTrackingBars = 100;
-input int    InpCalibrationMinSample = 30;         // v2.9: bucket sample size before GetCalibratedProbability() is trusted — see CalibrationEngine.mqh
+input int    InpCalibrationMinSample = 30;
+input bool   InpUseCalibratedGate = false;             // diagnostic/ablation gate; remains OFF until out-of-sample calibration proves useful
+input double InpMinCalibratedProbability = 55.0;       // minimum empirical probability when the calibrated gate is enabled
+input bool   InpUseTP1PrecisionGate = true;                // v2.19: execution requires the empirical precision tier; master execution remains OFF by default
+input double InpMinTP1PrecisionProbability = 87.0;         // minimum empirical precision for both profitable outcome and TP1 milestone
+input int    InpMinTP1PrecisionSample = 50;                // minimum target observations before the precision claim is trusted
+input bool   InpRequireTP1ContextCalibration = true;       // precision gate requires same-regime/family calibration; v2.19 may pool adjacent confidence buckets only
 input int    InpSessionGMTOffsetOverride = 999;
 input ENUM_FILL_POLICY InpFillPolicy = FILL_CONSERVATIVE;
 input ENUM_TIMEFRAMES  InpReplayTF = PERIOD_M1;
@@ -248,7 +285,7 @@ input string InpBridgeApiKey = "";              // must match telegram-bridge's 
 // "which weight set produced this," which is the prerequisite for the
 // statistical gating / promotion layer (steps 4-5) ever being able to
 // tell one weight set's expectancy apart from another's in signal_outcomes.
-input string InpWeightSetVersion = "v2.10-baseline";
+input string InpWeightSetVersion = "SMC-CAUSAL-2.26";
 // v2.11 — the operator's OWN bridge endpoint, for ConfigSync polling
 // only. Deliberately separate from the subscriber-fan-out CSV
 // (SubscriberPlatform.mqh) — that list is for broadcasting signals to
@@ -278,6 +315,7 @@ CTFContext*        g_bosCtx = NULL;
 CTFContext*        g_liqCtx = NULL;
 CTFContext*        g_fvgCtx = NULL;
 CTFContext*        g_htfObCtx = NULL;   // v2.8 — must stay a genuinely higher TF than g_fvgCtx/g_bosCtx
+CStructuralValidator g_validator;
 
 // --- Global objects: the new layer ---
 CDecisionEngine    g_router;
@@ -294,8 +332,9 @@ CSignalPublisher   g_publisher;
 CConfigSync        g_configSync;
 CProductionMonitor g_monitor;
 
-datetime           g_lastLoggedTime = 0;
+datetime           g_lastLoggedTime = 0; // legacy diagnostic timestamp; setup_id is authoritative
 datetime           g_lastBarTime = 0;
+string             g_lastSetupId = "";
 
 // v2.9 — signal lifecycle monitor state. Tracks only the single most
 // recently published, still-unfilled decision — matches the existing
@@ -332,7 +371,7 @@ int OnInit()
             "will be comparing zones on the same or a lower resolution than the entry timeframe, ",
             "which defeats the point of the filter even if InpRequireHtfOB is left OFF for diagnostics only.");
 
-   g_scoring.Init(g_trendCtx, g_bosCtx, g_liqCtx, g_fvgCtx, g_chartCtx, &g_chartCtx.candles);
+   g_scoring.Init(g_trendCtx, g_bosCtx, g_liqCtx, g_fvgCtx, g_chartCtx, &g_fvgCtx.candles);
    g_scoring.ConfigureInducement(InpImpulseLookbackBars, InpImpulseATRMult, InpImpulseBodyRatio,
                                  InpEqualTolATR, InpMaxLegExtend,
                                  InpRequirePremiumDiscount, InpRequireDistributionPhase,
@@ -359,7 +398,35 @@ int OnInit()
                                           InpKeyLevelTouchToleranceATRMult, InpKeyLevelAbsorptionMinTouches,
                                           InpKeyLevelWickRejectionRatio, InpKeyLevelRoundStep);
    g_scoring.ConfigureStrategySelection(InpMinSelectionScore);
-   g_decision.Init(&g_chartCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, InpSLBufferATR, InpMinStopSpreadMult);
+   g_scoring.ConfigureRegimeGate(InpEnableRegimeGate);
+   g_scoring.ConfigureRegimeFreshness(InpMaxRegimeTrendBOSAgeBars);
+
+   // v2.16: one hard structural authority sits between analysis and setup
+   // generation. The causal chain itself runs on the execution/FVG TF;
+   // HTF context is used separately for continuation alignment.
+   g_validator.Init(g_fvgCtx, g_trendCtx,
+                    InpMaxSweepToStructureBars,
+                    InpMaxStructureToFVGBars,
+                    InpMaxFVGAgeBars,
+                    InpMinChainDisplacementATR,
+                    InpMinChainDisplacementBodyRatio,
+                    InpMinChainStructureStrength,
+                    InpRequirePremiumDiscount,
+                    InpRequireContinuationHTFAlignment,
+                    0.0,
+                    InpSMTReferenceSymbol,
+                    InpIFVGMaxAgeBars,
+                    InpBPRMaxGapBars,
+                    InpCISDLookbackBars,
+                    InpCISDMaxRunBars,
+                    InpBreakerMaxAgeBars,
+                    InpSMTLookbackBars,
+                    InpSMTMaxDriftBars,
+                    InpSMTMinCorrelation,
+                    InpSMTInverseCorrelation);
+
+   g_decision.Init(&g_fvgCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, &g_validator,
+                   InpSLBufferATR, InpMinStopSpreadMult, InpMinRiskReward, InpMinTP1RiskReward);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);
    // Deliberately the SAME values driving g_positions/g_risk below — so the
@@ -382,7 +449,8 @@ int OnInit()
    g_store.Init(_Symbol);
    g_subscribers.Init();
    g_publisher.Init(_Symbol, &g_subscribers, InpWebRequestTimeoutMs, InpBridgeApiKey);
-   g_publisher.SetWeightVersion(InpWeightSetVersion);
+   g_publisher.SetWeightVersion(MIDAS_WEIGHT_SET_VERSION);
+   g_publisher.SetSignalTimeframe(InpFVGTF);
    // v2.11 — dormant until InpConfigSyncEndpoint is set AND a real
    // promotion has happened on the bridge; see ConfigSync.mqh header.
    // EventSetTimer's argument is seconds, hence the *60.
@@ -499,17 +567,38 @@ void CheckSignalLifecycle(double currentAtr)
       return;
      }
 
-   // INVALIDATED: the opposite direction has since become a strong
-   // setup in its own right — a real structural contradiction of the
-   // original read, not just drift. Checked before STALE for the same
-   // "worse state wins" reasoning as EXPIRED above.
+   // HARD THESIS INVALIDATION: price crossing the explicit setup
+   // invalidation boundary ends an unfilled idea immediately. Any linked
+   // resting order must be cancelled, not merely hidden from the signal UI.
+   double invalidation = g_lifecycleSetup.invalidation;
+   double marketForInvalidation = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                                        : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   bool priceInvalidated = isBuy ? (marketForInvalidation <= invalidation)
+                                 : (marketForInvalidation >= invalidation);
+   if(invalidation > 0.0 && marketForInvalidation > 0.0 && priceInvalidated)
+     {
+      if(g_lifecycleStatus != "invalidated")
+        {
+         g_publisher.PublishStatusUpdate(g_lifecycleDecisionId, "invalidated",
+                                         StringFormat("Price %.5f crossed thesis invalidation %.5f",
+                                                      marketForInvalidation, invalidation));
+         g_lifecycleStatus = "invalidated";
+         g_orders.CancelByDecisionId(g_lifecycleDecisionId);
+        }
+      g_lifecycleDecisionId = 0;
+      return;
+     }
+
+   // SUPERSEDED: a new opposing structural read can retire an unfilled
+   // setup, but that is different from proving the original price thesis
+   // false. Preserve that distinction for outcome attribution.
    double oppositeConfidence = g_scoring.CalculateConfidence(!isBuy);
    if(oppositeConfidence >= InpInvalidateOpposingConfidence)
      {
       if(g_lifecycleStatus != "invalidated")
         {
          g_publisher.PublishStatusUpdate(g_lifecycleDecisionId, "invalidated",
-                                         StringFormat("Opposing setup confidence reached %.0f — original read contradicted", oppositeConfidence));
+                                         StringFormat("Opposing setup confidence reached %.0f — newer policy read superseded the unfilled setup", oppositeConfidence));
          g_lifecycleStatus = "invalidated";
         }
       g_lifecycleDecisionId = 0; // terminal — stop tracking
@@ -552,7 +641,9 @@ void OnTick()
    g_pool.DetectAll();
    if(g_chartCtx == NULL || !g_chartCtx.candles.IsReady()) return;
 
-   double currentAtr = g_fvgCtx.candles.GetATR(0);
+   double currentAtr = g_fvgCtx.candles.GetATR(0);      // live management context
+   double analysisAtr = g_fvgCtx.candles.GetATR(1);    // confirmed-bar risk/decision context
+   if(analysisAtr <= 0.0) return;
 
    // Manage everything already open before looking for anything new —
    // a break-even/trailing update should never wait behind new-setup work.
@@ -586,7 +677,7 @@ void OnTick()
 
    // Only evaluate for a NEW decision once per closed bar, same as the
    // indicator's OnCalculate cadence — a decision per bar, not per tick.
-   datetime barTime = iTime(_Symbol, _Period, 0);
+   datetime barTime = iTime(_Symbol, InpFVGTF, 0);
    bool isNewBar = (barTime != g_lastBarTime);
    g_lastBarTime = barTime;
    if(!isNewBar) return;
@@ -612,12 +703,12 @@ void OnTick()
      {
       if(confDelta >= InpMinDirectionalAdvantage)
         {
-         if(g_risk.ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr))
+         if(g_risk.ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, analysisAtr))
             chosen = buySetup;
         }
       else if(-confDelta >= InpMinDirectionalAdvantage)
         {
-         if(g_risk.ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr))
+         if(g_risk.ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, analysisAtr))
             chosen = sellSetup;
         }
       // else: neither side clears the advantage threshold — no trade,
@@ -625,27 +716,74 @@ void OnTick()
      }
    else if(buySetup.active)
      {
-      if(g_risk.ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr))
+      if(g_risk.ValidateSetup(buySetup, InpMinRiskReward, InpMaxSLDistanceATR, analysisAtr))
          chosen = buySetup;
      }
    else if(sellSetup.active)
      {
-      if(g_risk.ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, currentAtr))
+      if(g_risk.ValidateSetup(sellSetup, InpMinRiskReward, InpMaxSLDistanceATR, analysisAtr))
          chosen = sellSetup;
      }
 
-   if(!chosen.active) return;
-   if(chosen.creation_time == g_lastLoggedTime) return; // already routed this exact setup
-   g_lastLoggedTime = chosen.creation_time;
+   if(!chosen.active || !chosen.structural_valid) return;
+   if(StringLen(chosen.setup_id) == 0) return;
+   if(chosen.setup_id == g_lastSetupId) return; // deterministic event identity, not TimeCurrent()
+
+   // v2.17: commit setup deduplication only after the decision boundary.
+   // A persistence/execution preflight failure remains retryable rather than
+   // silently consuming an otherwise valid deterministic setup.
+
+   // v2.16: persist an explicit absolute expiry for transport/back-end
+   // consumers while the local lifecycle still uses closed-bar counts.
+   int tfSeconds = PeriodSeconds(InpFVGTF);
+   if(tfSeconds > 0)
+      chosen.expiry_time = chosen.creation_time + (datetime)(InpSignalExpiryBars * tfSeconds);
+   if(chosen.expiry_time > 0 && TimeCurrent() >= chosen.expiry_time)
+     {
+      // The chain was structurally valid, but it is no longer actionable
+      // by the time the EA observed it. Do not publish a setup that is
+      // already expired.
+      return;
+     }
 
    // v2.9: attach the empirical calibration read for this confidence
    // bucket to the chosen setup before it's logged/published — this is
    // what turns "confidence 78" into "confidence 78, historically wins
    // 63% of the time (114 comparable setups)" on the Telegram card.
-   chosen.calibrated_probability = g_tracker.GetCalibratedProbability(chosen.confidence,
-                                                                       chosen.calibration_sample,
-                                                                       chosen.calibration_has_enough_data);
+   chosen.calibrated_probability = g_tracker.GetContextCalibratedProbability(
+      chosen.confidence, chosen.reasons.regime, chosen.family,
+      chosen.calibration_sample, chosen.calibration_has_enough_data,
+      chosen.calibration_context_used);
 
+   // v2.17: target-reach calibration is intentionally diagnostic. A
+   // context-specific value is used only when the target has enough
+   // resolved observations; otherwise the field remains the smoothed
+   // fallback returned by the calibration engine.
+   {
+      int tp1Sample = 0; bool tp1Enough = false; bool tp1ContextUsed = false;
+      chosen.tp1_calibrated_probability =
+         g_tracker.GetTargetCalibratedProbability(1, chosen.confidence, chosen.reasons.regime, chosen.family,
+                                                  tp1Sample, tp1Enough, tp1ContextUsed);
+      chosen.tp1_calibration_sample = tp1Sample;
+      chosen.tp1_calibration_has_enough_data = tp1Enough;
+      chosen.tp1_calibration_context_used = tp1ContextUsed;
+
+      int tp2Sample = 0; bool tp2Enough = false; bool tp2ContextUsed = false;
+      chosen.tp2_calibrated_probability =
+         g_tracker.GetTargetCalibratedProbability(2, chosen.confidence, chosen.reasons.regime, chosen.family,
+                                                  tp2Sample, tp2Enough, tp2ContextUsed);
+
+      int tp3Sample = 0; bool tp3Enough = false; bool tp3ContextUsed = false;
+      chosen.tp3_calibrated_probability =
+         g_tracker.GetTargetCalibratedProbability(3, chosen.confidence, chosen.reasons.regime, chosen.family,
+                                                  tp3Sample, tp3Enough, tp3ContextUsed);
+   }
+
+   // Precision is evaluated after policy routing so it can be used
+   // to protect REAL execution without suppressing the broader signal stream.
+   // The gate is fail-closed for execution: it requires both an empirically
+   // supported profitable-outcome rate and an empirically supported TP1
+   // milestone rate in the same market regime/setup family.
    if(InpLogSignals)
      {
       ENUM_TREND_STATE t = g_trendCtx.trend.GetCurrentTrend();
@@ -662,16 +800,95 @@ void OnTick()
    // only AddSetup()/Update() now run a few lines later, still within the
    // same tick, still processing the same pending array.
    TradeDecisionRecord decision = g_router.Decide(chosen);
+   if(!decision.valid || decision.action == POLICY_IGNORE)
+     {
+      // Intentional policy rejection is terminal for this deterministic event.
+      g_lastSetupId = chosen.setup_id;
+      g_lastLoggedTime = chosen.creation_time;
+      g_tracker.Update(g_fvgCtx);
+      return;
+     }
 
+   // v2.21: shadow-track every policy-valid setup BEFORE the execution
+   // precision gate. Otherwise EXECUTE_ONLY setups rejected by the 87%
+   // gate never enter the outcome population and the calibration sample
+   // can deadlock below its minimum forever.
    if(InpTrackOutcomes)
       g_tracker.AddSetup(chosen, decision.decision_id);
+
+   if(InpUseTP1PrecisionGate &&
+      (decision.action == POLICY_EXECUTE_ONLY || decision.action == POLICY_EXECUTE_AND_SIGNAL))
+     {
+      bool minSample = (chosen.calibration_sample >= MathMax(1, InpMinTP1PrecisionSample)) &&
+                       chosen.calibration_has_enough_data;
+      bool tp1Sample = (chosen.tp1_calibration_sample >= MathMax(1, InpMinTP1PrecisionSample)) &&
+                       chosen.tp1_calibration_has_enough_data;
+
+      bool contextOk = !InpRequireTP1ContextCalibration ||
+                       (chosen.calibration_context_used && chosen.tp1_calibration_context_used);
+
+      bool winProbabilityOk = chosen.calibrated_probability >= InpMinTP1PrecisionProbability;
+      bool tp1ProbabilityOk = chosen.tp1_calibrated_probability >= InpMinTP1PrecisionProbability;
+
+      bool precisionPass = minSample && tp1Sample && contextOk &&
+                           winProbabilityOk && tp1ProbabilityOk;
+
+      if(!precisionPass)
+        {
+         decision.reason = StringFormat(
+            "87%% precision tier failed: win=%.1f%% n=%d ctx=%s; TP1=%.1f%% n=%d ctx=%s",
+            chosen.calibrated_probability,
+            chosen.calibration_sample,
+            chosen.calibration_context_used ? "YES" : "NO",
+            chosen.tp1_calibrated_probability,
+            chosen.tp1_calibration_sample,
+            chosen.tp1_calibration_context_used ? "YES" : "NO");
+
+         // Preserve qualified signals for subscribers while blocking the
+         // financially consequential execution leg. EXECUTE_ONLY becomes
+         // IGNORE; EXECUTE_AND_SIGNAL degrades safely to SIGNAL_ONLY.
+         if(decision.action == POLICY_EXECUTE_AND_SIGNAL && InpEnableSignals)
+           {
+            decision.action = POLICY_SIGNAL_ONLY;
+            decision.valid = true;
+           }
+         else
+           {
+            decision.action = POLICY_IGNORE;
+            decision.valid = false;
+           }
+        }
+     }
+
+   if(InpUseCalibratedGate && decision.action != POLICY_IGNORE &&
+      chosen.calibration_has_enough_data &&
+      chosen.calibrated_probability < InpMinCalibratedProbability)
+     {
+      decision.reason = StringFormat("calibrated win gate failed: %.1f%% < %.1f%%",
+                                     chosen.calibrated_probability,
+                                     InpMinCalibratedProbability);
+      decision.action = POLICY_IGNORE;
+      decision.valid = false;
+     }
+
    g_tracker.Update(g_fvgCtx);
 
-   if(!decision.valid || decision.action == POLICY_IGNORE) return;
-
    // Persist BEFORE acting — Recovery must be able to find this decision
-   // even if the terminal dies immediately after an order fills.
-   g_store.Save(decision);
+   // even if the terminal dies immediately after an order fills. Execution
+   // is refused if durability fails; a signal-only notification may still
+   // be emitted with an explicit warning.
+   bool persisted = g_store.Save(decision);
+   if(!persisted && (decision.action == POLICY_EXECUTE_ONLY || decision.action == POLICY_EXECUTE_AND_SIGNAL))
+     {
+      PrintFormat("MedisTouch EA: decision #%I64d refused — decision store could not persist the immutable setup.", decision.decision_id);
+      g_monitor.NotifyBrokerReject();
+      return; // retry next evaluation; do not consume the setup
+     }
+
+   // The immutable decision is now durable (or intentionally signal-only).
+   // Only this boundary commits deterministic setup consumption.
+   g_lastSetupId = chosen.setup_id;
+   g_lastLoggedTime = chosen.creation_time;
 
    if(decision.action == POLICY_EXECUTE_ONLY || decision.action == POLICY_EXECUTE_AND_SIGNAL)
      {
@@ -681,26 +898,33 @@ void OnTick()
                                             decision.reduce_risk, InpAllowMinLotOverride, exceededRiskBudget,
                                             g_riskGuard.SizeMultiplier());
       if(lots <= 0)
-         PrintFormat("MedisTouch EA: decision #%d skipped — %.2f%% risk at this stop distance is below the broker's minimum lot for %s.",
+         PrintFormat("MedisTouch EA: decision #%I64d skipped — %.2f%% risk at this stop distance is below the broker's minimum lot for %s.",
                      decision.decision_id, InpRiskPercentPerTrade, _Symbol);
       else
         {
          if(exceededRiskBudget)
-            PrintFormat("MedisTouch EA: decision #%d executing at broker-minimum lot (%.2f) — actual risk exceeds InpRiskPercentPerTrade (%.2f%%).",
+            PrintFormat("MedisTouch EA: decision #%I64d executing at broker-minimum lot (%.2f) — actual risk exceeds InpRiskPercentPerTrade (%.2f%%).",
                         decision.decision_id, lots, InpRiskPercentPerTrade);
 
          double proposedRisk = g_risk.RiskAmountForLots(_Symbol, lots, entry, chosen.stop_loss);
-         string blockReason;
-         if(!g_portfolio.AllowNewTrade(_Symbol, proposedRisk, blockReason))
-            PrintFormat("MedisTouch EA: decision #%d blocked by Portfolio Manager — %s", decision.decision_id, blockReason);
+         string marginReason;
+         if(!g_risk.ValidateMargin(_Symbol, chosen.type, lots, entry, marginReason))
+            PrintFormat("MedisTouch EA: decision #%d blocked by broker margin preflight — %s", decision.decision_id, marginReason);
          else
            {
-            ulong ticketOut = 0;
-            double maxDeviation = InpMaxEntryDeviationATR * currentAtr;
-            if(g_orders.Submit(decision, lots, InpUseMarketOrders, maxDeviation, ticketOut))
-               g_store.SaveExecution(decision.decision_id, lots, ticketOut);
+            string blockReason;
+            if(!g_portfolio.AllowNewTrade(_Symbol, proposedRisk, blockReason))
+               PrintFormat("MedisTouch EA: decision #%d blocked by Portfolio Manager — %s", decision.decision_id, blockReason);
             else
-               g_monitor.NotifyBrokerReject();
+              {
+               ulong ticketOut = 0;
+            double maxAdverseDeviation = InpMaxEntryDeviationATR * analysisAtr;
+               double maxFavorableDeviation = InpMaxFavorableEntryDeviationATR * analysisAtr;
+               if(g_orders.Submit(decision, lots, InpUseMarketOrders, maxAdverseDeviation, maxFavorableDeviation, ticketOut))
+                  g_store.SaveExecution(decision.decision_id, lots, ticketOut);
+               else
+                  g_monitor.NotifyBrokerReject();
+              }
            }
         }
      }

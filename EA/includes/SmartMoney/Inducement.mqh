@@ -133,7 +133,7 @@ bool CInducement::FindImpulse(bool bullish, ImpulseLeg &leg)
       int olderBar = i; // extend toward higher index (older)
       double bestExtreme = bullish ? m_candles.GetCandle(i).high : m_candles.GetCandle(i).low;
 
-      for(int k = i - 1; k >= MathMax(0, i - m_maxLegExtend); k--)
+      for(int k = i - 1; k >= MathMax(1, i - m_maxLegExtend); k--)
         {
          CandleData cd = m_candles.GetCandle(k);
          bool extends = bullish ? (cd.high >= bestExtreme) : (cd.low <= bestExtreme);
@@ -176,7 +176,7 @@ bool CInducement::FindMinorSwing(int idx, bool wantHigh)
   {
    if(m_candles == NULL) return false;
    int total = m_candles.Total();
-   if(idx < 1 || idx >= total - 1) return false;
+   if(idx < 2 || idx >= total - 1) return false;
    if(wantHigh)
      {
       double h = m_candles.GetCandle(idx).high;
@@ -262,7 +262,7 @@ ENUM_SWEEP_GRADE CInducement::GradeSweep(int sweepBarIdx, bool forBuy, double po
    else
       shapeScore = MathMax(0.0, 1.0 - MathAbs(penetrationATR - 0.30) / 0.60);
 
-   bool followThrough = (sweepBarIdx - 1 >= 0) ? IsDisplacementBar(sweepBarIdx - 1, forBuy) : false;
+   bool followThrough = (sweepBarIdx - 1 >= 1) ? IsDisplacementBar(sweepBarIdx - 1, forBuy) : false;
 
    gradeScore = MathMax(0.0, MathMin(0.4 * rejectionRatio + 0.3 * shapeScore + 0.3 * (followThrough ? 1.0 : 0.0), 1.0));
 
@@ -358,7 +358,7 @@ InducementResult CInducement::Validate(bool forBuy)
    bool sweepFound = false;
    double sweepStrength = 0.0;
    int sweepBarIdx = -1;
-   for(int i = nearIdx - 1; i >= 0; i--)
+   for(int i = nearIdx - 1; i >= 1; i--)
      {
       CandleData cd = m_candles.GetCandle(i);
       double barATR = m_candles.GetATR(i);
@@ -427,7 +427,7 @@ InducementResult CInducement::Validate(bool forBuy)
    int bosBarIdx = -1;
    if((forBuy && minorOpp > -DBL_MAX) || (!forBuy && minorOpp < DBL_MAX))
      {
-      for(int i = sweepBarIdx - 1; i >= 0; i--)
+      for(int i = sweepBarIdx - 1; i >= 1; i--)
         {
          CandleData cd = m_candles.GetCandle(i);
          if(forBuy && cd.close > minorOpp) { bosConfirmed = true; bosBarIdx = i; break; }

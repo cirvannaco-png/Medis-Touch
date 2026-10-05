@@ -65,12 +65,14 @@ bool CMarketPhase::IsDisplacementBar(int idx)
 //+------------------------------------------------------------------+
 ENUM_MARKET_PHASE CMarketPhase::Detect()
   {
+   // Every phase decision is derived from CLOSED bars. Candle 0 is live
+   // price observation only and cannot move the regime classification.
    if(m_candles == NULL || m_candles.Total() < m_rangeLookback + 2) return PHASE_UNDEFINED;
-   double atr = m_candles.GetATR(0);
+   double atr = m_candles.GetATR(1);
    if(atr <= 0) return PHASE_UNDEFINED;
 
    double hh = -DBL_MAX, ll = DBL_MAX;
-   for(int i = 0; i < m_rangeLookback; i++)
+   for(int i = 1; i <= m_rangeLookback; i++)
      {
       CandleData cd = m_candles.GetCandle(i);
       if(cd.high > hh) hh = cd.high;
@@ -86,7 +88,7 @@ ENUM_MARKET_PHASE CMarketPhase::Detect()
      }
 
    bool recentDisplacement = false;
-   for(int i = 0; i < MathMin(3, m_sweepRecencyBars); i++)
+   for(int i = 1; i <= MathMin(3, m_sweepRecencyBars); i++)
       if(IsDisplacementBar(i)) { recentDisplacement = true; break; }
 
    if(recentSweep && recentDisplacement) return PHASE_DISTRIBUTION;

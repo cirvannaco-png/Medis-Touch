@@ -197,8 +197,8 @@ void CMeanReversionEngine::Evaluate(bool forBuy, double &reversionScore, ENUM_RE
    reversionClass = REVERSION_NONE;
 
    if(m_candles == NULL || m_candles.Total() < 2) return;
-   double price = m_candles.GetCandle(0).close; // live/current-bar proxy, same convention MomentumBreakout.mqh uses
-   double atr = m_candles.GetATR(0);
+   double price = m_candles.GetCandle(1).close; // live/current-bar proxy, same convention MomentumBreakout.mqh uses
+   double atr = m_candles.GetATR(1);
    if(atr <= 0) return;
 
    bool wickRejection = RejectionWickPresent(forBuy);
@@ -210,7 +210,7 @@ void CMeanReversionEngine::Evaluate(bool forBuy, double &reversionScore, ENUM_RE
 
    bool volControlled = true; // fail OPEN here deliberately: an unavailable vol read shouldn't zero out an otherwise-scored setup, unlike the hard fail-closed on ATR<=0 above where the whole score is meaningless without it
    if(m_volRegime != NULL)
-      volControlled = (m_volRegime.Classify(0) != VOL_REGIME_HIGH);
+      volControlled = (m_volRegime.Classify(1) != VOL_REGIME_HIGH);
 
    double stretchATR = 0.0;
    bool vaStretched = false;

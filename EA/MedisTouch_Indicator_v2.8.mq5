@@ -3,7 +3,7 @@
 //|                                            Medis Touch Indicator  |
 //+------------------------------------------------------------------+
 #property copyright "Medis Touch"
-#property version   "2.80"
+#property version   "2.26"
 #property indicator_chart_window
 #property indicator_buffers 0
 #property indicator_plots   0
@@ -14,6 +14,7 @@
 #include "includes/Core/SignalLogger.mqh"
 #include "includes/Analysis/TFContext.mqh"
 #include "includes/Analysis/Scoring.mqh"
+#include "includes/Analysis/StructuralValidator.mqh"
 #include "includes/Trading/TradeZone.mqh"
 #include "includes/Trading/RiskEngine.mqh"
 #include "includes/Trading/OutcomeTracker.mqh"
@@ -36,12 +37,40 @@ input ENUM_TIMEFRAMES InpFVGTF = PERIOD_M15;    // FVG / entry-zone timeframe
 
 input group "Fair Value Gaps"
 input double InpFVGMinSizeATR = 0.1;        // Minimum FVG size as ATR fraction
+input int    InpFVGDegradeBars = 8;         // FVG becomes diagnostic-only after this age
 
 input group "Liquidity"
 input double InpInternalLiqThresholdATR = 0.2; // Internal liquidity threshold ATR
 
+input group "SMC Extension Evidence (v2.16)"
+input string InpSMTReferenceSymbol = "";
+input bool   InpSMTInverseCorrelation = false;
+input int    InpIFVGMaxAgeBars = 15;
+input int    InpBPRMaxGapBars = 4;
+input int    InpCISDLookbackBars = 12;
+input int    InpCISDMaxRunBars = 5;
+input int    InpBreakerMaxAgeBars = 20;
+input int    InpSMTLookbackBars = 30;
+input int    InpSMTMaxDriftBars = 2;
+input double InpSMTMinCorrelation = 0.70;
+
+
+input group "SMC Chain Validation (v2.16)"
+input int    InpMaxSweepToStructureBars = 8;
+input int    InpMaxStructureToFVGBars = 2;
+input int    InpMaxFVGAgeBars = 15;
+input double InpMinChainDisplacementATR = 1.0;
+input double InpMinChainDisplacementBodyRatio = 0.55;
+input double InpMinChainStructureStrength = 0.45;
+input bool   InpRequireContinuationHTFAlignment = true;
+
+input group "Market Regime Policy (v2.17)"
+input bool   InpEnableRegimeGate = true;
+input int    InpMaxRegimeTrendBOSAgeBars = 12;
+
 input group "Risk"
 input double InpMinRiskReward = 1.5;
+input double InpMinTP1RiskReward = 1.25;
 input double InpMaxSLDistanceATR = 1.5;
 input double InpSLBufferATR = 0.25;        // invalidation margin beyond FVG far edge, in ATR (audit #23 fix)
 input double InpMinStopSpreadMult = 3.0;   // floor: SL distance from entry never below (current spread * this) -- check against real Pepperstone/Exness spread in Tester
@@ -190,7 +219,30 @@ int OnInit()
    g_scoring.ConfigureVolatilityRegime(InpBlockLowVolRegime, InpVolRegimeLookback, InpVolRegimeLowPct, InpVolRegimeHighPct);
    g_scoring.ConfigureSessionFilter(InpUseSessionFilter, InpAllowTokyoSession, InpAllowLondonSession,
                                     InpAllowNewYorkSession, InpAllowLondonNYOverlap);
-   g_decision.Init(&g_chartCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, InpSLBufferATR, InpMinStopSpreadMult);
+
+   g_validator.Init(g_fvgCtx, g_trendCtx,
+                    InpMaxSweepToStructureBars,
+                    InpMaxStructureToFVGBars,
+                    InpMaxFVGAgeBars,
+                    InpMinChainDisplacementATR,
+                    InpMinChainDisplacementBodyRatio,
+                    InpMinChainStructureStrength,
+                    InpRequirePremiumDiscount,
+                    InpRequireContinuationHTFAlignment,
+                    0.0,
+                    InpSMTReferenceSymbol,
+                    InpIFVGMaxAgeBars,
+                    InpBPRMaxGapBars,
+                    InpCISDLookbackBars,
+                    InpCISDMaxRunBars,
+                    InpBreakerMaxAgeBars,
+                    InpSMTLookbackBars,
+                    InpSMTMaxDriftBars,
+                    InpSMTMinCorrelation,
+                    InpSMTInverseCorrelation);
+
+   g_decision.Init(&g_fvgCtx.candles, g_fvgCtx, g_liqCtx, &g_scoring, &g_validator,
+                   InpSLBufferATR, InpMinStopSpreadMult, InpMinRiskReward, InpMinTP1RiskReward);
    g_visuals.Init(&g_objMan);
    g_logger.Init(_Symbol, InpSessionGMTOffsetOverride);
    g_tracker.Init(&g_logger, _Symbol, InpFVGTF, InpMaxTrackingBars, InpFillPolicy, InpReplayTF);
@@ -220,7 +272,7 @@ int OnCalculate(const int rates_total,
    if(g_chartCtx == NULL || !g_chartCtx.candles.IsReady())
       return rates_total;
 
-   double currentATR = g_fvgCtx.candles.GetATR(0); // same ATR basis used for SL sizing in TradeZone
+   double currentATR = g_fvgCtx.candles.GetATR(1); // confirmed-bar ATR for setup validation
 
    TradeSetup buySetup = g_decision.GenerateBuySetup();
    TradeSetup sellSetup = g_decision.GenerateSellSetup();

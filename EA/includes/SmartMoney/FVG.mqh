@@ -15,23 +15,32 @@ private:
    int               m_zoneCount;
 
    double            m_minSizeATR;   // minimum gap size as fraction of ATR
+   int               m_degradeBars;
+   int               m_maxAgeBars;
 
    void              UpdateState(FVGZone &zone);
 
 public:
                      CFVG();
    void              Init(CCandleData* candleData, double minSizeATR = 0.1);
+   void              ConfigureAging(int degradeBars = 8, int maxAgeBars = 15);
    void              Detect();
    int               Count() const { return m_zoneCount; }
    FVGZone           GetZone(int i) const; // 0 = most recent
    void              UpdateAllStates();
   };
 //+------------------------------------------------------------------+
-CFVG::CFVG() : m_candles(NULL), m_zoneCount(0), m_minSizeATR(0.1) {}
+CFVG::CFVG() : m_candles(NULL), m_zoneCount(0), m_minSizeATR(0.1), m_degradeBars(8), m_maxAgeBars(15) {}
 void CFVG::Init(CCandleData* candleData, double minSizeATR)
   {
    m_candles = candleData;
    m_minSizeATR = minSizeATR;
+  }
+//+------------------------------------------------------------------+
+void CFVG::ConfigureAging(int degradeBars, int maxAgeBars)
+  {
+   m_degradeBars = MathMax(1, degradeBars);
+   m_maxAgeBars = MathMax(m_degradeBars + 1, maxAgeBars);
   }
 //+------------------------------------------------------------------+
 void CFVG::Detect()
@@ -40,7 +49,7 @@ void CFVG::Detect()
    if(m_candles == NULL) return;
    ArrayFree(m_zones);
    int total = m_candles.Total();
-   if(total < 3) return;
+   if(total < 4) return;
 
    // Series-indexed: shift 0 = now. As i runs 2 -> total-1, the 3-bar
    // window {i, i-1, i-2} slides from the most recent triplet toward the
@@ -48,7 +57,9 @@ void CFVG::Detect()
    // three (largest shift); cd0 = GetCandle(i-2) is the NEWEST of the
    // three (smallest shift). (The original comments had this backwards —
    // labels only, the gap-direction math itself was already correct.)
-   for(int i = 2; i < total; i++)
+   // v2.16 temporal firewall: the newest candle in the 3-bar pattern
+   // must be shift 1 or older; candle 0 is live and may never create an FVG.
+   for(int i = 3; i < total; i++)
      {
       CandleData cd0 = m_candles.GetCandle(i - 2); // newest of the triplet
       CandleData cd1 = m_candles.GetCandle(i - 1); // middle
@@ -110,26 +121,35 @@ void CFVG::UpdateAllStates()
 //+------------------------------------------------------------------+
 void CFVG::UpdateState(FVGZone &zone)
   {
-   if(zone.state == FVG_MITIGATED || zone.state == FVG_INVALIDATED)
+   if(zone.state == FVG_MITIGATED || zone.state == FVG_EXPIRED || zone.state == FVG_INVALIDATED)
       return; // terminal states — nothing to update
+
+   int ageBars = MathMax(0, zone.bar_index - 2);
+   if(ageBars > m_maxAgeBars)
+     {
+      zone.state = FVG_EXPIRED;
+      return;
+     }
    int total = m_candles.Total();
    // Series-indexed newest-first: scan from now (0) backward. Once we
    // reach a bar older than the zone's creation time we can stop —
    // everything beyond that is even older (was "continue" in the
    // original, forcing a full unnecessary scan of the whole history
    // buffer on every OnCalculate call, for every zone).
-   for(int bar = 0; bar < total; bar++)
+   int newestPostCreationBar = MathMax(1, zone.bar_index - 1);
+   for(int bar = 1; bar < total && bar <= newestPostCreationBar; bar++)
      {
-      CandleData cd = m_candles.GetCandle(bar);
-      if(cd.time < zone.time)
+      // Only bars newer than the formation candle can change its state.
+      if(bar >= zone.bar_index)
          break;
+      CandleData cd = m_candles.GetCandle(bar);
       if(zone.dir == FVG_BULL)
         {
          if(cd.low <= zone.top && cd.high >= zone.bottom)
            {
             if(cd.close >= zone.top)
                zone.state = FVG_MITIGATED;
-            else if(zone.state == FVG_FRESH)
+            else if(zone.state == FVG_FRESH || zone.state == FVG_DEGRADED)
                zone.state = FVG_TESTED;
            }
         }
@@ -139,11 +159,16 @@ void CFVG::UpdateState(FVGZone &zone)
            {
             if(cd.close <= zone.bottom)
                zone.state = FVG_MITIGATED;
-            else if(zone.state == FVG_FRESH)
+            else if(zone.state == FVG_FRESH || zone.state == FVG_DEGRADED)
                zone.state = FVG_TESTED;
            }
         }
      }
+
+   // Age is measured from the first CLOSED bar that completed the FVG. A zone that survived but remained
+   // untouched beyond the degradation horizon is no longer executable.
+   if(zone.state == FVG_FRESH && ageBars >= m_degradeBars)
+      zone.state = FVG_DEGRADED;
   }
 //+------------------------------------------------------------------+
 FVGZone CFVG::GetZone(int i) const

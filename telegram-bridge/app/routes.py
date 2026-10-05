@@ -55,6 +55,9 @@ class SignalRequest(BaseModel):
     # distances), never used for trading logic on the bridge side, so a
     # missing or malformed key degrades the Telegram card, not a decision.
     extra: dict | None = Field(default=None)
+    # v2.16: EA supplies the absolute expiry so the backend can enforce
+    # expiration even if the EA lifecycle callback is delayed or lost.
+    expires_at: datetime | None = Field(default=None)
     # v2.11: promoted out of `extra` — see app/models.py:Signal for why.
     # All optional so a pre-v2.11 EA build's payload (no top-level tag
     # fields yet) still validates exactly as before; they just land NULL
@@ -300,6 +303,7 @@ async def receive_signal(
         sweep_grade=payload.sweep_grade,
         htf_ob_aligned=payload.htf_ob_aligned,
         weight_version=payload.weight_version,
+        expires_at=payload.expires_at,
     )
     session.add(db_signal)
     try:

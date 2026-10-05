@@ -44,18 +44,21 @@ string TradePolicyToString(ENUM_TRADE_POLICY p)
 // re-reads it after a restart, possibly days later).
 struct TradeDecisionRecord
   {
-   long              decision_id;     // matching key; also written into the order comment as "MT#<id>"
+   long              decision_id;
+   string            setup_id;
    string            symbol;
-   TradeSetup        setup;           // the exact setup that was approved
+   TradeSetup        setup;
    ENUM_TRADE_POLICY action;
-   bool              reduce_risk;     // confidence below InpFullRiskConfidence -> size down
-   bool              valid;           // false = the router rejected it; nothing downstream should act
-   double            confidence;      // copy of setup.confidence at decision time (setup may be re-scored later)
-   double            spread_points;   // spread observed when the decision was taken, for post-hoc analysis
+   bool              reduce_risk;
+   bool              valid;
+   bool              structural_valid;
+   ENUM_SETUP_REJECTION_REASON rejection_reason;
+   double            raw_confidence;
+   double            confidence;
+   double            spread_points;
    datetime          decided_time;
-   string            reason;          // human-readable why, mirrored into the CSV store
+   string            reason;
   };
-
 // Written when (and only when) an order actually reached the broker, so
 // Recovery can tell "decision existed" from "decision was submitted at
 // this volume on this ticket".

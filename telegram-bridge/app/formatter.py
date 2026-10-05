@@ -115,9 +115,19 @@ def format_signal_message(signal: dict) -> str:
         "Direction",
         direction,
         "",
-        "Entry",
-        str(signal["entry"]),
+        "Entry Zone",
+        (f"{extra.get('entry_bottom')} → {extra.get('entry_top')}"
+         if extra.get("entry_bottom") is not None and extra.get("entry_top") is not None
+         else str(signal["entry"])),
     ]
+
+    invalidation = extra.get("invalidation")
+    if invalidation is not None:
+        lines += ["", "Thesis Invalidation", str(invalidation)]
+
+    structural_quality = extra.get("structural_quality")
+    if structural_quality is not None:
+        lines += ["", "Structural Quality", f"{structural_quality:.0f}%"]
 
     pips_sl = extra.get("pips_sl")
     pips_tp1 = extra.get("pips_tp1")

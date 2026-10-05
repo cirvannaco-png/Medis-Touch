@@ -134,7 +134,9 @@ int CDecisionStore::ReadLines(const string filename, string &lines[])
 // silently corrupt recovery after an upgrade.
 string CDecisionStore::SerializeDecision(const TradeDecisionRecord &rec)
   {
-   string parts[13];
+   // v2.17 appends fields only; the first 13 positions stay frozen so
+   // historical decision files remain readable after an upgrade.
+   string parts[25];
    parts[0]  = IntegerToString(rec.decision_id);
    parts[1]  = rec.symbol;
    parts[2]  = IntegerToString((int)rec.setup.type);
@@ -149,8 +151,21 @@ string CDecisionStore::SerializeDecision(const TradeDecisionRecord &rec)
    parts[11] = IntegerToString((int)rec.action);
    parts[12] = rec.reduce_risk ? "1" : "0";
 
+   parts[13] = rec.setup.setup_id;
+   parts[14] = IntegerToString((long)rec.setup.smc_chain_id);
+   parts[15] = IntegerToString((int)rec.setup.status);
+   parts[16] = IntegerToString((int)rec.setup.rejection_reason);
+   parts[17] = IntegerToString((int)rec.setup.family);
+   parts[18] = DoubleToString(rec.setup.invalidation, _Digits);
+   parts[19] = DoubleToString(rec.setup.raw_confidence, 2);
+   parts[20] = rec.setup.structural_valid ? "1" : "0";
+   parts[21] = DoubleToString(rec.setup.structural_quality, 2);
+   parts[22] = IntegerToString((long)rec.setup.expiry_time);
+   parts[23] = IntegerToString((int)rec.setup.reasons.regime);
+   parts[24] = rec.setup.target_plan_valid ? "1" : "0";
+
    string line = parts[0];
-   for(int i = 1; i < 13; i++) line += DECISION_CSV_SEP + parts[i];
+   for(int i = 1; i < 25; i++) line += DECISION_CSV_SEP + parts[i];
    return line;
   }
 //+------------------------------------------------------------------+
@@ -170,15 +185,36 @@ bool CDecisionStore::ParseDecision(const string line, TradeDecisionRecord &rec)
    rec.setup.tp1          = StringToDouble(f[6]);
    rec.setup.tp2          = StringToDouble(f[7]);
    rec.setup.final_tp     = StringToDouble(f[8]);
-   rec.setup.confidence   = StringToDouble(f[9]);
+   rec.setup.confidence    = StringToDouble(f[9]);
    rec.setup.creation_time = (datetime)StringToInteger(f[10]);
-   rec.setup.active       = true;
-   rec.confidence         = rec.setup.confidence;
-   rec.decided_time       = (datetime)StringToInteger(f[10]);
-   rec.action             = (n > 11) ? (ENUM_TRADE_POLICY)(int)StringToInteger(f[11]) : POLICY_EXECUTE_ONLY;
-   rec.reduce_risk        = (n > 12) ? (f[12] == "1") : false;
-   rec.valid              = true;
-   rec.reason             = "restored from " + m_decisionsFile;
+   rec.setup.active        = true;
+   rec.confidence          = rec.setup.confidence;
+   rec.raw_confidence      = rec.setup.confidence;
+   rec.decided_time        = (datetime)StringToInteger(f[10]);
+   rec.action              = (n > 11) ? (ENUM_TRADE_POLICY)(int)StringToInteger(f[11]) : POLICY_EXECUTE_ONLY;
+   rec.reduce_risk         = (n > 12) ? (f[12] == "1") : false;
+
+   // v2.17 fields are appended. Old rows remain recoverable but are marked
+   // structurally unknown rather than pretending the new validator approved them.
+   if(n > 13) rec.setup.setup_id = f[13];
+   if(n > 14) rec.setup.smc_chain_id = (ulong)StringToInteger(f[14]);
+   if(n > 15) rec.setup.status = (ENUM_SETUP_STATUS)(int)StringToInteger(f[15]);
+   else       rec.setup.status = SETUP_ACTIVE;
+   if(n > 16) rec.setup.rejection_reason = (ENUM_SETUP_REJECTION_REASON)(int)StringToInteger(f[16]);
+   if(n > 17) rec.setup.family = (ENUM_SETUP_FAMILY)(int)StringToInteger(f[17]);
+   if(n > 18) rec.setup.invalidation = StringToDouble(f[18]);
+   if(n > 19) rec.setup.raw_confidence = StringToDouble(f[19]);
+   if(n > 20) rec.setup.structural_valid = (f[20] == "1");
+   if(n > 21) rec.setup.structural_quality = StringToDouble(f[21]);
+   if(n > 22) rec.setup.expiry_time = (datetime)StringToInteger(f[22]);
+   if(n > 23) rec.setup.reasons.regime = (ENUM_MARKET_REGIME)(int)StringToInteger(f[23]);
+   if(n > 24) rec.setup.target_plan_valid = (f[24] == "1");
+
+   rec.structural_valid = (n > 20) ? rec.setup.structural_valid : false;
+   rec.rejection_reason = (n > 16) ? rec.setup.rejection_reason : SETUP_REJECT_DATA;
+   rec.setup.active = true;
+   rec.valid = true;
+   rec.reason = "restored from " + m_decisionsFile;
    return true;
   }
 //+------------------------------------------------------------------+
@@ -241,10 +277,17 @@ bool CDecisionStore::Save(const TradeDecisionRecord &rec)
    for(int i = 0; i < ArraySize(m_decisions); i++)
       if(m_decisions[i].decision_id == rec.decision_id) return true;
 
+   // Durability is a prerequisite for execution decisions. Write and
+   // verify the append BEFORE adding the record to the in-memory mirror.
+   // Otherwise a disk failure could look harmless during this session and
+   // leave Recovery blind after a restart.
+   if(!AppendLine(m_decisionsFile, SerializeDecision(rec)))
+      return false;
+
    int idx = ArraySize(m_decisions);
    ArrayResize(m_decisions, idx + 1);
    m_decisions[idx] = rec;
-   return AppendLine(m_decisionsFile, SerializeDecision(rec));
+   return true;
   }
 //+------------------------------------------------------------------+
 bool CDecisionStore::SaveExecution(long decisionId, double volume, ulong ticket)

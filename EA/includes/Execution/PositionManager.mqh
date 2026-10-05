@@ -8,8 +8,9 @@
 #include "BrokerAdapter.mqh"
 
 // Everything that happens to a trade AFTER OrderManager gets it to
-// FILLED: break-even, partial close at TP1, trailing the runner, and
-// detecting closure. State order matches the documented lifecycle:
+// FILLED: break-even, target-aware partial close at TP1, TP2 profit
+// protection, trailing the runner, and detecting closure. State order
+// matches the documented lifecycle:
 // Filled -> Protected -> Partial -> Runner -> Closed -> Archived.
 class CPositionManager
   {
@@ -94,29 +95,76 @@ void CPositionManager::OnTick(double currentAtr)
       if(state == TS_FILLED && r >= m_breakEvenAtR)
         {
          if(m_broker.ModifySLTP(ticket, entry, dec.setup.final_tp))
+           {
             m_orders.TransitionAt(i, TS_PROTECTED);
+            state = TS_PROTECTED; // allow TP1 milestone evaluation on this tick
+           }
         }
 
-      // 2. Partial (only after break-even, matching the documented order).
-      // NOTE (#26, flagged not "fixed"): this fires at m_partialAtR (e.g.
-      // 2R), a fixed R-multiple -- not at dec.setup.tp1. TP1/TP2 are
-      // liquidity-derived DISPLAY targets for the dashboard/signal feed;
-      // they were never the live partial-close trigger, and a liquidity
-      // level isn't guaranteed to be a good partial-exit point on every
-      // setup. Real distinction, not a bug to silently paper over.
-      if(state == TS_PROTECTED && r >= m_partialAtR)
+      // 2. Target-aware TP1 partial. TP1 is the first member of the
+      // validated target plan, so management follows the same structural
+      // target chosen before risk approval. The legacy fixed-R trigger is
+      // only a fallback for an old restored decision that predates TP1.
+      double tp1 = dec.setup.tp1;
+      bool tp1Directional = isBuy ? (tp1 > entry) : (tp1 < entry);
+      bool tp1Reached = tp1Directional
+                        ? (isBuy ? (price >= tp1) : (price <= tp1))
+                        : (r >= m_partialAtR);
+
+      // TP1 is a target milestone, not a side effect of the BE
+      // configuration. If TP1 is reached before a configured BE threshold,
+      // protect at the actual fill first, then take the planned partial.
+      bool tp1ProtectionReady = (state == TS_PROTECTED);
+      if(state == TS_FILLED && tp1Reached)
+        {
+         double curSL = PositionGetDouble(POSITION_SL);
+         bool improveToEntry = isBuy ? (entry > curSL) : (entry < curSL);
+         bool protectionOk = !improveToEntry || m_broker.ModifySLTP(ticket, entry, dec.setup.final_tp);
+         if(protectionOk)
+           {
+            m_orders.TransitionAt(i, TS_PROTECTED);
+            state = TS_PROTECTED;
+            tp1ProtectionReady = true;
+           }
+        }
+
+      if(tp1ProtectionReady && tp1Reached)
         {
          double vol = m_orders.VolumeAt(i) * m_partialFraction;
          double minVol = SymbolInfoDouble(dec.symbol, SYMBOL_VOLUME_MIN);
          if(vol >= minVol && m_broker.ClosePartial(ticket, vol))
+           {
             m_orders.TransitionAt(i, TS_PARTIAL);
+            state = TS_PARTIAL; // allow TP2 protection on the same tick if reached
+           }
         }
 
-      // 3. Hand the remainder off as a trailing runner
-      if(state == TS_PARTIAL)
-         m_orders.TransitionAt(i, TS_RUNNER);
+      // 3. TP2 is a profit-protection milestone rather than a second
+      // arbitrary partial. Once reached, move the stop to TP1. This uses
+      // the actual target path while preserving the existing one-partial
+      // state machine and runner economics.
+      double tp2 = dec.setup.tp2;
+      bool tp2Reached = (isBuy && tp2 > entry) ? (price >= tp2)
+                       : (!isBuy && tp2 < entry) ? (price <= tp2)
+                       : false;
+      if((state == TS_PARTIAL || state == TS_RUNNER) && tp2Reached && tp1 > 0.0)
+        {
+         double lockSL = tp1;
+         double curSL = PositionGetDouble(POSITION_SL);
+         bool improvedLock = isBuy ? (lockSL > curSL) : (lockSL < curSL);
+         if(improvedLock)
+            m_broker.ModifySLTP(ticket, lockSL, dec.setup.final_tp);
+        }
 
-      // 4. Trail the runner — only ever tighten, never widen, the stop
+      // 4. Hand the remainder off as a trailing runner
+      if(state == TS_PARTIAL)
+        {
+         m_orders.TransitionAt(i, TS_RUNNER);
+         state = TS_RUNNER;
+        }
+
+      // 5. Trail the runner — only ever tighten, never widen, the stop
+      // after the TP2 profit-protection milestone.
       if(state == TS_RUNNER && currentAtr > 0)
         {
          double newSL = isBuy ? price - m_trailAtrMult * currentAtr : price + m_trailAtrMult * currentAtr;

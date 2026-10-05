@@ -288,7 +288,13 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
                // v2.14 diagnostics — same append-only discipline.
                "KeyLevelSource", "KeyLevelReaction", "KeyLevelScore",
                // v2.15 diagnostics — same append-only discipline.
-               "SelectedStrategy", "SelectedStrategyScore");
+               "SelectedStrategy", "SelectedStrategyScore",
+               // v2.17 target/regime/calibration evidence.
+               "RegimeCompatible", "RegimeReason", "RegimeQuality", "RegimeAgeBars", "TargetPlanValid",
+               "TP1_R", "TP2_R", "TP3_R", "TP1_Quality", "TP2_Quality", "TP3_Quality",
+               "TP1_CalibratedProbability", "TP2_CalibratedProbability", "TP3_CalibratedProbability",
+               "CalibratedProbability", "CalibrationSample", "CalibrationContextUsed",
+               "TP1_CalibrationSample", "TP1_CalibrationContextUsed", "TP1_CalibrationHasEnoughData");
       m_headerWritten = true;
      }
 
@@ -299,7 +305,9 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
    // SignalID joins this row to its eventual outcome row in the Outcomes
    // CSV — just the creation timestamp + direction, unique enough for a
    // single-symbol, single-instance signal stream.
-   string signalId = StringFormat("%s_%s_%d", symbol, dir, (long)setup.creation_time);
+   string signalId = (StringLen(setup.setup_id) > 0)
+                      ? setup.setup_id
+                      : StringFormat("%s_%s_%I64d", symbol, dir, (long)setup.creation_time);
 
    FileWrite(handle, signalId, symbol, EnumToString(entryTF), TimeToString(setup.creation_time, TIME_DATE | TIME_MINUTES),
             session, trendLabel, dir, DoubleToString(setup.confidence, 1),
@@ -329,7 +337,23 @@ bool CSignalLogger::LogSetup(TradeSetup &setup, string symbol, ENUM_TIMEFRAMES e
             KeyLevelReactionLabel(setup.reasons.keylevel_reaction),
             DoubleToString(setup.reasons.keylevel_score, 1),
             SelectedStrategyLabel(setup.reasons.selected_strategy),
-            DoubleToString(setup.reasons.selected_strategy_score, 1));
+            DoubleToString(setup.reasons.selected_strategy_score, 1),
+            setup.reasons.regime_compatible ? "Yes" : "No",
+            setup.reasons.regime_reason,
+            DoubleToString(setup.reasons.regime_quality, 1),
+            setup.reasons.regime_age_bars,
+            setup.target_plan_valid ? "Yes" : "No",
+            DoubleToString(setup.tp1_rr, 2), DoubleToString(setup.tp2_rr, 2), DoubleToString(setup.tp3_rr, 2),
+            DoubleToString(setup.tp1_quality, 1), DoubleToString(setup.tp2_quality, 1), DoubleToString(setup.tp3_quality, 1),
+            DoubleToString(setup.tp1_calibrated_probability, 1),
+            DoubleToString(setup.tp2_calibrated_probability, 1),
+            DoubleToString(setup.tp3_calibrated_probability, 1),
+            DoubleToString(setup.calibrated_probability, 1),
+            setup.calibration_sample,
+            setup.calibration_context_used ? "Yes" : "No",
+            setup.tp1_calibration_sample,
+            setup.tp1_calibration_context_used ? "Yes" : "No",
+            setup.tp1_calibration_has_enough_data ? "Yes" : "No");
 
    FileClose(handle);
    return true;
@@ -367,21 +391,32 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
                // v2.14 — same rationale.
                "KeyLevelSource", "KeyLevelReaction", "KeyLevelScore",
                // v2.15 — same rationale.
-               "SelectedStrategy", "SelectedStrategyScore");
+               "SelectedStrategy", "SelectedStrategyScore",
+               // v2.17 — target/regime/calibration evidence repeated so the
+               // outcome row is self-sufficient for attribution.
+               "RegimeCompatible", "RegimeReason", "RegimeQuality", "RegimeAgeBars", "TargetPlanValid",
+               "TP1_R", "TP2_R", "TP3_R", "TP1_Quality", "TP2_Quality", "TP3_Quality",
+               "TP1_CalibratedProbability", "TP2_CalibratedProbability", "TP3_CalibratedProbability",
+               "CalibratedProbability", "CalibrationSample", "CalibrationContextUsed");
       m_outcomeHeaderWritten = true;
      }
 
    FileSeek(handle, 0, SEEK_END);
    string dir = (p.setup.type == ORDER_TYPE_BUY) ? "BUY" : "SELL";
-   string signalId = StringFormat("%s_%s_%d", symbol, dir, (long)p.setup.creation_time);
+   string signalId = (StringLen(p.setup.setup_id) > 0)
+                      ? p.setup.setup_id
+                      : StringFormat("%s_%s_%I64d", symbol, dir, (long)p.setup.creation_time);
 
+   // MFE/MAE R uses the same management basis as realized R:
+   // sizingEntryPrice + mgmtRiskDist. entryRef remains the zone-touch
+   // reference and is logged separately for fill-analysis.
    double mfeR = 0.0, maeR = 0.0;
-   if(p.filled && p.riskDist > 0)
+   if(p.filled && p.mgmtRiskDist > 0)
      {
-      double mfeDist = (p.setup.type == ORDER_TYPE_BUY) ? (p.mfePrice - p.entryRef) : (p.entryRef - p.mfePrice);
-      double maeDist = (p.setup.type == ORDER_TYPE_BUY) ? (p.entryRef - p.maePrice) : (p.maePrice - p.entryRef);
-      mfeR = mfeDist / p.riskDist;
-      maeR = maeDist / p.riskDist;
+      double mfeDist = (p.setup.type == ORDER_TYPE_BUY) ? (p.mfePrice - p.sizingEntryPrice) : (p.sizingEntryPrice - p.mfePrice);
+      double maeDist = (p.setup.type == ORDER_TYPE_BUY) ? (p.sizingEntryPrice - p.maePrice) : (p.maePrice - p.sizingEntryPrice);
+      mfeR = mfeDist / p.mgmtRiskDist;
+      maeR = maeDist / p.mgmtRiskDist;
      }
 
    // Realized R uses mgmtRiskDist (the same basis the simulator's
@@ -430,7 +465,20 @@ bool CSignalLogger::LogOutcome(PendingSetup &p, string symbol, ENUM_TIMEFRAMES e
             KeyLevelReactionLabel(p.setup.reasons.keylevel_reaction),
             DoubleToString(p.setup.reasons.keylevel_score, 1),
             SelectedStrategyLabel(p.setup.reasons.selected_strategy),
-            DoubleToString(p.setup.reasons.selected_strategy_score, 1));
+            DoubleToString(p.setup.reasons.selected_strategy_score, 1),
+            p.setup.reasons.regime_compatible ? "Yes" : "No",
+            p.setup.reasons.regime_reason,
+            DoubleToString(p.setup.reasons.regime_quality, 1),
+            p.setup.reasons.regime_age_bars,
+            p.setup.target_plan_valid ? "Yes" : "No",
+            DoubleToString(p.setup.tp1_rr, 2), DoubleToString(p.setup.tp2_rr, 2), DoubleToString(p.setup.tp3_rr, 2),
+            DoubleToString(p.setup.tp1_quality, 1), DoubleToString(p.setup.tp2_quality, 1), DoubleToString(p.setup.tp3_quality, 1),
+            DoubleToString(p.setup.tp1_calibrated_probability, 1),
+            DoubleToString(p.setup.tp2_calibrated_probability, 1),
+            DoubleToString(p.setup.tp3_calibrated_probability, 1),
+            DoubleToString(p.setup.calibrated_probability, 1),
+            p.setup.calibration_sample,
+            p.setup.calibration_context_used ? "Yes" : "No");
 
    FileClose(handle);
    return true;
