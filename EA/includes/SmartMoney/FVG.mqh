@@ -124,7 +124,7 @@ void CFVG::UpdateState(FVGZone &zone)
    if(zone.state == FVG_MITIGATED || zone.state == FVG_EXPIRED || zone.state == FVG_INVALIDATED)
       return; // terminal states — nothing to update
 
-   int ageBars = MathMax(0, zone.bar_index - 1);
+   int ageBars = MathMax(0, zone.bar_index - 2);
    if(ageBars > m_maxAgeBars)
      {
       zone.state = FVG_EXPIRED;
@@ -165,7 +165,7 @@ void CFVG::UpdateState(FVGZone &zone)
         }
      }
 
-   // Age is itself a quality signal. A zone that survived but remained
+   // Age is measured from the first CLOSED bar that completed the FVG. A zone that survived but remained
    // untouched beyond the degradation horizon is no longer executable.
    if(zone.state == FVG_FRESH && ageBars >= m_degradeBars)
       zone.state = FVG_DEGRADED;
