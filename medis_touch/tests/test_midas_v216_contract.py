@@ -359,3 +359,24 @@ def test_mql5_version_is_224():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
         assert '#property version   "2.24"' in c
+
+
+def test_v225_entry_drift_is_asymmetric_but_bounded():
+    om = read("EA/includes/Execution/OrderManager.mqh")
+    main = read("EA/MedisTouch_v2.8.mq5")
+    assert "maxAdverseEntryDeviation" in om
+    assert "maxFavorableEntryDeviation" in om
+    assert "double signedDrift" in om
+    assert "double adverseDrift = MathMax(0.0, signedDrift);" in om
+    assert "double favorableDrift = MathMax(0.0, -signedDrift);" in om
+    assert "favorable drift" in om.lower()
+    assert "InpMaxEntryDeviationATR = 0.15" in main
+    assert "InpMaxFavorableEntryDeviationATR = 0.25" in main
+    assert "maxAdverseDeviation = InpMaxEntryDeviationATR * analysisAtr" in main
+    assert "maxFavorableDeviation = InpMaxFavorableEntryDeviationATR * analysisAtr" in main
+
+
+def test_mql5_version_is_225():
+    for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
+        c = read(path)
+        assert '#property version   "2.25"' in c
