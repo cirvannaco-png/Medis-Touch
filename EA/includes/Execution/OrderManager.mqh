@@ -40,7 +40,9 @@ public:
    // current market price has already moved further than this from the
    // theoretical entry the setup/risk math was built on -- a pre-trade
    // guard against filling a stale signal at a materially worse price.
-   bool              Submit(const TradeDecisionRecord &decision, double volume, bool useMarket, double maxEntryDeviation, ulong &ticketOut);
+   bool              Submit(const TradeDecisionRecord &decision, double volume, bool useMarket,
+                                     double maxAdverseEntryDeviation, double maxFavorableEntryDeviation,
+                                     ulong &ticketOut);
    bool              RestoreTrade(const TradeDecisionRecord &decision, double volume, ulong ticket, ENUM_TRADE_STATE state);
    int               OpenCount();
    int               Total() { return ArraySize(m_trades); }
@@ -165,7 +167,9 @@ bool COrderManager::MarkFilledFromPending(ulong orderTicket, ulong positionTicke
    return false; // no matching pending trade — not ours, or already handled
   }
 //+------------------------------------------------------------------+
-bool COrderManager::Submit(const TradeDecisionRecord &decision, double volume, bool useMarket, double maxEntryDeviation, ulong &ticketOut)
+bool COrderManager::Submit(const TradeDecisionRecord &decision, double volume, bool useMarket,
+                              double maxAdverseEntryDeviation, double maxFavorableEntryDeviation,
+                              ulong &ticketOut)
   {
    ticketOut = 0;
    if(decision.action != POLICY_EXECUTE_ONLY && decision.action != POLICY_EXECUTE_AND_SIGNAL)
@@ -192,24 +196,30 @@ bool COrderManager::Submit(const TradeDecisionRecord &decision, double volume, b
    // tolerance, reject rather than filling at an unknown, unbounded worse
    // price. useMarket only -- a limit order at `entry` either fills at
    // that price or doesn't fill at all, so it doesn't need this guard.
-   if(useMarket && maxEntryDeviation > 0.0)
+   if(useMarket && (maxAdverseEntryDeviation > 0.0 || maxFavorableEntryDeviation > 0.0))
      {
       MqlTick tick;
       if(SymbolInfoTick(decision.symbol, tick))
         {
          double marketPrice = (decision.setup.type == ORDER_TYPE_BUY) ? tick.ask : tick.bid;
-         // Only ADVERSE drift invalidates the setup. A better-than-theoretical
-         // fill is not stale: for a buy, a price below the zone's worse edge
-         // improves R/R; for a sell, a price above the zone's worse edge does
-         // the same. The old absolute-distance check discarded those valid
-         // opportunities and reduced frequency without protecting risk.
-         double adverseDrift = (decision.setup.type == ORDER_TYPE_BUY)
-                               ? (marketPrice - entry)
-                               : (entry - marketPrice);
-         if(adverseDrift > maxEntryDeviation)
+         // Asymmetric bounded drift: a modestly better fill is allowed, but
+         // not an unbounded chase away from the validated entry zone.
+         double signedDrift = (decision.setup.type == ORDER_TYPE_BUY)
+                              ? (marketPrice - entry)
+                              : (entry - marketPrice);
+         double adverseDrift = MathMax(0.0, signedDrift);
+         double favorableDrift = MathMax(0.0, -signedDrift);
+
+         if(maxAdverseEntryDeviation > 0.0 && adverseDrift > maxAdverseEntryDeviation)
            {
-            PrintFormat("MedisTouch OrderManager: decision #%d rejected — adverse market drift %.5f from decision entry %.5f (max allowed %.5f).",
-                        decision.decision_id, adverseDrift, entry, maxEntryDeviation);
+            PrintFormat("MedisTouch OrderManager: decision #%d rejected — adverse market drift %.5f from decision entry %.5f (max %.5f).",
+                        decision.decision_id, adverseDrift, entry, maxAdverseEntryDeviation);
+            return false;
+           }
+         if(maxFavorableEntryDeviation > 0.0 && favorableDrift > maxFavorableEntryDeviation)
+           {
+            PrintFormat("MedisTouch OrderManager: decision #%d rejected — favorable drift %.5f exceeds proximity cap %.5f; setup is too far from its entry zone.",
+                        decision.decision_id, favorableDrift, maxFavorableEntryDeviation);
             return false;
            }
         }
