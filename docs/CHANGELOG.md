@@ -1,5 +1,38 @@
 # Changelog
 
+## v2.20 — causal-chain confidence architecture
+
+The production confidence model is now explicitly downstream of the validated SMC
+chain. This removes a major source of evidence duplication between the structural
+validator and the scoring engine.
+
+### Changed
+- TradeZone now derives policy-facing confidence from the already validated causal
+  SMC chain instead of re-running the independent inducement score.
+- The causal chain contributes the structural 70-point substrate: sweep/rejection,
+  displacement, structure, causal FVG, freshness and location coherence.
+- Independent confluence remains separate: HTF trend, volume, Fibonacci, Value Area
+  and HTF Order Block.
+- The validated confidence path no longer adds the generic FVG score on top of the
+  causal FVG, preventing double-counting of the same price-imbalance evidence.
+- A new 105-point validated-confidence normalization is used, preserving relative
+  ranking while preventing a duplicated structural component from inflating scores.
+- Calibration/weight-set version is bumped to SMC-CAUSAL-2.20 so previous confidence
+  populations cannot be silently mixed with the new score definition.
+
+### Engineering rationale
+The prior architecture had two authorities describing nearly the same market event:
+the StructuralValidator proved a causal chain, while ScoringEngine independently
+recomputed inducement/FVG evidence. v2.20 makes the chain the structural source of
+truth and reserves scoring for ranking independent confluence.
+
+### Validation status
+The source contract and regression tests were updated. MetaEditor/MT5 compilation and
+full broker-data backtesting remain mandatory before production deployment. No 87%
+future-performance claim is made.
+
+
+
 ## v2.19 — execution-grade precision evidence and calibration integrity
 
 v2.19 turns the 87% objective into a stricter, auditable execution policy without
