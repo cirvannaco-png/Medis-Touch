@@ -268,7 +268,7 @@ def test_v219_calibration_pools_only_adjacent_buckets_inside_same_context():
 def test_mql5_version_is_219():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
-        assert '#property version   "2.19"' in c
+        assert '#property version   "2.23"' in c
 
 
 def test_v220_tradezone_uses_validated_causal_chain_confidence():
@@ -286,10 +286,10 @@ def test_v220_tradezone_uses_validated_causal_chain_confidence():
 def test_v220_calibration_population_is_versioned_with_new_confidence_semantics():
     cfg = read("EA/includes/Core/Config.mqh")
     main = read("EA/MedisTouch_v2.8.mq5")
-    assert 'MIDAS_ENGINE_VERSION "2.20"' in cfg
-    assert 'MIDAS_WEIGHT_SET_VERSION "SMC-CAUSAL-2.20"' in cfg
-    assert 'InpWeightSetVersion = "SMC-CAUSAL-2.20"' in main
-    assert '#property version   "2.20"' in main
+    assert 'MIDAS_ENGINE_VERSION "2.23"' in cfg
+    assert 'MIDAS_WEIGHT_SET_VERSION "SMC-CAUSAL-2.23"' in cfg
+    assert 'InpWeightSetVersion = "SMC-CAUSAL-2.23"' in main
+    assert '#property version   "2.23"' in main
 
 
 def test_v221_precision_gate_tracks_before_execution_filter():
