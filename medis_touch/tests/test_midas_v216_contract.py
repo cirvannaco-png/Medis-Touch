@@ -193,6 +193,22 @@ def test_v227_precision_hardening_is_explicit_and_shared_by_ea_and_indicator():
     assert "tp1MinRR * riskDist" in targets
 
 
+def test_v227_structure_age_ceiling_is_wired_end_to_end():
+    chain = read("EA/includes/Analysis/SMCChain.mqh")
+    validator = read("EA/includes/Analysis/StructuralValidator.mqh")
+    ea = read("EA/MedisTouch_v2.8.mq5")
+    indicator = read("EA/MedisTouch_Indicator_v2.8.mq5")
+    zone = read("EA/includes/Trading/TradeZone.mqh")
+    assert "m_maxStructureAgeBars" in chain
+    assert "if(structureBar > m_maxStructureAgeBars)" in chain
+    assert "maxStructureAgeBars = 5" in chain
+    assert "maxStructureAgeBars" in validator
+    assert "InpMaxChainStructureAgeBars = 5" in ea
+    assert "InpMaxChainStructureAgeBars = 5" in indicator
+    assert "InpMaxChainStructureAgeBars" in ea
+    assert "InpMaxChainStructureAgeBars" in indicator
+    assert "m_minStructuralQuality" in zone
+
 def test_v217_low_vol_gate_fails_closed_on_undefined_regime():
     c = read("EA/includes/Analysis/Scoring.mqh")
     assert "if(regime == VOL_REGIME_LOW || regime == VOL_REGIME_UNDEFINED)" in c
