@@ -12,7 +12,7 @@
 // together on the same chart (indicator for the visuals you're used to,
 // EA for the parts that touch money) or run this alone headless.
 #property copyright "Medis Touch"
-#property version   "2.24"
+#property version   "2.25"
 #property strict
 
 #include "includes/Core/Config.mqh"
@@ -63,7 +63,8 @@ input double InpMinRiskReward = 1.5;
 input double InpMaxSLDistanceATR = 1.5;
 input double InpSLBufferATR = 0.25;        // invalidation margin beyond FVG far edge, in ATR (audit #23 fix)
 input double InpMinStopSpreadMult = 3.0;   // floor: SL distance from entry never below (current spread * this) -- check against real Pepperstone/Exness spread in Tester
-input double InpMaxEntryDeviationATR = 0.15; // reject a market order if price drifted this many ATR from decision entry (audit #25 fix)
+input double InpMaxEntryDeviationATR = 0.15; // maximum ADVERSE market-entry drift in ATR from validated executable entry
+input double InpMaxFavorableEntryDeviationATR = 0.25; // maximum FAVORABLE drift in ATR; prevents entering far outside the validated zone while allowing better fills
 
 input group "Inducement Engine"
 input int    InpImpulseLookbackBars = 40;
@@ -283,7 +284,7 @@ input string InpBridgeApiKey = "";              // must match telegram-bridge's 
 // "which weight set produced this," which is the prerequisite for the
 // statistical gating / promotion layer (steps 4-5) ever being able to
 // tell one weight set's expectancy apart from another's in signal_outcomes.
-input string InpWeightSetVersion = "SMC-CAUSAL-2.24";
+input string InpWeightSetVersion = "SMC-CAUSAL-2.25";
 // v2.11 — the operator's OWN bridge endpoint, for ConfigSync polling
 // only. Deliberately separate from the subscriber-fan-out CSV
 // (SubscriberPlatform.mqh) — that list is for broadcasting signals to
@@ -916,8 +917,9 @@ void OnTick()
             else
               {
                ulong ticketOut = 0;
-            double maxDeviation = InpMaxEntryDeviationATR * currentAtr;
-               if(g_orders.Submit(decision, lots, InpUseMarketOrders, maxDeviation, ticketOut))
+            double maxAdverseDeviation = InpMaxEntryDeviationATR * analysisAtr;
+               double maxFavorableDeviation = InpMaxFavorableEntryDeviationATR * analysisAtr;
+               if(g_orders.Submit(decision, lots, InpUseMarketOrders, maxAdverseDeviation, maxFavorableDeviation, ticketOut))
                   g_store.SaveExecution(decision.decision_id, lots, ticketOut);
                else
                   g_monitor.NotifyBrokerReject();
