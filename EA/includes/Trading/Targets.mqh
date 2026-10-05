@@ -111,7 +111,7 @@ void CTargetSelector::AssignTargets(TradeSetup &setup, CTFContext* liqCtx, strin
 
    bool forBuy = (setup.type == ORDER_TYPE_BUY);
    double riskDist = MathAbs(entryPrice - setup.stop_loss);
-   if(atr <= 0.0 || riskDist <= 0.0 || minRR <= 0.0) return;
+   if(atr <= 0.0 || riskDist <= 0.0 || minRR <= 0.0 || tp1MinRR <= 0.0) return;
 
    double minimumDistance = minRR * riskDist;
    // Fallback targets use explicit RR tiers rather than repeatedly adding the
