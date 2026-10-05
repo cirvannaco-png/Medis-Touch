@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.23 — target fallback geometry hardening
+
+### Fixed
+- When no suitable liquidity/weekly anchor exists, fallback targets no longer
+  compound the minimum RR distance at every tier.
+- With the default 1.5R minimum, the fallback path now aims for approximately
+  1.5R TP1, 2.0R TP2 and 3.0R final TP, while preserving strict monotonicity.
+- Distant liquidity-derived TP1/TP2 levels are still respected; the fallback
+  only moves the next tier outward when needed.
+
+### Rationale
+The previous fallback could turn a valid entry into an unnecessarily distant
+profit ladder (1.5R -> 3R -> 4.5R). That can reduce target-hit precision without
+improving entry quality. The revised ladder separates entry validity from
+overly ambitious fallback geometry.
+
+This is a research/engineering correction, not evidence of an 87% future win
+rate. MT5/MetaEditor and untouched holdout validation remain required.
+
+
+
 ## v2.22 — FVG timing and quality correctness
 
 ### Fixed
