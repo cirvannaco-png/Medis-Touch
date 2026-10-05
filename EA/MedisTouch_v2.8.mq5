@@ -12,7 +12,7 @@
 // together on the same chart (indicator for the visuals you're used to,
 // EA for the parts that touch money) or run this alone headless.
 #property copyright "Medis Touch"
-#property version   "2.26"
+#property version   "2.27"
 #property strict
 
 #include "includes/Core/Config.mqh"
@@ -122,16 +122,16 @@ input int    InpMaxBarsSinceBOS = 5;               // Decay-to-zero cutoff (0/90
 input bool   InpRequireChaseFilter = false;        // Gate: OFF by default — reject setups that ran too far past BOS before entry
 input double InpMaxChaseDistATR = 0.75;            // Max (price - BOS close)/ATR in the trade direction before rejecting as "chased"
 input double InpFVGMaxDistATR = 1.25;              // FVG proximity cap — tightened default from the old hardcoded 3.0 (see Scoring.mqh)
-input double InpMinDirectionalAdvantage = 0.0;
+input double InpMinDirectionalAdvantage = 5.0;
 
 // --- v2.16 causal SMC chain validation ----------------------------
 input group "SMC Chain Validation (v2.16)"
 input int    InpMaxSweepToStructureBars = 8;
 input int    InpMaxStructureToFVGBars = 2;
-input int    InpMaxFVGAgeBars = 15;
-input double InpMinChainDisplacementATR = 1.0;
+input int    InpMaxFVGAgeBars = 8;
+input double InpMinChainDisplacementATR = 1.10;
 input double InpMinChainDisplacementBodyRatio = 0.55;
-input double InpMinChainStructureStrength = 0.45;
+input double InpMinChainStructureStrength = 0.50;
 input bool   InpRequireContinuationHTFAlignment = true;
 
 input group "Market Regime Policy (v2.17)"
@@ -285,7 +285,7 @@ input string InpBridgeApiKey = "";              // must match telegram-bridge's 
 // "which weight set produced this," which is the prerequisite for the
 // statistical gating / promotion layer (steps 4-5) ever being able to
 // tell one weight set's expectancy apart from another's in signal_outcomes.
-input string InpWeightSetVersion = "SMC-CAUSAL-2.26";
+input string InpWeightSetVersion = "SMC-CAUSAL-2.27";
 // v2.11 — the operator's OWN bridge endpoint, for ConfigSync polling
 // only. Deliberately separate from the subscriber-fan-out CSV
 // (SubscriberPlatform.mqh) — that list is for broadcasting signals to
