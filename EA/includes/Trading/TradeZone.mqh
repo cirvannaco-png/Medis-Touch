@@ -36,7 +36,7 @@ public:
                      CTradeDecision();
    void              Init(CCandleData* priceRef, CTFContext* fvgCtx, CTFContext* liqCtx, CScoringEngine* scoring,
                           CStructuralValidator* validator, double slBufferATR = 0.25, double minStopSpreadMult = 3.0,
-                          double targetMinRR = 1.5, double tp1MinRR = 1.25);
+                          double targetMinRR = 1.5, double tp1MinRR = 1.25, double minStructuralQuality = 60.0);
    void              ApplyRuntimeParameters(const RuntimeParameters &parameters);
    TradeSetup        GenerateBuySetup();
    TradeSetup        GenerateSellSetup();
@@ -59,7 +59,7 @@ CTradeDecision::CTradeDecision()
 
 void CTradeDecision::Init(CCandleData* priceRef, CTFContext* fvgCtx, CTFContext* liqCtx, CScoringEngine* scoring,
                           CStructuralValidator* validator, double slBufferATR, double minStopSpreadMult,
-                          double targetMinRR, double tp1MinRR)
+                          double targetMinRR, double tp1MinRR, double minStructuralQuality)
   {
    m_priceRef = priceRef;
    m_fvgCtx = fvgCtx;
