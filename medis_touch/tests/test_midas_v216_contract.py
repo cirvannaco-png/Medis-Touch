@@ -167,7 +167,7 @@ def test_v217_indicator_uses_same_min_rr_as_live_trade_decision():
 def test_v217_telemetry_preserves_64_bit_decision_identity():
     publisher = read("EA/includes/Signals/SignalPublisher.mqh")
     logger = read("EA/includes/Core/SignalLogger.mqh")
-    assert '"decision_id":%I64d' in publisher
+    assert '\\"decision_id\\":%I64d' in publisher
     assert "%I64d" in logger
 
 def test_v227_precision_hardening_is_explicit_and_shared_by_ea_and_indicator():
@@ -345,7 +345,7 @@ def test_v222_fvg_quality_is_not_double_normalized():
 def test_mql5_version_is_222():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
-        assert '#property version   "2.22"' in c
+        assert '#property version   "2.27"' in c
 
 
 def test_v223_target_fallback_is_non_compounding_and_monotonic():
@@ -356,13 +356,14 @@ def test_v223_target_fallback_is_non_compounding_and_monotonic():
     assert "fallbackTp3RR = MathMax(MathMax(fallbackTp2RR + 0.75, 3.0), minRR + 1.5)" in t
     assert "entryPrice + fallbackTp2Distance" in t
     assert "entryPrice + fallbackTp3Distance" in t
-    assert "1.5R / 2.0R / 3.0R" in t
+    assert "1.5R / 2.0R /" in t
+    assert "3.0R ladder" in t
 
 
 def test_mql5_version_is_223():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
-        assert '#property version   "2.23"' in c
+        assert '#property version   "2.27"' in c
 
 
 def test_v224_single_direction_risk_validation_uses_closed_bar_atr():
@@ -377,14 +378,14 @@ def test_v224_entry_drift_rejects_only_adverse_motion():
     om = read("EA/includes/Execution/OrderManager.mqh")
     assert "double adverseDrift" in om
     assert "Asymmetric bounded drift" in om
-    assert "if(adverseDrift > maxEntryDeviation)" in om
+    assert "if(maxAdverseEntryDeviation > 0.0 && adverseDrift > maxAdverseEntryDeviation)" in om
     assert "double deviation = MathAbs(marketPrice - entry)" not in om
 
 
 def test_mql5_version_is_224():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
-        assert '#property version   "2.24"' in c
+        assert '#property version   "2.27"' in c
 
 
 def test_v225_entry_drift_is_asymmetric_but_bounded():
