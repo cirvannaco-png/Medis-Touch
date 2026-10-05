@@ -66,6 +66,7 @@ public:
              double minDisplacementBodyRatio = 0.55,
              double minStructureStrength = 0.45,
              bool requirePremiumDiscount = true,
+             double minRejectionRatio = 0.30,
              bool requireContinuationHTFAlignment = true,
              double minContinuationHTFTrendStrength = 0.0,
              const string smtReferenceSymbol = "",
@@ -108,6 +109,7 @@ void CStructuralValidator::Init(CTFContext* entryCtx,
                                 double minDisplacementBodyRatio,
                                 double minStructureStrength,
                                 bool requirePremiumDiscount,
+                                double minRejectionRatio,
                                 bool requireContinuationHTFAlignment,
                                 double minContinuationHTFTrendStrength,
                                 const string smtReferenceSymbol,
@@ -143,7 +145,8 @@ void CStructuralValidator::Init(CTFContext* entryCtx,
                   minDisplacementATR,
                   minDisplacementBodyRatio,
                   minStructureStrength,
-                  requirePremiumDiscount);
+                  requirePremiumDiscount,
+                  minRejectionRatio);
   }
 
 ENUM_SETUP_REJECTION_REASON CStructuralValidator::MapChainFailure(const SMCChain &chain) const
