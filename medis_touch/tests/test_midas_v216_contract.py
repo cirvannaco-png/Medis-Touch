@@ -220,7 +220,7 @@ def test_v217_simulated_tp2_collision_uses_fill_policy():
 
 def test_v217_simulator_does_not_manage_filled_trade_on_same_ohlc_bar():
     c = read("EA/includes/Trading/OutcomeTracker.mqh")
-    assert "management starts from the next bar" in c
+    assert "OHLC cannot tell whether the target/stop was reached before or" in c
     assert "m_pending[i] = p;" in c
     assert "continue;" in c
 def test_v217_causal_fvg_must_be_temporally_between_structure_and_displacement():
