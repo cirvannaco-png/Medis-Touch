@@ -25,6 +25,7 @@ private:
    double            m_slBufferATR;
    double            m_minStopSpreadMult;
    double            m_targetMinRR;
+   double            m_tp1MinRR;
    bool              m_runtimeEnabled;
    RuntimeParameters m_runtime;
 
@@ -34,7 +35,7 @@ public:
                      CTradeDecision();
    void              Init(CCandleData* priceRef, CTFContext* fvgCtx, CTFContext* liqCtx, CScoringEngine* scoring,
                           CStructuralValidator* validator, double slBufferATR = 0.25, double minStopSpreadMult = 3.0,
-                          double targetMinRR = 1.5);
+                          double targetMinRR = 1.5, double tp1MinRR = 1.25);
    void              ApplyRuntimeParameters(const RuntimeParameters &parameters);
    TradeSetup        GenerateBuySetup();
    TradeSetup        GenerateSellSetup();
@@ -47,6 +48,7 @@ CTradeDecision::CTradeDecision()
    m_slBufferATR = 0.25;
    m_minStopSpreadMult = 3.0;
    m_targetMinRR = 1.5;
+   m_tp1MinRR = 1.25;
    m_runtimeEnabled = false;
    m_runtime.Defaults();
    m_validator = NULL;
@@ -55,7 +57,7 @@ CTradeDecision::CTradeDecision()
 
 void CTradeDecision::Init(CCandleData* priceRef, CTFContext* fvgCtx, CTFContext* liqCtx, CScoringEngine* scoring,
                           CStructuralValidator* validator, double slBufferATR, double minStopSpreadMult,
-                          double targetMinRR)
+                          double targetMinRR, double tp1MinRR)
   {
    m_priceRef = priceRef;
    m_fvgCtx = fvgCtx;
@@ -65,6 +67,7 @@ void CTradeDecision::Init(CCandleData* priceRef, CTFContext* fvgCtx, CTFContext*
    m_slBufferATR = (slBufferATR > 0.0 ? slBufferATR : 0.25);
    m_minStopSpreadMult = (minStopSpreadMult >= 0.0 ? minStopSpreadMult : 3.0);
    m_targetMinRR = (targetMinRR > 0.0 ? targetMinRR : 1.5);
+   m_tp1MinRR = (tp1MinRR > 0.0 ? tp1MinRR : 1.25);
   }
 
 void CTradeDecision::ApplyRuntimeParameters(const RuntimeParameters &parameters)
@@ -121,7 +124,7 @@ TradeSetup CTradeDecision::GenerateBuySetup()
 
    CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr,
                                   ResolveExecutionEntry(setup),
-                                  m_targetMinRR, m_scoring.GetMarketRegime());
+                                  m_targetMinRR, m_tp1MinRR, m_scoring.GetMarketRegime());
 
    // Targets are part of the executable contract, not presentation. Do not
    // let an unvalidated/fallback target ladder proceed to logging, persistence,
