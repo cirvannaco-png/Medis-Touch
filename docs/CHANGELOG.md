@@ -1,5 +1,29 @@
 # Changelog
 
+## v2.21 — calibration feedback-loop hardening
+
+v2.21 removes a subtle deadlock in the 87% execution-precision architecture:
+policy-valid setups are now shadow-tracked before the precision decision is applied.
+
+### Fixed
+- EXECUTE_ONLY setups rejected by the precision gate are no longer omitted from
+  the OutcomeTracker population.
+- The system can therefore accumulate objective TP1/profitability evidence while
+  execution remains blocked below the empirical precision threshold.
+- Shadow tracking does not place an order; it records the same immutable setup for
+  simulated outcome attribution.
+
+### Policy
+The 87% gate remains fail-closed for financially consequential execution. The
+feedback path is now:
+validated setup -> policy decision -> shadow outcome tracking -> precision gate
+-> execution or signal-only degradation.
+
+No performance guarantee is implied; MT5/MetaEditor compilation and holdout
+backtesting remain mandatory.
+
+
+
 ## v2.20 — causal-chain confidence architecture
 
 The production confidence model is now explicitly downstream of the validated SMC
