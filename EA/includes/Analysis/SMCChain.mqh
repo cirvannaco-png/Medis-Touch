@@ -64,6 +64,7 @@ private:
    CTFContext* m_entryCtx;
    int         m_maxSweepToStructureBars;
    int         m_maxStructureToFVGBars;
+   int         m_maxStructureAgeBars;
    int         m_maxFVGAgeBars;
    double      m_minDisplacementATR;
    double      m_minDisplacementBodyRatio;
@@ -90,6 +91,7 @@ public:
    void Init(CTFContext* entryCtx,
              int maxSweepToStructureBars = 8,
              int maxStructureToFVGBars = 2,
+             int maxStructureAgeBars = 5,
              int maxFVGAgeBars = 15,
              double minDisplacementATR = 1.0,
              double minDisplacementBodyRatio = 0.55,
@@ -105,6 +107,7 @@ CSMCChainBuilder::CSMCChainBuilder()
   : m_entryCtx(NULL),
     m_maxSweepToStructureBars(8),
     m_maxStructureToFVGBars(2),
+    m_maxStructureAgeBars(5),
     m_maxFVGAgeBars(15),
     m_minDisplacementATR(1.0),
     m_minDisplacementBodyRatio(0.55),
@@ -116,6 +119,7 @@ CSMCChainBuilder::CSMCChainBuilder()
 void CSMCChainBuilder::Init(CTFContext* entryCtx,
                             int maxSweepToStructureBars,
                             int maxStructureToFVGBars,
+                            int maxStructureAgeBars,
                             int maxFVGAgeBars,
                             double minDisplacementATR,
                             double minDisplacementBodyRatio,
@@ -126,6 +130,7 @@ void CSMCChainBuilder::Init(CTFContext* entryCtx,
    m_entryCtx = entryCtx;
    m_maxSweepToStructureBars = MathMax(1, maxSweepToStructureBars);
    m_maxStructureToFVGBars = MathMax(0, maxStructureToFVGBars);
+   m_maxStructureAgeBars = MathMax(1, maxStructureAgeBars);
    m_maxFVGAgeBars = MathMax(1, maxFVGAgeBars);
    m_minDisplacementATR = MathMax(0.1, minDisplacementATR);
    m_minDisplacementBodyRatio = MathMax(0.1, MathMin(1.0, minDisplacementBodyRatio));
@@ -442,6 +447,15 @@ SMCChain CSMCChainBuilder::Build(bool forBuy)
 
       int structureBar = hasChoch ? choch.bar_index : bos.bar_index;
       datetime structureTime = hasChoch ? choch.time : bos.time;
+
+      // Structure is a live thesis only for a bounded number of confirmed
+      // bars. FVG freshness alone is insufficient: an old BOS can still have
+      // a newly-retested FVG and create a stale signal.
+      if(structureBar > m_maxStructureAgeBars)
+        {
+         minStructureBar = structureBar + 1;
+         continue;
+        }
       c.bos = bos;
       c.choch = choch;
       c.has_bos = hasBos;
