@@ -1,5 +1,24 @@
 # Changelog
 
+## v2.24 — execution drift and closed-bar risk hardening
+
+### Fixed
+- Single-direction risk validation now always uses the confirmed-bar ATR,
+  eliminating a live-bar volatility input that could change risk acceptance
+  mid-formation.
+- Market-entry staleness checks now reject only adverse movement relative to
+  the theoretical executable entry. Favorable price movement is allowed
+  instead of being incorrectly classified as stale.
+- This preserves risk discipline while recovering valid fills that were
+  previously rejected by a symmetric absolute-deviation rule.
+
+### Validation
+Regression coverage was added for both invariants. No profitability or
+87% accuracy claim is made; MetaEditor/MT5 compilation and holdout testing
+remain required.
+
+
+
 ## v2.23 — target fallback geometry hardening
 
 ### Fixed
