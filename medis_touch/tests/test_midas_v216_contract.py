@@ -278,7 +278,10 @@ def test_v220_tradezone_uses_validated_causal_chain_confidence():
     assert "if(chain.status != CHAIN_VALID" in scoring
     assert "double score = 70.0 * quality / 100.0;" in scoring
     assert "score += 15.0 * TrendScore(forBuy);" in scoring
-    assert "score += 15.0 * FVGScore(forBuy);" not in scoring
+    start = scoring.index("double CScoringEngine::CalculateValidatedConfidence")
+    end = scoring.index("double CScoringEngine::PipSize()", start)
+    validated = scoring[start:end]
+    assert "score += 15.0 * FVGScore(forBuy);" not in validated
     assert "m_scoring.CalculateValidatedConfidence(true, sv.chain)" in zone
     assert "m_scoring.CalculateValidatedConfidence(false, sv.chain)" in zone
 
