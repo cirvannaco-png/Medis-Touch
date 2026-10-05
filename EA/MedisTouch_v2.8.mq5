@@ -133,6 +133,8 @@ input double InpMinChainDisplacementATR = 1.10;
 input double InpMinChainDisplacementBodyRatio = 0.55;
 input double InpMinChainStructureStrength = 0.50;
 input bool   InpRequireContinuationHTFAlignment = true;
+input double InpMinStructuralQuality = 60.0;        // hard floor on causal chain quality
+input double InpMinChainRejectionRatio = 0.30;      // minimum closed-bar sweep reclaim
 
 input group "Market Regime Policy (v2.17)"
 input bool   InpEnableRegimeGate = true;              // default live policy; disable only for controlled ablation
