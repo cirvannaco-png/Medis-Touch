@@ -29,11 +29,9 @@
 //     outcome tracker. It reproduces CPositionManager's actual live
 //     management logic bar-by-bar (Execution/PositionManager.mqh):
 //     breakeven at InpBreakEvenAtR, a single partial close at
-//     InpPartialAtR (InpPartialFraction of the ORIGINAL volume — not a
-//     second partial at TP2; TP1/TP2 remain informational touch-flags
-//     only, exactly like they are in live trading, where the broker-side
-//     order is always bounded by stop_loss/final_tp and only the STOP
-//     moves), then an ATR-multiple trailing stop on the runner. Position
+//     the validated TP1 (or legacy InpPartialAtR fallback). The remaining
+//     volume stays protected after TP1 until TP2 is reached; TP2 then
+//     locks the stop to TP1 and activates the ATR-multiple runner. Position
 //     sizing uses CRiskEngine.CalculateLotSize with the same entry
 //     convention (entry_top for buy / entry_bottom for sell) the live EA
 //     sizes against, so simulated $ figures reflect what the same inputs
