@@ -170,6 +170,14 @@ def test_v217_telemetry_preserves_64_bit_decision_identity():
     assert '\\"decision_id\\":%I64d' in publisher
     assert "%I64d" in logger
 
+def test_v227_runner_state_starts_only_after_tp2_milestone():
+    c = read("EA/includes/Execution/PositionManager.mqh")
+    tp2_block = c.index("if(state == TS_PARTIAL && tp2Reached && tp1 > 0.0)")
+    trail_block = c.index("if(state == TS_RUNNER && currentAtr > 0)")
+    assert tp2_block < trail_block
+    assert "if(state == TS_PARTIAL)" not in c[tp2_block:trail_block]
+
+
 def test_v227_target_engine_has_no_undefined_tp1_distance_and_sell_passes_tp1_rr():
     targets = read("EA/includes/Trading/Targets.mqh")
     zone = read("EA/includes/Trading/TradeZone.mqh")
