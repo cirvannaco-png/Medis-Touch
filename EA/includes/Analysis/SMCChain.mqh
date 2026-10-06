@@ -104,7 +104,8 @@ public:
              double minDisplacementBodyRatio = 0.55,
              double minStructureStrength = 0.45,
              bool requirePremiumDiscount = true,
-             double minRejectionRatio = 0.30);
+             double minRejectionRatio = 0.30,
+             bool premiumDiscountReversalOnly = false);
 
    SMCChain Build(bool forBuy);
    string StatusToString(ENUM_CHAIN_STATUS status) const;
