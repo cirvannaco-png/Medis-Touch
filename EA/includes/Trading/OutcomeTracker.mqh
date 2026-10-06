@@ -682,7 +682,14 @@ void COutcomeTracker::ProcessFilledBar(int idx, CandleData &bar0)
       if(p.partialDone && p.setup.tp2 > 0.0)
         {
          bool tp2Touched = isBuy ? (bar0.high >= p.setup.tp2) : (bar0.low <= p.setup.tp2);
-         if(tp2Touched && p.setup.tp1 > 0.0)
+
+         // Do not activate runner management merely because TP1 was hit.
+         // The remainder stays protected at the TP1-stage stop until the
+         // planned TP2 milestone is actually reached.
+         if(!tp2Touched)
+            break;
+
+         if(p.setup.tp1 > 0.0)
            {
             // If the bar also touches the operative SL, resolve the order
             // under the configured fill policy instead of giving TP2
@@ -711,11 +718,7 @@ void COutcomeTracker::ProcessFilledBar(int idx, CandleData &bar0)
             bool improvedLock = isBuy ? (p.setup.tp1 > p.currentSL)
                                       : (p.setup.tp1 < p.currentSL);
             if(improvedLock)
-              {
                p.currentSL = p.setup.tp1;
-               m_pending[idx] = p;
-               continue;
-              }
             m_pending[idx] = p;
            }
         }
