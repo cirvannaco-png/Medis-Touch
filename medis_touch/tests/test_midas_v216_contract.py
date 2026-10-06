@@ -236,6 +236,16 @@ def test_v227_family_aware_premium_discount_policy_is_feature_flagged_and_shared
     assert "InpPremiumDiscountReversalOnly" in ind
 
 
+def test_v228_causal_displacement_and_sweep_shape_quality_are_explicit():
+    chain = read("EA/includes/Analysis/SMCChain.mqh")
+    assert "bool premiumDiscountReversalOnly = false" in chain
+    assert "if(sweepBar >= 1)" in chain
+    assert "for(int bar = oldest; bar >= structureBar; bar--)" in chain
+    assert "PenetrationShapeScore(double penetrationATR) const" in chain
+    assert "0.65 * rejectionQ + 0.35 * penetrationQ" in chain
+    assert "MathAbs(penetrationATR - 0.30)" not in chain
+
+
 def test_v227_structure_age_ceiling_is_wired_end_to_end():
     chain = read("EA/includes/Analysis/SMCChain.mqh")
     validator = read("EA/includes/Analysis/StructuralValidator.mqh")
