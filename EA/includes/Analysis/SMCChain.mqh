@@ -89,6 +89,7 @@ private:
                          int maxGapBars, int &dispBar,
                          double &atr, double &bodyRatio, double &rangeATR);
    bool ValidateRejection(bool forBuy, const LiquidityEvent &sweep, double &ratio, double &penetrationATR);
+   double PenetrationShapeScore(double penetrationATR) const;
    ulong StableChainId(datetime structureTime, datetime fvgTime, bool forBuy) const;
 
 public:
@@ -297,11 +298,20 @@ bool CSMCChainBuilder::FindDisplacement(bool forBuy, int structureBar, int sweep
                 ? MathMin(sweepBar - 1, structureBar + MathMax(1, maxGapBars))
                 : MathMin(total - 1, structureBar + MathMax(1, maxGapBars));
 
-   // Series order: smaller index is newer. Scan from the structure event
-   // backward toward the sweep so the closest qualifying displacement wins.
-   for(int bar = structureBar; bar <= oldest; bar++)
+   // Series order: smaller index is newer. For a reversal chain there is
+   // a causal ordering that matters: SWEEP -> DISPLACEMENT -> STRUCTURE.
+   // The old implementation scanned from STRUCTURE toward the sweep, so a
+   // strong BOS/CHoCH candle could be selected as the displacement even when
+   // an earlier post-sweep displacement existed. That made the chain appear
+   // causal while actually using the structural confirmation as its own
+   // explanation. Prefer the qualifying displacement closest to the sweep;
+   // for continuation chains (no sweep) retain the previous newest-first
+   // behavior because the BOS itself can legitimately be the displacement.
+   if(sweepBar >= 1)
      {
-      CandleData cd = m_entryCtx.candles.GetCandle(bar);
+      for(int bar = oldest; bar >= structureBar; bar--)
+        {
+         CandleData cd = m_entryCtx.candles.GetCandle(bar);
       double a = m_entryCtx.candles.GetATR(bar);
       if(a <= 0.0) continue;
 
@@ -320,10 +330,49 @@ bool CSMCChainBuilder::FindDisplacement(bool forBuy, int structureBar, int sweep
       atr = a;
       bodyRatio = br;
       rangeATR = ra;
-      return true;
+         return true;
+        }
+     }
+   else
+     {
+      for(int bar = structureBar; bar <= oldest; bar++)
+        {
+         CandleData cd = m_entryCtx.candles.GetCandle(bar);
+         double a = m_entryCtx.candles.GetATR(bar);
+         if(a <= 0.0) continue;
+
+         double range = cd.high - cd.low;
+         if(range <= 0.0) continue;
+
+         bool directional = forBuy ? (cd.close > cd.open) : (cd.close < cd.open);
+         double br = MathAbs(cd.close - cd.open) / range;
+         double ra = range / a;
+
+         if(!directional) continue;
+         if(ra < m_minDisplacementATR) continue;
+         if(br < m_minDisplacementBodyRatio) continue;
+
+         dispBar = bar;
+         atr = a;
+         bodyRatio = br;
+         rangeATR = ra;
+         return true;
+        }
      }
 
    return false;
+  }
+double CSMCChainBuilder::PenetrationShapeScore(double penetrationATR) const
+  {
+   // Smooth triangular preference: tiny pokes are weak, 0.03-0.60 ATR
+   // penetrations receive full credit, and deeper penetrations taper back
+   // toward zero instead of suffering the discontinuity in the old formula.
+   if(penetrationATR <= 0.0) return 0.0;
+   if(penetrationATR < 0.03)
+      return penetrationATR / 0.03;
+   if(penetrationATR <= 0.60)
+      return 1.0;
+   return MathMax(0.0, 1.0 - (penetrationATR - 0.60) / 0.60);
   }
 bool CSMCChainBuilder::FindCausalFVG(bool forBuy, int structureBar, int displacementBar,
                                      int sweepBar, int maxGapBars, int &ageBars, FVGZone &out)
@@ -565,7 +614,15 @@ SMCChain CSMCChainBuilder::Build(bool forBuy)
                                  dispBar,
                                  haveSweep ? c.sweep.bar_index : -1);
 
-      double sweepQ = haveSweep ? MathMax(0.0, MathMin(c.rejection_ratio, 1.0)) : 0.0;
+      // Sweep quality now uses two independent physical properties of the
+      // reclaim: how convincingly price closed back through the pool and
+      // whether the penetration depth looks like a plausible stop-run.
+      // This prevents a shallow/tiny poke and an appropriately-sized sweep
+      // from receiving identical chain quality merely because both closed
+      // back inside the liquidity pool.
+      double rejectionQ = haveSweep ? MathMax(0.0, MathMin(c.rejection_ratio, 1.0)) : 0.0;
+      double penetrationQ = haveSweep ? PenetrationShapeScore(c.penetration_atr) : 0.0;
+      double sweepQ = haveSweep ? MathMax(0.0, MathMin(0.65 * rejectionQ + 0.35 * penetrationQ, 1.0)) : 0.0;
       double dispQ = MathMax(0.0, MathMin(c.displacement_atr / 2.5, 1.0));
       double structQ = MathMax(0.0, MathMin(c.structure_strength, 1.0));
       // FVGZone.width is already normalized by the formation candle ATR
