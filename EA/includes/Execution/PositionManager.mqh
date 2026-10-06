@@ -143,10 +143,6 @@ void CPositionManager::OnTick(double currentAtr)
       // arbitrary partial. Once reached, move the stop to TP1. This uses
       // the actual target path while preserving the existing one-partial
       // state machine and runner economics.
-      double tp2 = dec.setup.tp2;
-      bool tp2Reached = (isBuy && tp2 > entry) ? (price >= tp2)
-                       : (!isBuy && tp2 < entry) ? (price <= tp2)
-                       : false;
       // 3. TP2 is the state transition into the runner. Until TP2 is
       // actually reached, the remainder stays in TS_PARTIAL with the
       // TP1-protection stop. This prevents the trailing stop from starting
