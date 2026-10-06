@@ -135,12 +135,12 @@ void CTargetSelector::AssignTargets(TradeSetup &setup, CTFContext* liqCtx, strin
    if(preferExternalFirst)
      {
       if(NearestBeyond(liqCtx, false, forBuy, entryPrice, tp1MinRR * riskDist, 0.0, false, tp1)) src1 = 2;
-      else if(NearestBeyond(liqCtx, true, forBuy, entryPrice, tp1MinimumDistance, 0.0, false, tp1)) src1 = 1;
+      else if(NearestBeyond(liqCtx, true, forBuy, entryPrice, tp1MinRR * riskDist, 0.0, false, tp1)) src1 = 1;
      }
    else
      {
-      if(NearestBeyond(liqCtx, true, forBuy, entryPrice, tp1MinimumDistance, 0.0, false, tp1)) src1 = 1;
-      else if(NearestBeyond(liqCtx, false, forBuy, entryPrice, tp1MinimumDistance, 0.0, false, tp1)) src1 = 2;
+      if(NearestBeyond(liqCtx, true, forBuy, entryPrice, tp1MinRR * riskDist, 0.0, false, tp1)) src1 = 1;
+      else if(NearestBeyond(liqCtx, false, forBuy, entryPrice, tp1MinRR * riskDist, 0.0, false, tp1)) src1 = 2;
      }
 
    if(tp1 <= 0.0)
