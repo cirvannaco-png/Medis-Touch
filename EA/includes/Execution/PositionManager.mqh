@@ -147,24 +147,29 @@ void CPositionManager::OnTick(double currentAtr)
       bool tp2Reached = (isBuy && tp2 > entry) ? (price >= tp2)
                        : (!isBuy && tp2 < entry) ? (price <= tp2)
                        : false;
-      if((state == TS_PARTIAL || state == TS_RUNNER) && tp2Reached && tp1 > 0.0)
+      // 3. TP2 is the state transition into the runner. Until TP2 is
+      // actually reached, the remainder stays in TS_PARTIAL with the
+      // TP1-protection stop. This prevents the trailing stop from starting
+      // prematurely and cutting the runner before the planned TP2 milestone.
+      double tp2 = dec.setup.tp2;
+      bool tp2Reached = (isBuy && tp2 > entry) ? (price >= tp2)
+                       : (!isBuy && tp2 < entry) ? (price <= tp2)
+                       : false;
+      if(state == TS_PARTIAL && tp2Reached && tp1 > 0.0)
         {
          double lockSL = tp1;
          double curSL = PositionGetDouble(POSITION_SL);
-         bool improvedLock = isBuy ? (lockSL > curSL) : (lockSL < curSL);
-         if(improvedLock)
-            m_broker.ModifySLTP(ticket, lockSL, dec.setup.final_tp);
+         bool alreadyLocked = isBuy ? (curSL >= lockSL) : (curSL <= lockSL);
+         bool protectionOk = alreadyLocked || m_broker.ModifySLTP(ticket, lockSL, dec.setup.final_tp);
+         if(protectionOk)
+           {
+            m_orders.TransitionAt(i, TS_RUNNER);
+            state = TS_RUNNER;
+           }
         }
 
-      // 4. Hand the remainder off as a trailing runner
-      if(state == TS_PARTIAL)
-        {
-         m_orders.TransitionAt(i, TS_RUNNER);
-         state = TS_RUNNER;
-        }
-
-      // 5. Trail the runner — only ever tighten, never widen, the stop
-      // after the TP2 profit-protection milestone.
+      // 4. Trail the runner — only after TP2 has transitioned the
+      // position into TS_RUNNER. The stop only tightens; it never widens.
       if(state == TS_RUNNER && currentAtr > 0)
         {
          double newSL = isBuy ? price - m_trailAtrMult * currentAtr : price + m_trailAtrMult * currentAtr;
