@@ -560,7 +560,7 @@ SMCChain CSMCChainBuilder::Build(bool forBuy)
       // FVGZone.width is already normalized by the formation candle ATR
       // inside CFVG::Detect(). Do not divide it by a price ATR again.
       double fvgQ = MathMax(0.0, MathMin(c.fvg.width, 1.0));
-      double freshQ = c.freshness_ok ? 1.0 : 0.0;
+      // FRESH receives full freshness credit; TESTED remains usable but is not equivalent to an untouched zone.\n      double freshQ = c.freshness_ok ? (c.fvg.state == FVG_FRESH ? 1.0 : 0.5) : 0.0;
       double locQ = c.location_ok ? 1.0 : 0.0;
 
       if(family == SETUP_FAMILY_REVERSAL)
