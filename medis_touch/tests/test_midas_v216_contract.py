@@ -170,6 +170,14 @@ def test_v217_telemetry_preserves_64_bit_decision_identity():
     assert '\\"decision_id\\":%I64d' in publisher
     assert "%I64d" in logger
 
+def test_v227_target_engine_has_no_undefined_tp1_distance_and_sell_passes_tp1_rr():
+    targets = read("EA/includes/Trading/Targets.mqh")
+    zone = read("EA/includes/Trading/TradeZone.mqh")
+    assert "tp1MinimumDistance" not in targets
+    assert "tp1MinRR * riskDist" in targets
+    assert zone.count("m_targetMinRR, m_tp1MinRR, m_scoring.GetMarketRegime()") == 2
+
+
 def test_v227_precision_hardening_is_explicit_and_shared_by_ea_and_indicator():
     ea = read("EA/MedisTouch_v2.8.mq5")
     ind = read("EA/MedisTouch_Indicator_v2.8.mq5")
