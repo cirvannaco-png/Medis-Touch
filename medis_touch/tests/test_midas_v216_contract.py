@@ -423,3 +423,9 @@ def test_mql5_version_is_225():
     for path in ("EA/MedisTouch_v2.8.mq5", "EA/MedisTouch_Indicator_v2.8.mq5"):
         c = read(path)
         assert '#property version   "2.27"' in c
+def test_v227_tested_fvg_never_gets_full_freshness_credit():
+    chain = read("EA/includes/Analysis/SMCChain.mqh")
+    zone = read("EA/includes/Trading/TradeZone.mqh")
+    assert "c.fvg.state == FVG_FRESH ? 1.0 : 0.5" in chain
+    assert "setup.reasons.fresh_fvg = (sv.chain.fvg.state == FVG_FRESH);" in zone
+
