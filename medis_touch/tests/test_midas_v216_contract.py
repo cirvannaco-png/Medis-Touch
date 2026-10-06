@@ -230,6 +230,8 @@ def test_v227_family_aware_premium_discount_policy_is_feature_flagged_and_shared
     assert "family == SETUP_FAMILY_REVERSAL" in chain
     assert "m_premiumDiscountReversalOnly && family == SETUP_FAMILY_CONTINUATION ? 0.5" in chain
     assert "premiumDiscountReversalOnly = false" in validator
+    assert "InpRequirePremiumDiscount,\n                     InpPremiumDiscountReversalOnly,\n                     InpMinChainRejectionRatio," in ea
+    assert "InpRequirePremiumDiscount,\n                    InpPremiumDiscountReversalOnly,\n                    InpMinChainRejectionRatio," in ind
     assert "InpPremiumDiscountReversalOnly" in ea
     assert "InpPremiumDiscountReversalOnly" in ind
 
