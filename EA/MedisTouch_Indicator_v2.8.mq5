@@ -86,6 +86,7 @@ input double InpImpulseBodyRatio = 0.6;     // Min body/range ratio for a displa
 input double InpEqualTolATR = 0.2;          // Tolerance band for "equal" highs/lows (as ATR fraction)
 input int    InpMaxLegExtend = 10;          // Max bars to extend an impulse leg outward
 input bool   InpRequirePremiumDiscount = true;  // Buys must be in discount / sells in premium of the impulse range
+input bool   InpPremiumDiscountReversalOnly = false; // Experimental: when true, PD hard-gates reversals only; continuations receive partial location credit.
 input bool   InpRequireDistributionPhase = false; // Only allow entries in the Distribution phase (heuristic — see MarketPhase.mqh)
 input int    InpPhaseRangeLookback = 20;    // Bars used to judge range compression for Accumulation
 input double InpPhaseCompressionATRMult = 2.5; // Range/ATR ceiling still considered "compressed"
