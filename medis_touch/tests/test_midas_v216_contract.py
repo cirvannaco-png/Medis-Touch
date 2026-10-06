@@ -217,6 +217,23 @@ def test_v227_precision_hardening_is_explicit_and_shared_by_ea_and_indicator():
     assert "tp1MinRR * riskDist" in targets
 
 
+def test_v227_family_aware_premium_discount_policy_is_feature_flagged_and_shared():
+    ea = read("EA/MedisTouch_v2.8.mq5")
+    ind = read("EA/MedisTouch_Indicator_v2.8.mq5")
+    chain = read("EA/includes/Analysis/SMCChain.mqh")
+    validator = read("EA/includes/Analysis/StructuralValidator.mqh")
+    assert "InpPremiumDiscountReversalOnly = false" in ea
+    assert "InpPremiumDiscountReversalOnly = false" in ind
+    assert "m_premiumDiscountReversalOnly" in chain
+    assert "premiumDiscountReversalOnly = false" in chain
+    assert "bool premiumDiscountGateApplies = m_requirePremiumDiscount" in chain
+    assert "family == SETUP_FAMILY_REVERSAL" in chain
+    assert "m_premiumDiscountReversalOnly && family == SETUP_FAMILY_CONTINUATION ? 0.5" in chain
+    assert "premiumDiscountReversalOnly = false" in validator
+    assert "InpPremiumDiscountReversalOnly" in ea
+    assert "InpPremiumDiscountReversalOnly" in ind
+
+
 def test_v227_structure_age_ceiling_is_wired_end_to_end():
     chain = read("EA/includes/Analysis/SMCChain.mqh")
     validator = read("EA/includes/Analysis/StructuralValidator.mqh")
