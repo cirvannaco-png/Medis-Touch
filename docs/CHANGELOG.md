@@ -23,6 +23,20 @@ its results are not treated as production-EA performance. MetaEditor/MT5
 compilation and an untouched holdout remain required before promotion.
 
 No profitability or 87% accuracy claim is made.
+
+### v2.27 policy correction — unvalidated gates remain diagnostic
+
+- Volume confirmation and Fibonacci pullback are now **OFF by default** in the EA and indicator.
+- The gates remain implemented and can be enabled explicitly for controlled ablation.
+- Research evidence on the causal-reference harness showed the volume gate reduced the
+  July–September 2026 Gold M15 sample from 4 closed trades to 1, with the remaining trade
+  losing; on the September holdout it produced 0 trades.
+- The Fibonacci gate produced 0 trades on the same three-month sample and 0 trades on the
+  September holdout.
+- These results are not profitability proof and the harness is not production-EA parity.
+  The change therefore restores the repository's stated evidence discipline: unvalidated
+  evidence cannot silently veto a structurally valid causal chain.
+
  
 
 ## v2.25 — bounded asymmetric entry drift
