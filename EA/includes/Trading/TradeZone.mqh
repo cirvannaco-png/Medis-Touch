@@ -158,7 +158,7 @@ TradeSetup CTradeDecision::GenerateBuySetup()
    setup.reasons.regime_age_bars = m_scoring.GetRegimeAgeBars();
    setup.reasons.bos_confirmed = (sv.chain.has_bos || sv.chain.has_choch);
    setup.reasons.liquidity_swept = sv.chain.has_sweep;
-   setup.reasons.fresh_fvg = true;
+   setup.reasons.fresh_fvg = (sv.chain.fvg.state == FVG_FRESH);
    setup.reasons.ifvg_confirmed = sv.extensions.ifvg_confirmed;
    setup.reasons.bpr_confirmed = sv.extensions.bpr_confirmed;
    setup.reasons.cisd_confirmed = sv.extensions.cisd_confirmed;
