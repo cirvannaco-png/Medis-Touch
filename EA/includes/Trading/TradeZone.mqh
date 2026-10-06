@@ -210,7 +210,7 @@ TradeSetup CTradeDecision::GenerateSellSetup()
 
    CTargetSelector::AssignTargets(setup, m_liqCtx, m_priceRef.Symbol(), atr,
                                   ResolveExecutionEntry(setup),
-                                  m_targetMinRR, m_scoring.GetMarketRegime());
+                                  m_targetMinRR, m_tp1MinRR, m_scoring.GetMarketRegime());
 
    if(!setup.target_plan_valid)
      {
