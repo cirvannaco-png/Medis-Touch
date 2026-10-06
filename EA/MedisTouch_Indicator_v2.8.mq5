@@ -91,12 +91,12 @@ input int    InpPhaseRangeLookback = 20;    // Bars used to judge range compress
 input double InpPhaseCompressionATRMult = 2.5; // Range/ATR ceiling still considered "compressed"
 
 input group "Volume Engine (v2.6)"
-input bool   InpRequireVolumeConfirmation = true; // Gate: reject setups below the RVOL threshold — ON for this compile/integration pass, see Analysis/Scoring.mqh
+input bool   InpRequireVolumeConfirmation = false; // Diagnostic only until independently validated; do not hard-veto causal chains on unvalidated RVOL evidence.
 input double InpRVOLThreshold = 1.5;        // Min relative volume vs. the trailing average to count as "confirmed"
 input int    InpRVOLLookback = 20;          // Bars averaged for the RVOL baseline
 
 input group "Fibonacci Engine (v2.6)"
-input bool   InpRequireFibonacciZone = true; // Gate: reject setups whose price isn't in the pullback zone — ON for this compile/integration pass
+input bool   InpRequireFibonacciZone = false; // Diagnostic only until independently validated; do not hard-veto causal chains on unvalidated swing-leg Fib evidence.
 input double InpFibZoneMinPct = 50.0;       // Pullback zone start (% retracement)
 input double InpFibZoneMaxPct = 61.8;       // Pullback zone end (% retracement)
 
