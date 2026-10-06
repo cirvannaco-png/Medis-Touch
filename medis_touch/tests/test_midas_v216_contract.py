@@ -331,8 +331,8 @@ def test_v220_calibration_population_is_versioned_with_new_confidence_semantics(
     cfg = read("EA/includes/Core/Config.mqh")
     main = read("EA/MedisTouch_v2.8.mq5")
     assert 'MIDAS_ENGINE_VERSION "2.27"' in cfg
-    assert 'MIDAS_WEIGHT_SET_VERSION "SMC-CAUSAL-2.27"' in cfg
-    assert 'InpWeightSetVersion = "SMC-CAUSAL-2.27"' in main
+    assert 'MIDAS_WEIGHT_SET_VERSION "SMC-CAUSAL-2.27-FVGSTATE"' in cfg
+    assert 'InpWeightSetVersion = "SMC-CAUSAL-2.27-FVGSTATE"' in main
     assert '#property version   "2.27"' in main
 
 
