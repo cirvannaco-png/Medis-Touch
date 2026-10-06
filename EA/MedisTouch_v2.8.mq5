@@ -74,6 +74,7 @@ input double InpImpulseBodyRatio = 0.6;
 input double InpEqualTolATR = 0.2;
 input int    InpMaxLegExtend = 10;
 input bool   InpRequirePremiumDiscount = true;
+input bool   InpPremiumDiscountReversalOnly = false; // Experimental: when true, PD hard-gates reversals only; continuations receive partial location credit.
 input bool   InpRequireDistributionPhase = false;
 input int    InpPhaseRangeLookback = 20;
 input double InpPhaseCompressionATRMult = 2.5;
