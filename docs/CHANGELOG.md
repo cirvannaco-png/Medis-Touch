@@ -1,5 +1,30 @@
 # Changelog
 
+## v2.27 — causal-chain precision hardening
+
+### Fixed
+- Causal SMC validation now bounds confirmed structure age to five closed bars,
+  strengthens displacement/structure thresholds, and requires a minimum 30%
+  liquidity-sweep reclaim.
+- Trade admission requires a minimum 60/100 structural-chain quality score and
+  a five-point directional confidence advantage when both directions qualify.
+- A tested-but-not-mitigated FVG remains eligible, but it no longer receives the
+  same full freshness-quality credit as an untouched FVG.
+- Signal provenance now reports FVG freshness from the actual FVG state instead
+  of unconditionally labelling every accepted zone as fresh.
+- Weight-set provenance is versioned as `SMC-CAUSAL-2.27-FVGSTATE` so outcomes
+  generated under the revised scoring semantics cannot be silently pooled with
+  the previous formula.
+
+### Validation
+The precision branch has passed static MQL5 structural validation previously.
+StrategyTune causal-reference research is being used as a diagnostic harness;
+its results are not treated as production-EA performance. MetaEditor/MT5
+compilation and an untouched holdout remain required before promotion.
+
+No profitability or 87% accuracy claim is made.
+ 
+
 ## v2.25 — bounded asymmetric entry drift
 
 ### Fixed
