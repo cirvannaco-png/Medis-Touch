@@ -132,7 +132,8 @@ void CSMCChainBuilder::Init(CTFContext* entryCtx,
                             double minDisplacementBodyRatio,
                             double minStructureStrength,
                             bool requirePremiumDiscount,
-                            double minRejectionRatio)
+                            double minRejectionRatio,
+                            bool premiumDiscountReversalOnly)
   {
    m_entryCtx = entryCtx;
    m_maxSweepToStructureBars = MathMax(1, maxSweepToStructureBars);
