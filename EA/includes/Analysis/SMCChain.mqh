@@ -71,6 +71,12 @@ private:
    double      m_minStructureStrength;
    double      m_minRejectionRatio;
    bool        m_requirePremiumDiscount;
+   // Experimental v2.27 policy: when enabled, premium/discount is a hard
+   // gate only for reversal chains. Continuations keep it as ranking evidence
+   // because the regime gate already requires trend-compatible continuation.
+   // Default false preserves the existing v2.27 behavior until terminal
+   // backtests validate the family-specific policy.
+   bool        m_premiumDiscountReversalOnly;
 
    bool FindStructure(bool forBuy, int minBar, BOSEvent &bosOut, CHOCHPoint &chochOut,
                       bool &hasBos, bool &hasChoch, ENUM_SETUP_FAMILY &family);
@@ -113,7 +119,8 @@ CSMCChainBuilder::CSMCChainBuilder()
     m_minDisplacementBodyRatio(0.55),
     m_minStructureStrength(0.45),
     m_minRejectionRatio(0.30),
-    m_requirePremiumDiscount(true)
+    m_requirePremiumDiscount(true),
+    m_premiumDiscountReversalOnly(false)
   {}
 
 void CSMCChainBuilder::Init(CTFContext* entryCtx,
@@ -137,6 +144,7 @@ void CSMCChainBuilder::Init(CTFContext* entryCtx,
    m_minStructureStrength = MathMax(0.0, MathMin(1.0, minStructureStrength));
    m_minRejectionRatio = MathMax(0.0, MathMin(1.0, minRejectionRatio));
    m_requirePremiumDiscount = requirePremiumDiscount;
+   m_premiumDiscountReversalOnly = premiumDiscountReversalOnly;
   }
 
 string CSMCChainBuilder::StatusToString(ENUM_CHAIN_STATUS status) const
@@ -520,7 +528,9 @@ SMCChain CSMCChainBuilder::Build(bool forBuy)
 
       double fvgMid = (c.fvg.top + c.fvg.bottom) * 0.5;
       c.location_ok = CalculateLocation(forBuy, structureTime, fvgMid, c.location_midpoint);
-      if(m_requirePremiumDiscount && !c.location_ok)
+      bool premiumDiscountGateApplies = m_requirePremiumDiscount &&
+                                         (!m_premiumDiscountReversalOnly || family == SETUP_FAMILY_REVERSAL);
+      if(premiumDiscountGateApplies && !c.location_ok)
         {
          minStructureBar = structureBar + 1;
          continue;
@@ -560,8 +570,13 @@ SMCChain CSMCChainBuilder::Build(bool forBuy)
       // FVGZone.width is already normalized by the formation candle ATR
       // inside CFVG::Detect(). Do not divide it by a price ATR again.
       double fvgQ = MathMax(0.0, MathMin(c.fvg.width, 1.0));
-      // FRESH receives full freshness credit; TESTED remains usable but is not equivalent to an untouched zone.\n      double freshQ = c.freshness_ok ? (c.fvg.state == FVG_FRESH ? 1.0 : 0.5) : 0.0;
-      double locQ = c.location_ok ? 1.0 : 0.0;
+      // FRESH receives full freshness credit; TESTED remains usable but is not equivalent to an untouched zone.
+      double freshQ = c.freshness_ok ? (c.fvg.state == FVG_FRESH ? 1.0 : 0.5) : 0.0;
+      // Under the experimental family-aware policy, continuation chains that
+      // sit outside premium/discount remain valid but receive partial
+      // location credit rather than a binary veto. Reversals remain binary.
+      double locQ = c.location_ok ? 1.0 :
+                    (m_premiumDiscountReversalOnly && family == SETUP_FAMILY_CONTINUATION ? 0.5 : 0.0);
 
       if(family == SETUP_FAMILY_REVERSAL)
          c.quality = 100.0 * (0.20 * sweepQ +
