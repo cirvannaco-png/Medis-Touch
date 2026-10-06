@@ -288,7 +288,7 @@ input string InpBridgeApiKey = "";              // must match telegram-bridge's 
 // "which weight set produced this," which is the prerequisite for the
 // statistical gating / promotion layer (steps 4-5) ever being able to
 // tell one weight set's expectancy apart from another's in signal_outcomes.
-input string InpWeightSetVersion = "SMC-CAUSAL-2.27-FVGSTATE";
+input string InpWeightSetVersion = "SMC-CAUSAL-2.27-FVGSTATE-NOGATE";
 // v2.11 — the operator's OWN bridge endpoint, for ConfigSync polling
 // only. Deliberately separate from the subscriber-fan-out CSV
 // (SubscriberPlatform.mqh) — that list is for broadcasting signals to
