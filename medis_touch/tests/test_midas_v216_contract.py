@@ -170,6 +170,14 @@ def test_v217_telemetry_preserves_64_bit_decision_identity():
     assert '\\"decision_id\\":%I64d' in publisher
     assert "%I64d" in logger
 
+def test_v227_outcome_tracker_does_not_trail_before_tp2():
+    c = read("EA/includes/Trading/OutcomeTracker.mqh")
+    block = c[c.index("if(p.partialDone && p.setup.tp2 > 0.0)"):c.index("// 3. Pure runner")]
+    assert "if(!tp2Touched)" in block
+    assert "break;" in block
+    assert "if(bar0.atr > 0)" not in block
+
+
 def test_v227_runner_state_starts_only_after_tp2_milestone():
     c = read("EA/includes/Execution/PositionManager.mqh")
     tp2_block = c.index("if(state == TS_PARTIAL && tp2Reached && tp1 > 0.0)")
