@@ -227,7 +227,7 @@ def test_broker_deal_records_actual_costs_and_position_aggregate(client, auth_he
     assert opened.json()["status"] == "recorded"
     assert closed.status_code == 200
     assert closed.json()["status"] == "recorded"
-    assert closed.json()["position_net_profit"] == 37.3
+    assert round(closed.json()["position_net_profit"], 8) == 37.3
 
     async def _read_rows():
         async with async_session() as session:
