@@ -50,6 +50,7 @@ class FakeOutcome:
     for zero benefit -- these functions can't tell the difference.
     """
     symbol: str = "XAUUSD"
+    signal_id: str | None = None
     direction: str = "BUY"
     outcome: str = "win"          # win | loss | scratch | no_fill | ambiguous
     realized_r: float | None = None
