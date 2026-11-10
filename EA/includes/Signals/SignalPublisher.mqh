@@ -81,6 +81,14 @@ public:
                                         int barsToFill, bool filled, string regime, string session,
                                         string sweepGrade, bool htfObAligned, double confidenceAtSignal,
                                         double confidenceDecayed, int decayBars);
+   bool                 PublishBrokerDeal(string signalId, ulong dealTicket, ulong positionId,
+                                             ulong orderTicket, ulong magicNumber, string symbol,
+                                             string direction, string entryType, string dealType,
+                                             double volume, double price, double profit,
+                                             double commission, double swap, double fee, long timeMsc,
+                                             bool positionOpen, double initialStopLoss,
+                                             double initialRiskDistance, double mfePrice,
+                                             double maePrice, double mfeR, double maeR);
    void                 SetWeightVersion(string v) { m_weightVersion = v; }
    void                 SetSignalTimeframe(ENUM_TIMEFRAMES tf) { m_signalTF = tf; }
    // v2.11. Public wrapper so callers outside this class (OutcomeTracker,
@@ -465,5 +473,60 @@ bool CSignalPublisher::PublishOutcome(string signalId, string symbol, string dir
      }
    return anyOk;
   }
+
+
+// v2.28 — immutable, broker-confirmed MT5 deal ingestion. A deal ticket
+// is the idempotency key; partial exits are deliberately sent as separate
+// events. Unlike PublishOutcome(), no simulator labels or estimated costs
+// are substituted for DEAL_PROFIT/COMMISSION/SWAP/FEE.
+bool CSignalPublisher::PublishBrokerDeal(string signalId, ulong dealTicket, ulong positionId,
+                                         ulong orderTicket, ulong magicNumber, string symbol,
+                                         string direction, string entryType, string dealType,
+                                         double volume, double price, double profit,
+                                         double commission, double swap, double fee, long timeMsc,
+                                         bool positionOpen, double initialStopLoss,
+                                         double initialRiskDistance, double mfePrice,
+                                         double maePrice, double mfeR, double maeR)
+  {
+   if(m_platform == NULL || dealTicket == 0 || positionId == 0 || orderTicket == 0) return false;
+
+   string stopJson = initialStopLoss > 0.0 ? StringFormat("%.10f", initialStopLoss) : "null";
+   string riskJson = initialRiskDistance > 0.0 ? StringFormat("%.10f", initialRiskDistance) : "null";
+   string mfePriceJson = mfePrice > 0.0 ? StringFormat("%.10f", mfePrice) : "null";
+   string maePriceJson = maePrice > 0.0 ? StringFormat("%.10f", maePrice) : "null";
+   string mfeRJson = initialRiskDistance > 0.0 ? StringFormat("%.6f", mfeR) : "null";
+   string maeRJson = initialRiskDistance > 0.0 ? StringFormat("%.6f", maeR) : "null";
+
+   string payload = StringFormat(
+      "{\"deal_ticket\":\"%I64u\",\"position_id\":\"%I64u\",\"order_ticket\":\"%I64u\","
+      "\"signal_id\":\"%s\",\"symbol\":\"%s\",\"magic_number\":%I64u,"
+      "\"direction\":\"%s\",\"entry_type\":\"%s\",\"deal_type\":\"%s\","
+      "\"volume\":%.8f,\"price\":%.10f,\"profit\":%.8f,\"commission\":%.8f,"
+      "\"swap\":%.8f,\"fee\":%.8f,\"time_msc\":%I64d,\"position_open\":%s,"
+      "\"initial_stop_loss\":%s,\"initial_risk_distance\":%s,\"mfe_price\":%s,"
+      "\"mae_price\":%s,\"mfe_r\":%s,\"mae_r\":%s}",
+      dealTicket, positionId, orderTicket, signalId, symbol, magicNumber,
+      direction, entryType, dealType, volume, price, profit, commission, swap, fee,
+      timeMsc, positionOpen ? "true" : "false", stopJson, riskJson,
+      mfePriceJson, maePriceJson, mfeRJson, maeRJson);
+
+   Subscriber subs[];
+   int targeted = m_platform.GetActiveSubscribers(subs);
+   bool anyOk = false;
+   for(int i=0; i<targeted; i++)
+     {
+      string endpoint = subs[i].endpoint;
+      int pos = StringFind(endpoint, "/signal");
+      if(pos < 0)
+        {
+         PrintFormat("MedisTouch SignalPublisher: subscriber endpoint %s doesn't contain /signal — skipping broker deal.", endpoint);
+         continue;
+        }
+      string dealUrl = StringSubstr(endpoint, 0, pos) + "/broker/deal";
+      if(TransmitOne(dealUrl, payload)) anyOk = true;
+     }
+   return anyOk;
+  }
+
 #endif
 //+------------------------------------------------------------------+
