@@ -23,6 +23,7 @@
 #include "includes/Trading/TradeZone.mqh"
 #include "includes/Trading/RiskEngine.mqh"
 #include "includes/Trading/OutcomeTracker.mqh"
+#include "includes/Trading/BrokerPositionTracker.mqh"
 #include "includes/Decision/DecisionEngine.mqh"
 #include "includes/Decision/DecisionStore.mqh"
 #include "includes/Execution/BrokerAdapter.mqh"
@@ -312,6 +313,7 @@ CTradeDecision     g_decision;     // analysis-layer setup generator (Trading/Tr
 CRiskEngine        g_risk;
 CSignalLogger      g_logger;
 COutcomeTracker    g_tracker;
+CBrokerPositionTracker g_brokerPositionTracker;
 
 CTFContext*        g_chartCtx = NULL;
 CTFContext*        g_trendCtx = NULL;
@@ -459,6 +461,7 @@ int OnInit()
    g_publisher.Init(_Symbol, &g_subscribers, InpWebRequestTimeoutMs, InpBridgeApiKey);
    g_publisher.SetWeightVersion(MIDAS_WEIGHT_SET_VERSION);
    g_publisher.SetSignalTimeframe(InpFVGTF);
+   g_brokerPositionTracker.Init(_Symbol, InpMagicNumber);
    // v2.11 — dormant until InpConfigSyncEndpoint is set AND a real
    // promotion has happened on the bridge; see ConfigSync.mqh header.
    // EventSetTimer's argument is seconds, hence the *60.
@@ -645,6 +648,8 @@ void CheckSignalLifecycle(double currentAtr)
 void OnTick()
   {
    g_monitor.OnTickCheck(); // cheap, cadence-gated internally — safe to call every tick
+   g_brokerPositionTracker.Update(); // actual bid/ask MFE/MAE for broker positions
+   SyncRecentBrokerDeals();          // idempotent history replay recovers transient HTTP failures
 
    g_pool.DetectAll();
    if(g_chartCtx == NULL || !g_chartCtx.candles.IsReady()) return;
@@ -950,38 +955,166 @@ void OnTick()
      }
   }
 //+------------------------------------------------------------------+
-// C003 FIX: a resting limit order (InpUseMarketOrders = false) sits in
-// TS_PENDING with the ORDER ticket recorded. Before this handler existed,
-// nothing ever noticed that order fill — PositionManager only manages
-// trades already at TS_FILLED or later, and OnTick() never polls pending
-// orders for a fill. The trade sat invisible to break-even/partial/trail
-// logic until the terminal restarted and Recovery() reconstructed state
-// from broker-side truth. OnTradeTransaction fires synchronously the
-// moment MT5 books the fill, so this closes the gap live instead of
-// waiting for a restart. Market-order fills are untouched by this — those
-// already transition to TS_FILLED inside COrderManager::Submit() in the
-// same call that sends the order.
+// Extract the MT#<decision_id> execution tag written by OrderManager.
+long DecisionIdFromOrderComment(string comment)
+  {
+   int tag = StringFind(comment, "MT#");
+   if(tag < 0) return 0;
+   string suffix = StringSubstr(comment, tag+3);
+   int space = StringFind(suffix, " ");
+   if(space >= 0) suffix = StringSubstr(suffix, 0, space);
+   return (long)StringToInteger(suffix);
+  }
+
+// Publish one broker-history deal. This is deliberately separate from
+// OutcomeTracker's simulated /outcome event. Deal tickets are immutable
+// and idempotent at the bridge; partial exits are not collapsed.
+bool PublishBrokerDealFromHistory(ulong dealTicket)
+  {
+   if(dealTicket == 0 || !HistoryDealSelect(dealTicket)) return false;
+   if((ulong)HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber) return true;
+   if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) return true;
+
+   ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+   string entryType = "";
+   if(entry == DEAL_ENTRY_IN) entryType = "IN";
+   else if(entry == DEAL_ENTRY_OUT) entryType = "OUT";
+   else if(entry == DEAL_ENTRY_OUT_BY) entryType = "OUT_BY";
+   else if(entry == DEAL_ENTRY_INOUT)
+     {
+      PrintFormat("MedisTouch EA: broker deal #%I64u is DEAL_ENTRY_INOUT (netting reversal); not attributing it until reversal accounting is implemented.", dealTicket);
+      return true; // explicit exclusion; never mislabel a reversal as a simple close
+     }
+   else return true;
+
+   ENUM_DEAL_TYPE dealType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+   if(dealType != DEAL_TYPE_BUY && dealType != DEAL_TYPE_SELL) return true;
+   string dealTypeText = (dealType == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+
+   ulong orderTicket = (ulong)HistoryDealGetInteger(dealTicket, DEAL_ORDER);
+   ulong positionId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+   if(orderTicket == 0 || positionId == 0) return false;
+
+   double price = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+   double volume = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+   bool hasSnapshot = false;
+   double entryPrice = 0.0, initialSL = 0.0, riskDistance = 0.0;
+   double mfePrice = 0.0, maePrice = 0.0, mfeR = 0.0, maeR = 0.0;
+   long decisionId = 0;
+   bool isBuy = (entry == DEAL_ENTRY_IN) ? (dealType == DEAL_TYPE_BUY) : (dealType == DEAL_TYPE_SELL);
+
+   if(entry == DEAL_ENTRY_IN)
+     {
+      string orderComment = "";
+      if(HistoryOrderSelect(orderTicket))
+         orderComment = HistoryOrderGetString(orderTicket, ORDER_COMMENT);
+      decisionId = DecisionIdFromOrderComment(orderComment);
+      if(decisionId == 0)
+         decisionId = DecisionIdFromOrderComment(HistoryDealGetString(dealTicket, DEAL_COMMENT));
+
+      double originalSL = 0.0;
+      if(HistoryOrderSelect(orderTicket))
+         originalSL = HistoryOrderGetDouble(orderTicket, ORDER_SL);
+      g_brokerPositionTracker.RegisterOpen(positionId, isBuy, price, originalSL, decisionId);
+     }
+
+   hasSnapshot = g_brokerPositionTracker.Snapshot(positionId, entryPrice, initialSL,
+                                                   riskDistance, mfePrice, maePrice,
+                                                   mfeR, maeR, decisionId, isBuy);
+   if(!hasSnapshot && entry == DEAL_ENTRY_IN)
+     {
+      g_brokerPositionTracker.RegisterOpen(positionId, isBuy, price, 0.0, decisionId);
+      hasSnapshot = g_brokerPositionTracker.Snapshot(positionId, entryPrice, initialSL,
+                                                      riskDistance, mfePrice, maePrice,
+                                                      mfeR, maeR, decisionId, isBuy);
+     }
+
+   string direction = isBuy ? "BUY" : "SELL";
+   string signalId = (decisionId > 0) ? g_publisher.SignalIdForDecision(decisionId) : "";
+   bool positionOpen = (entry == DEAL_ENTRY_IN) ? true : g_brokerPositionTracker.PositionIsOpen(positionId);
+   long timeMsc = (long)HistoryDealGetInteger(dealTicket, DEAL_TIME_MSC);
+
+   double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+   double commission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+   double swap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+   double fee = HistoryDealGetDouble(dealTicket, DEAL_FEE);
+
+   bool sent = g_publisher.PublishBrokerDeal(
+      signalId, dealTicket, positionId, orderTicket, InpMagicNumber, _Symbol,
+      direction, entryType, dealTypeText, volume, price, profit, commission,
+      swap, fee, timeMsc, positionOpen, initialSL, riskDistance,
+      mfePrice, maePrice, mfeR, maeR);
+
+   if(!sent)
+     {
+      PrintFormat("MedisTouch EA: broker deal #%I64u publish failed; retained for history replay.", dealTicket);
+      return false;
+     }
+
+   if(!positionOpen)
+      g_brokerPositionTracker.Remove(positionId);
+   return true;
+  }
+
+// Replays an overlapping history window on each cadence. The bridge uses
+// deal_ticket as a unique key, so the overlap is safe and lets a later
+// successful request recover any deal whose immediate WebRequest failed.
+void SyncRecentBrokerDeals()
+  {
+   if(StringLen(InpBridgeApiKey) == 0) return;
+   static datetime lastSync = 0;
+   datetime now = TimeCurrent();
+   if(lastSync > 0 && now-lastSync < 30) return;
+
+   string checkpointKey = "MTX_SYNC_" + IntegerToString((long)InpMagicNumber) + "_" + _Symbol;
+   datetime fromTime = now-86400;
+   if(GlobalVariableCheck(checkpointKey))
+      fromTime = (datetime)MathMax(0.0, GlobalVariableGet(checkpointKey))-60;
+   if(!HistorySelect(fromTime, now))
+     {
+      lastSync = now;
+      return;
+     }
+
+   bool allSent = true;
+   int total = HistoryDealsTotal();
+   for(int i=0; i<total; i++)
+     {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if((ulong)HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      if(!PublishBrokerDealFromHistory(dealTicket)) allSent = false;
+     }
+
+   if(allSent)
+      GlobalVariableSet(checkpointKey, (double)(now-60));
+   lastSync = now;
+  }
+
+// C003: pending-order fills are still wired here, and every opening,
+// partial-close and final-close deal is now sent to /broker/deal with
+// broker-reported economics. The setup simulator continues to POST
+// separately to /outcome.
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest &request,
                         const MqlTradeResult &result)
   {
    if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
    if(!HistoryDealSelect(trans.deal)) return;
-
-   // Only the deal that OPENS a position can be a pending order's first
-   // fill — a closing or partial-closing deal also raises DEAL_ADD and
-   // must not be mistaken for one.
-   if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY) != DEAL_ENTRY_IN) return;
    if((ulong)HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != InpMagicNumber) return;
    if(HistoryDealGetString(trans.deal, DEAL_SYMBOL) != _Symbol) return;
 
-   ulong orderTicket    = (ulong)HistoryDealGetInteger(trans.deal, DEAL_ORDER);
-   ulong positionTicket = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
-   if(orderTicket == 0 || positionTicket == 0) return;
+   ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+   ulong orderTicket = (ulong)HistoryDealGetInteger(trans.deal, DEAL_ORDER);
+   ulong positionId = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
+   double fillPrice = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
 
-   double fillPrice = HistoryDealGetDouble(trans.deal, DEAL_PRICE); // FIX (#25): real fill price, straight off the deal record
-   if(g_orders.MarkFilledFromPending(orderTicket, positionTicket, fillPrice))
-      PrintFormat("MedisTouch EA: pending order #%d filled as position #%d at %.5f — caught live via OnTradeTransaction.",
-                  orderTicket, positionTicket, fillPrice);
+   if(entry == DEAL_ENTRY_IN && orderTicket > 0 && positionId > 0)
+      if(g_orders.MarkFilledFromPending(orderTicket, positionId, fillPrice))
+         PrintFormat("MedisTouch EA: pending order #%I64u filled as position #%I64u at %.5f.",
+                     orderTicket, positionId, fillPrice);
+
+   PublishBrokerDealFromHistory(trans.deal);
   }
 //+------------------------------------------------------------------+
