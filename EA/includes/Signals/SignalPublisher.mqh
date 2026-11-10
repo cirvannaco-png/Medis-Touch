@@ -488,7 +488,7 @@ bool CSignalPublisher::PublishBrokerDeal(string signalId, ulong dealTicket, ulon
                                          double initialRiskDistance, double mfePrice,
                                          double maePrice, double mfeR, double maeR)
   {
-   if(m_platform == NULL || dealTicket == 0 || positionId == 0 || orderTicket == 0) return false;
+   if(m_platform == NULL || StringLen(m_apiKey) == 0 || dealTicket == 0 || positionId == 0 || orderTicket == 0) return false;
 
    string stopJson = initialStopLoss > 0.0 ? StringFormat("%.10f", initialStopLoss) : "null";
    string riskJson = initialRiskDistance > 0.0 ? StringFormat("%.10f", initialRiskDistance) : "null";
@@ -497,15 +497,16 @@ bool CSignalPublisher::PublishBrokerDeal(string signalId, ulong dealTicket, ulon
    string mfeRJson = initialRiskDistance > 0.0 ? StringFormat("%.6f", mfeR) : "null";
    string maeRJson = initialRiskDistance > 0.0 ? StringFormat("%.6f", maeR) : "null";
 
+   string signalIdJson = (StringLen(signalId) > 0) ? StringFormat("\"%s\"", signalId) : "null";
    string payload = StringFormat(
       "{\"deal_ticket\":\"%I64u\",\"position_id\":\"%I64u\",\"order_ticket\":\"%I64u\","
-      "\"signal_id\":\"%s\",\"symbol\":\"%s\",\"magic_number\":%I64u,"
+      "\"signal_id\":%s,\"symbol\":\"%s\",\"magic_number\":%I64u,"
       "\"direction\":\"%s\",\"entry_type\":\"%s\",\"deal_type\":\"%s\","
       "\"volume\":%.8f,\"price\":%.10f,\"profit\":%.8f,\"commission\":%.8f,"
       "\"swap\":%.8f,\"fee\":%.8f,\"time_msc\":%I64d,\"position_open\":%s,"
       "\"initial_stop_loss\":%s,\"initial_risk_distance\":%s,\"mfe_price\":%s,"
       "\"mae_price\":%s,\"mfe_r\":%s,\"mae_r\":%s}",
-      dealTicket, positionId, orderTicket, signalId, symbol, magicNumber,
+      dealTicket, positionId, orderTicket, signalIdJson, symbol, magicNumber,
       direction, entryType, dealType, volume, price, profit, commission, swap, fee,
       timeMsc, positionOpen ? "true" : "false", stopJson, riskJson,
       mfePriceJson, maePriceJson, mfeRJson, maeRJson);
