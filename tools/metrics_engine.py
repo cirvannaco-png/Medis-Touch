@@ -66,6 +66,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 from collections import defaultdict
@@ -86,7 +87,7 @@ try:
     from sqlalchemy import select
 
     from app.database import async_session
-    from app.models import SignalOutcome
+    from app.models import Signal, SignalOutcome
 except ImportError as exc:  # pragma: no cover - operator-facing message, not a test path
     print(
         "metrics_engine: couldn't import the bridge's `app` package "
@@ -157,6 +158,75 @@ def _bucket(rows, keyfn):
     return dict(sorted(out.items(), key=lambda kv: -kv[1].total))
 
 
+def _signal_extra_for(row, signal_extras: dict[str, dict] | None) -> dict:
+    """Return the originating signal's JSON diagnostics, if present."""
+    signal_id = getattr(row, "signal_id", None)
+    if not signal_id or not signal_extras:
+        return {}
+    extra = signal_extras.get(signal_id)
+    return extra if isinstance(extra, dict) else {}
+
+
+def _numeric_extra(row, signal_extras: dict[str, dict] | None, key: str) -> float | None:
+    value = _signal_extra_for(row, signal_extras).get(key)
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _family_tag(row, signal_extras: dict[str, dict] | None) -> str | None:
+    value = _signal_extra_for(row, signal_extras).get("family")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip().upper()
+
+
+def _bos_strength_bucket(row, signal_extras: dict[str, dict] | None) -> str | None:
+    # SignalPublisher.BuildExtraJson serializes BOS strength on a 0-100 scale.
+    value = _numeric_extra(row, signal_extras, "bos_strength")
+    if value is None:
+        return None
+    if value < 0:
+        return "<0"
+    if value < 25:
+        return "0-25"
+    if value < 50:
+        return "25-50"
+    if value < 75:
+        return "50-75"
+    if value <= 100:
+        return "75-100"
+    return ">100"
+
+
+def _chase_distance_bucket(row, signal_extras: dict[str, dict] | None) -> str | None:
+    # Negative/zero means the market has not moved adversely beyond BOS.
+    value = _numeric_extra(row, signal_extras, "chase_dist_atr")
+    if value is None:
+        return None
+    if value <= 0:
+        return "<=0 ATR"
+    if value <= 0.25:
+        return "0-0.25 ATR"
+    if value <= 0.50:
+        return "0.25-0.50 ATR"
+    if value <= 0.75:
+        return "0.50-0.75 ATR"
+    if value <= 1.0:
+        return "0.75-1.00 ATR"
+    return ">1.00 ATR"
+
+
+def _family_regime_tag(row, signal_extras: dict[str, dict] | None) -> str:
+    family = _family_tag(row, signal_extras) or "(untagged)"
+    regime = getattr(row, "regime", None) or "(untagged)"
+    return f"{family}|{regime}"
+
+
 def _resolved_stats(rows) -> dict:
     """
     The three CI-bearing statistics step 4's gating layer actually
@@ -182,7 +252,7 @@ def _resolved_stats(rows) -> dict:
     }
 
 
-def compute_report(rows) -> dict:
+def compute_report(rows, signal_extras: dict[str, dict] | None = None) -> dict:
     total = len(rows)
     resolved = [r for r in rows if r.outcome in RESOLVED_OUTCOMES]
     no_fill = [r for r in rows if r.outcome == "no_fill"]
@@ -216,6 +286,22 @@ def compute_report(rows) -> dict:
         "by_weight_version": {
             k: _tb_to_coverage_dict(v) for k, v in _bucket(rows, lambda r: r.weight_version).items()
         },
+        "by_family": {
+            k: _tb_to_coverage_dict(v)
+            for k, v in _bucket(rows, lambda r: _family_tag(r, signal_extras)).items()
+        },
+        "by_family_regime": {
+            k: _tb_to_coverage_dict(v)
+            for k, v in _bucket(rows, lambda r: _family_regime_tag(r, signal_extras)).items()
+        },
+        "by_bos_strength": {
+            k: _tb_to_coverage_dict(v)
+            for k, v in _bucket(rows, lambda r: _bos_strength_bucket(r, signal_extras)).items()
+        },
+        "by_chase_distance": {
+            k: _tb_to_coverage_dict(v)
+            for k, v in _bucket(rows, lambda r: _chase_distance_bucket(r, signal_extras)).items()
+        },
     }
 
     expectancy = {
@@ -239,6 +325,22 @@ def compute_report(rows) -> dict:
         "by_session": {k: _tb_to_expectancy_dict(v) for k, v in _bucket(rows, lambda r: r.session).items()},
         "by_sweep_grade": {
             k: _tb_to_expectancy_dict(v) for k, v in _bucket(rows, lambda r: r.sweep_grade).items()
+        },
+        "by_family": {
+            k: _tb_to_expectancy_dict(v)
+            for k, v in _bucket(rows, lambda r: _family_tag(r, signal_extras)).items()
+        },
+        "by_family_regime": {
+            k: _tb_to_expectancy_dict(v)
+            for k, v in _bucket(rows, lambda r: _family_regime_tag(r, signal_extras)).items()
+        },
+        "by_bos_strength": {
+            k: _tb_to_expectancy_dict(v)
+            for k, v in _bucket(rows, lambda r: _bos_strength_bucket(r, signal_extras)).items()
+        },
+        "by_chase_distance": {
+            k: _tb_to_expectancy_dict(v)
+            for k, v in _bucket(rows, lambda r: _chase_distance_bucket(r, signal_extras)).items()
         },
         "by_htf_ob_aligned": {
             k: _tb_to_expectancy_dict(v)
@@ -432,6 +534,18 @@ def print_report(report: dict) -> None:
     print("\nBy sweep grade:")
     for k, v in exp["by_sweep_grade"].items():
         print(f"  {k:14s} n={v['resolved_count']:5d}  win_rate={_fmt_pct(v['win_rate'])}  avg_r={_fmt_r(v['avg_r'])}")
+    print("\nBy setup family:")
+    for k, v in exp["by_family"].items():
+        print(f"  {k:20s} n={v['resolved_count']:5d}  win_rate={_fmt_pct(v['win_rate'])}  avg_r={_fmt_r(v['avg_r'])}")
+    print("\nBy setup family x regime:")
+    for k, v in exp["by_family_regime"].items():
+        print(f"  {k:34s} n={v['resolved_count']:5d}  win_rate={_fmt_pct(v['win_rate'])}  avg_r={_fmt_r(v['avg_r'])}")
+    print("\nBy BOS strength (0-100):")
+    for k, v in exp["by_bos_strength"].items():
+        print(f"  {k:14s} n={v['resolved_count']:5d}  win_rate={_fmt_pct(v['win_rate'])}  avg_r={_fmt_r(v['avg_r'])}")
+    print("\nBy chase distance (ATR):")
+    for k, v in exp["by_chase_distance"].items():
+        print(f"  {k:14s} n={v['resolved_count']:5d}  win_rate={_fmt_pct(v['win_rate'])}  avg_r={_fmt_r(v['avg_r'])}")
     print("\nBy HTF OB alignment:")
     for k, v in exp["by_htf_ob_aligned"].items():
         print(f"  {k:14s} n={v['resolved_count']:5d}  win_rate={_fmt_pct(v['win_rate'])}  avg_r={_fmt_r(v['avg_r'])}")
@@ -445,19 +559,34 @@ def print_report(report: dict) -> None:
 
 
 async def fetch_rows(since: datetime | None, weight_version: str | None):
+    """Fetch outcomes plus the signal JSON used for causal attribution.
+
+    BOS strength, chase distance and setup family are recorded on Signal.extra
+    at signal time. Joining by signal_id preserves their exact signal-time
+    values without duplicating them into the outcome table.
+    """
     async with async_session() as session:
-        stmt = select(SignalOutcome)
+        stmt = (
+            select(SignalOutcome, Signal.extra)
+            .outerjoin(Signal, Signal.signal_id == SignalOutcome.signal_id)
+        )
         if since is not None:
             stmt = stmt.where(SignalOutcome.received_at >= since)
         if weight_version is not None:
             stmt = stmt.where(SignalOutcome.weight_version == weight_version)
         result = await session.execute(stmt)
-        return list(result.scalars().all())
+        rows = []
+        signal_extras = {}
+        for outcome, extra in result.all():
+            rows.append(outcome)
+            if isinstance(extra, dict):
+                signal_extras[outcome.signal_id] = extra
+        return rows, signal_extras
 
 
 async def run(args) -> int:
     since = datetime.fromisoformat(args.since).replace(tzinfo=timezone.utc) if args.since else None
-    rows = await fetch_rows(since, args.weight_version)
+    rows, signal_extras = await fetch_rows(since, args.weight_version)
     if not rows:
         print(
             "metrics_engine: no rows in signal_outcomes matching the given filters. "
@@ -467,7 +596,7 @@ async def run(args) -> int:
         )
         return 1
 
-    report = compute_report(rows)
+    report = compute_report(rows, signal_extras)
     if args.regime_matrix:
         matrix = compute_regime_matrix(rows)
         if args.json:
