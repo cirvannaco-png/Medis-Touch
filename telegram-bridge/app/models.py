@@ -2,7 +2,7 @@ import enum
 from datetime import datetime, timezone
 
 import sqlalchemy as sa
-from sqlalchemy import JSON, Column, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, Column, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
 
 from app.database import Base
@@ -270,3 +270,70 @@ class PortfolioReservation(Base):
     status = Column(String, nullable=False, index=True)
     lease_until = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class BrokerDeal(Base):
+    """One immutable broker-confirmed MT5 deal; deal_ticket is the idempotency key."""
+
+    __tablename__ = "broker_deals"
+    __table_args__ = (
+        Index("ix_broker_deals_position_time", "position_id", "time_msc"),
+        Index("ix_broker_deals_symbol_time", "symbol", "time_msc"),
+        Index("ix_broker_deals_signal_id", "signal_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    deal_ticket = Column(String, nullable=False, unique=True, index=True)
+    position_id = Column(String, nullable=False)
+    order_ticket = Column(String, nullable=False)
+    signal_id = Column(String, nullable=True)
+    symbol = Column(String, nullable=False)
+    magic_number = Column(BigInteger, nullable=False)
+    direction = Column(String, nullable=False)
+    entry_type = Column(String, nullable=False)
+    deal_type = Column(String, nullable=False)
+    volume = Column(Float, nullable=False)
+    price = Column(Float, nullable=False)
+    profit = Column(Float, nullable=False, default=0.0)
+    commission = Column(Float, nullable=False, default=0.0)
+    swap = Column(Float, nullable=False, default=0.0)
+    fee = Column(Float, nullable=False, default=0.0)
+    net_profit = Column(Float, nullable=False, default=0.0)
+    time_msc = Column(BigInteger, nullable=False)
+    deal_time = Column(DateTime(timezone=True), nullable=False)
+    comment = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class BrokerPosition(Base):
+    """Aggregated realized economics and latest excursion snapshot per MT5 position ID."""
+
+    __tablename__ = "broker_positions"
+    __table_args__ = (
+        Index("ix_broker_positions_symbol_closed", "symbol", "position_open"),
+        Index("ix_broker_positions_signal_id", "signal_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    position_id = Column(String, nullable=False, unique=True, index=True)
+    signal_id = Column(String, nullable=True)
+    symbol = Column(String, nullable=False)
+    magic_number = Column(BigInteger, nullable=False)
+    direction = Column(String, nullable=False)
+    entry_price = Column(Float, nullable=True)
+    initial_stop_loss = Column(Float, nullable=True)
+    initial_risk_distance = Column(Float, nullable=True)
+    total_volume_in = Column(Float, nullable=False, default=0.0)
+    total_volume_out = Column(Float, nullable=False, default=0.0)
+    position_open = Column(Boolean, nullable=False, default=True)
+    gross_profit = Column(Float, nullable=False, default=0.0)
+    commission = Column(Float, nullable=False, default=0.0)
+    swap = Column(Float, nullable=False, default=0.0)
+    fee = Column(Float, nullable=False, default=0.0)
+    net_profit = Column(Float, nullable=False, default=0.0)
+    mfe_price = Column(Float, nullable=True)
+    mae_price = Column(Float, nullable=True)
+    mfe_r = Column(Float, nullable=True)
+    mae_r = Column(Float, nullable=True)
+    opened_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
