@@ -806,10 +806,6 @@ async def receive_broker_deal(
         position.total_volume_in = opening_volume
     position.total_volume_out = closing_volume
 
-    first_open_with_sl = next(
-        (deal for deal in deals if deal.entry_type == "IN" and deal.position_id == payload.position_id),
-        None,
-    )
     if payload.initial_stop_loss is not None:
         position.initial_stop_loss = (
             position.initial_stop_loss
