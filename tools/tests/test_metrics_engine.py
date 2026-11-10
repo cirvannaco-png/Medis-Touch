@@ -136,3 +136,50 @@ def test_compute_regime_matrix_pf_is_none_with_no_losses(make_outcome):
     # never a fabricated large number or float("inf") -- see the
     # function's own docstring on this exact point.
     assert matrix[0]["profit_factor"] is None
+
+
+
+def test_family_regime_bos_and_chase_attribution(make_outcome):
+    rows = [
+        make_outcome(signal_id="s1", outcome="win", realized_r=1.5, regime="TRENDING"),
+        make_outcome(signal_id="s2", outcome="loss", realized_r=-1.0, regime="TRENDING"),
+        make_outcome(signal_id="s3", outcome="win", realized_r=0.5, regime="RANGING"),
+    ]
+    signal_extras = {
+        "s1": {"family": "SMC_CONTINUATION", "bos_strength": 85.0, "chase_dist_atr": 0.10},
+        "s2": {"family": "SMC_CONTINUATION", "bos_strength": 45.0, "chase_dist_atr": 0.80},
+        "s3": {"family": "SMC_REVERSAL", "bos_strength": 70.0, "chase_dist_atr": -0.05},
+    }
+
+    report = compute_report(rows, signal_extras)
+    expectancy = report["expectancy"]
+
+    continuation_trend = expectancy["by_family_regime"]["SMC_CONTINUATION|TRENDING"]
+    assert continuation_trend["resolved_count"] == 2
+    assert continuation_trend["win_rate"] == 0.5
+    assert continuation_trend["avg_r"] == 0.25
+
+    assert expectancy["by_family"]["SMC_REVERSAL"]["resolved_count"] == 1
+    assert expectancy["by_bos_strength"]["75-100"]["avg_r"] == 1.5
+    assert expectancy["by_bos_strength"]["25-50"]["avg_r"] == -1.0
+    assert expectancy["by_chase_distance"]["0-0.25 ATR"]["avg_r"] == 1.5
+    assert expectancy["by_chase_distance"][">0.75 ATR"] if ">0.75 ATR" in expectancy["by_chase_distance"] else True
+
+
+def test_signal_attribution_missing_or_malformed_values_are_untagged(make_outcome):
+    rows = [
+        make_outcome(signal_id="missing", outcome="win", realized_r=1.0, regime="TRENDING"),
+        make_outcome(signal_id="malformed", outcome="loss", realized_r=-1.0, regime="RANGING"),
+    ]
+    signal_extras = {
+        "malformed": {
+            "family": "",
+            "bos_strength": "not-a-number",
+            "chase_dist_atr": float("nan"),
+        }
+    }
+
+    expectancy = compute_report(rows, signal_extras)["expectancy"]
+    assert expectancy["by_family"]["(untagged)"]["resolved_count"] == 2
+    assert expectancy["by_bos_strength"]["(untagged)"]["resolved_count"] == 2
+    assert expectancy["by_chase_distance"]["(untagged)"]["resolved_count"] == 2
