@@ -170,3 +170,119 @@ def test_retry_failed_reclaims_stale_pending_rows(client, auth_headers):
     resp = client.post("/retry-failed", headers=auth_headers)
     assert resp.status_code == 200
     assert "Processed 1 failed signals" in resp.json()["message"]
+
+
+
+def test_broker_deal_records_actual_costs_and_position_aggregate(client, auth_headers):
+    from app.database import async_session
+    from app.models import BrokerDeal, BrokerPosition
+    import asyncio
+
+    open_payload = {
+        "deal_ticket": "880001",
+        "position_id": "770001",
+        "order_ticket": "660001",
+        "signal_id": "MT#123",
+        "symbol": "XAUUSD",
+        "magic_number": 987654321,
+        "direction": "BUY",
+        "entry_type": "IN",
+        "deal_type": "BUY",
+        "volume": 0.10,
+        "price": 2200.0,
+        "profit": 0.0,
+        "commission": -1.0,
+        "swap": 0.0,
+        "fee": -0.1,
+        "time_msc": 1790000000000,
+        "position_open": True,
+        "initial_stop_loss": 2190.0,
+        "initial_risk_distance": 10.0,
+    }
+    close_payload = {
+        **open_payload,
+        "deal_ticket": "880002",
+        "order_ticket": "660002",
+        "entry_type": "OUT",
+        "deal_type": "SELL",
+        "volume": 0.10,
+        "price": 2220.0,
+        "profit": 40.0,
+        "commission": -1.0,
+        "swap": -0.5,
+        "fee": -0.1,
+        "time_msc": 1790000060000,
+        "comment": "MT#123",
+        "position_open": False,
+        "mfe_price": 2235.0,
+        "mae_price": 2194.0,
+        "mfe_r": 3.5,
+        "mae_r": 0.6,
+    }
+
+    opened = client.post("/broker/deal", json=open_payload, headers=auth_headers)
+    closed = client.post("/broker/deal", json=close_payload, headers=auth_headers)
+
+    assert opened.status_code == 200
+    assert opened.json()["status"] == "recorded"
+    assert closed.status_code == 200
+    assert closed.json()["status"] == "recorded"
+    assert closed.json()["position_net_profit"] == 37.3
+
+    async def _read_rows():
+        async with async_session() as session:
+            deals = (await session.scalars(select(BrokerDeal).order_by(BrokerDeal.time_msc))).all()
+            position = await session.scalar(
+                select(BrokerPosition).where(BrokerPosition.position_id == "770001")
+            )
+            return deals, position
+
+    from sqlalchemy import select
+    deals, position = asyncio.run(_read_rows())
+    assert len(deals) == 2
+    assert [deal.entry_type for deal in deals] == ["IN", "OUT"]
+    assert position.position_open is False
+    assert position.entry_price == 2200.0
+    assert position.total_volume_in == 0.10
+    assert position.total_volume_out == 0.10
+    assert position.gross_profit == 40.0
+    assert position.commission == -2.0
+    assert position.swap == -0.5
+    assert position.fee == -0.2
+    assert round(position.net_profit, 8) == 37.3
+    assert position.mfe_r == 3.5
+    assert position.mae_r == 0.6
+    assert position.mfe_price == 2235.0
+    assert position.mae_price == 2194.0
+
+    duplicate = client.post("/broker/deal", json=close_payload, headers=auth_headers)
+    assert duplicate.status_code == 200
+    assert duplicate.json()["duplicate"] is True
+
+    deals_after_retry, position_after_retry = asyncio.run(_read_rows())
+    assert len(deals_after_retry) == 2
+    assert round(position_after_retry.net_profit, 8) == 37.3
+
+
+def test_broker_deal_requires_api_key(client):
+    response = client.post("/broker/deal", json={})
+    assert response.status_code == 422
+
+
+def test_broker_deal_rejects_unsupported_netting_reversal(client, auth_headers):
+    payload = {
+        "deal_ticket": "880099",
+        "position_id": "770099",
+        "order_ticket": "660099",
+        "symbol": "XAUUSD",
+        "magic_number": 987654321,
+        "direction": "BUY",
+        "entry_type": "INOUT",
+        "deal_type": "BUY",
+        "volume": 0.10,
+        "price": 2200.0,
+        "time_msc": 1790000000000,
+        "position_open": True,
+    }
+    response = client.post("/broker/deal", json=payload, headers=auth_headers)
+    assert response.status_code == 422
