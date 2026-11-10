@@ -105,7 +105,10 @@ public:
          Restore(idx, positionId, isBuy, entryPrice);
         }
       m_items[idx].is_buy = isBuy;
-      m_items[idx].entry_price = entryPrice;
+      // The first fill anchors this position's R basis. Later IN deals
+      // for a netted/scale-in position must not silently reset that basis.
+      if(m_items[idx].entry_price <= 0.0)
+         m_items[idx].entry_price = entryPrice;
       if(initialStopLoss > 0.0 && m_items[idx].initial_risk_distance <= 0.0)
         {
          m_items[idx].initial_stop_loss = initialStopLoss;
