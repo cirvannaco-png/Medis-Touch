@@ -16,7 +16,7 @@ def upgrade() -> None:
     op.create_table(
         "broker_deals",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("deal_ticket", sa.String(), nullable=False, unique=True),
+        sa.Column("deal_ticket", sa.String(), nullable=False),
         sa.Column("position_id", sa.String(), nullable=False),
         sa.Column("order_ticket", sa.String(), nullable=False),
         sa.Column("signal_id", sa.String(), nullable=True),
@@ -45,7 +45,7 @@ def upgrade() -> None:
     op.create_table(
         "broker_positions",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("position_id", sa.String(), nullable=False, unique=True),
+        sa.Column("position_id", sa.String(), nullable=False),
         sa.Column("signal_id", sa.String(), nullable=True),
         sa.Column("symbol", sa.String(), nullable=False),
         sa.Column("magic_number", sa.BigInteger(), nullable=False),
