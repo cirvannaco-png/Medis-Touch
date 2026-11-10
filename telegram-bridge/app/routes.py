@@ -21,6 +21,8 @@ from app.models import (
     SignalLifecycleStatus,
     SignalOutcome,
     SignalStatus,
+    BrokerDeal,
+    BrokerPosition,
     TradeEvent,
     TradeEventStatus,
     TradeEventType,
@@ -151,6 +153,43 @@ class OutcomeRequest(BaseModel):
     decay_bars: int | None = Field(default=None, ge=0)
 
     model_config = {"populate_by_name": True}
+
+
+class BrokerDealRequest(BaseModel):
+    """Broker-confirmed deal data from MT5; unlike /outcome this is not simulated."""
+
+    deal_ticket: str = Field(..., min_length=1, max_length=32)
+    position_id: str = Field(..., min_length=1, max_length=32)
+    order_ticket: str = Field(..., min_length=1, max_length=32)
+    signal_id: str | None = Field(default=None, max_length=100)
+    symbol: str = Field(..., min_length=1, max_length=20)
+    magic_number: int = Field(..., ge=0)
+    direction: Literal["BUY", "SELL"]
+    entry_type: Literal["IN", "OUT", "OUT_BY"]
+    deal_type: Literal["BUY", "SELL"]
+    volume: float = Field(..., gt=0, allow_inf_nan=False)
+    price: float = Field(..., gt=0, allow_inf_nan=False)
+    profit: float = Field(default=0.0, allow_inf_nan=False)
+    commission: float = Field(default=0.0, allow_inf_nan=False)
+    swap: float = Field(default=0.0, allow_inf_nan=False)
+    fee: float = Field(default=0.0, allow_inf_nan=False)
+    time_msc: int = Field(..., gt=0)
+    comment: str | None = Field(default=None, max_length=200)
+    position_open: bool
+    initial_stop_loss: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    initial_risk_distance: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    mfe_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    mae_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    mfe_r: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    mae_r: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
+class BrokerDealResponse(BaseModel):
+    status: str
+    deal_ticket: str
+    position_id: str
+    duplicate: bool = False
+    position_net_profit: float | None = None
 
 
 class OutcomeResponse(BaseModel):
@@ -645,6 +684,192 @@ async def receive_outcome(
 
     log.info(f"Outcome recorded: {payload.outcome}" + (" (updated)" if upserted else ""))
     return OutcomeResponse(status="ok", signal_id=payload.signal_id, upserted=upserted)
+
+
+@router.post("/broker/deal", response_model=BrokerDealResponse)
+async def receive_broker_deal(
+    payload: BrokerDealRequest,
+    session: AsyncSession = Depends(get_session),
+    _auth: bool = Depends(verify_api_key),
+):
+    """Persist one actual MT5 deal and refresh its position-level aggregation.
+
+    deal_ticket is the idempotency key. Partial closes remain separate deal
+    rows; realized P&L is the sum of broker profit, commission, swap and fee.
+    The EA supplies position_open and cumulative MFE/MAE snapshots from its
+    position tracker so closed positions are not inferred from candle data.
+    """
+    log = logger.bind(
+        deal_ticket=payload.deal_ticket,
+        position_id=payload.position_id,
+        symbol=payload.symbol,
+    )
+
+    existing = await session.scalar(
+        select(BrokerDeal).where(BrokerDeal.deal_ticket == payload.deal_ticket)
+    )
+    if existing is not None:
+        position = await session.scalar(
+            select(BrokerPosition).where(BrokerPosition.position_id == payload.position_id)
+        )
+        return BrokerDealResponse(
+            status="duplicate",
+            deal_ticket=payload.deal_ticket,
+            position_id=payload.position_id,
+            duplicate=True,
+            position_net_profit=position.net_profit if position is not None else None,
+        )
+
+    deal_time = datetime.fromtimestamp(payload.time_msc / 1000.0, tz=timezone.utc)
+    net_profit = payload.profit + payload.commission + payload.swap + payload.fee
+    row = BrokerDeal(
+        deal_ticket=payload.deal_ticket,
+        position_id=payload.position_id,
+        order_ticket=payload.order_ticket,
+        signal_id=payload.signal_id,
+        symbol=payload.symbol,
+        magic_number=payload.magic_number,
+        direction=payload.direction,
+        entry_type=payload.entry_type,
+        deal_type=payload.deal_type,
+        volume=payload.volume,
+        price=payload.price,
+        profit=payload.profit,
+        commission=payload.commission,
+        swap=payload.swap,
+        fee=payload.fee,
+        net_profit=net_profit,
+        time_msc=payload.time_msc,
+        deal_time=deal_time,
+        comment=payload.comment,
+    )
+    session.add(row)
+
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Concurrent retry of the same deal ticket: another request won
+        # the unique constraint. The losing transaction must not update
+        # aggregates or double-count costs.
+        await session.rollback()
+        position = await session.scalar(
+            select(BrokerPosition).where(BrokerPosition.position_id == payload.position_id)
+        )
+        return BrokerDealResponse(
+            status="duplicate",
+            deal_ticket=payload.deal_ticket,
+            position_id=payload.position_id,
+            duplicate=True,
+            position_net_profit=position.net_profit if position is not None else None,
+        )
+
+    position = await session.scalar(
+        select(BrokerPosition).where(BrokerPosition.position_id == payload.position_id)
+    )
+    if position is None:
+        position = BrokerPosition(
+            position_id=payload.position_id,
+            symbol=payload.symbol,
+            magic_number=payload.magic_number,
+            direction=payload.direction,
+        )
+        session.add(position)
+        await session.flush()
+    elif (
+        position.symbol != payload.symbol
+        or position.magic_number != payload.magic_number
+        or position.direction != payload.direction
+    ):
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="position identity fields changed across broker deals",
+        )
+
+    deals = (
+        await session.scalars(
+            select(BrokerDeal)
+            .where(BrokerDeal.position_id == payload.position_id)
+            .order_by(BrokerDeal.time_msc, BrokerDeal.deal_ticket)
+        )
+    ).all()
+    opening_deals = [deal for deal in deals if deal.entry_type == "IN"]
+    closing_deals = [deal for deal in deals if deal.entry_type in {"OUT", "OUT_BY"}]
+    opening_volume = sum(deal.volume for deal in opening_deals)
+    closing_volume = sum(deal.volume for deal in closing_deals)
+
+    if opening_volume > 0:
+        position.entry_price = (
+            sum(deal.price * deal.volume for deal in opening_deals) / opening_volume
+        )
+        position.opened_at = min(deal.deal_time for deal in opening_deals)
+        position.total_volume_in = opening_volume
+    position.total_volume_out = closing_volume
+
+    first_open_with_sl = next(
+        (deal for deal in deals if deal.entry_type == "IN" and deal.position_id == payload.position_id),
+        None,
+    )
+    if payload.initial_stop_loss is not None:
+        position.initial_stop_loss = (
+            position.initial_stop_loss
+            if position.initial_stop_loss is not None
+            else payload.initial_stop_loss
+        )
+    if payload.initial_risk_distance is not None:
+        position.initial_risk_distance = (
+            position.initial_risk_distance
+            if position.initial_risk_distance is not None
+            else payload.initial_risk_distance
+        )
+
+    position.signal_id = position.signal_id or payload.signal_id
+    position.gross_profit = sum(deal.profit for deal in deals)
+    position.commission = sum(deal.commission for deal in deals)
+    position.swap = sum(deal.swap for deal in deals)
+    position.fee = sum(deal.fee for deal in deals)
+    position.net_profit = sum(deal.net_profit for deal in deals)
+    position.position_open = payload.position_open
+    if not payload.position_open:
+        position.closed_at = deal_time
+
+    # MFE and MAE are cumulative excursion snapshots supplied by the EA,
+    # expressed in positive R units using the original risk distance.
+    if payload.mfe_price is not None:
+        if position.mfe_price is None:
+            position.mfe_price = payload.mfe_price
+        elif payload.direction == "BUY":
+            position.mfe_price = max(position.mfe_price, payload.mfe_price)
+        else:
+            position.mfe_price = min(position.mfe_price, payload.mfe_price)
+    if payload.mae_price is not None:
+        if position.mae_price is None:
+            position.mae_price = payload.mae_price
+        elif payload.direction == "BUY":
+            position.mae_price = min(position.mae_price, payload.mae_price)
+        else:
+            position.mae_price = max(position.mae_price, payload.mae_price)
+    if payload.mfe_r is not None:
+        position.mfe_r = max(position.mfe_r or 0.0, payload.mfe_r)
+    if payload.mae_r is not None:
+        position.mae_r = max(position.mae_r or 0.0, payload.mae_r)
+    position.updated_at = datetime.now(timezone.utc)
+
+    await session.commit()
+    log.info(
+        "Broker deal recorded",
+        entry_type=payload.entry_type,
+        volume=payload.volume,
+        net_profit=net_profit,
+        position_open=payload.position_open,
+    )
+    return BrokerDealResponse(
+        status="recorded",
+        deal_ticket=payload.deal_ticket,
+        position_id=payload.position_id,
+        duplicate=False,
+        position_net_profit=position.net_profit,
+    )
 
 
 class ConfigResponse(BaseModel):
