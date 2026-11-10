@@ -163,7 +163,7 @@ def test_family_regime_bos_and_chase_attribution(make_outcome):
     assert expectancy["by_bos_strength"]["75-100"]["avg_r"] == 1.5
     assert expectancy["by_bos_strength"]["25-50"]["avg_r"] == -1.0
     assert expectancy["by_chase_distance"]["0-0.25 ATR"]["avg_r"] == 1.5
-    assert expectancy["by_chase_distance"][">0.75 ATR"] if ">0.75 ATR" in expectancy["by_chase_distance"] else True
+    assert expectancy["by_chase_distance"]["0.75-1.00 ATR"]["avg_r"] == -1.0
 
 
 def test_signal_attribution_missing_or_malformed_values_are_untagged(make_outcome):
