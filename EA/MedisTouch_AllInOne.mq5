@@ -26,13 +26,188 @@
 //|                                                   Core/Config.mqh |
 //|                                            Medis Touch Indicator  |
 //+------------------------------------------------------------------+
-#property copyright "Medis Touch"
-#property version   "2.00"
 
 #ifndef CONFIG_MQH
 #define CONFIG_MQH
 
-#include "NewsFilter.mqh" // for ENUM_NEWS_RISK, used by SetupReasons (v2.9)
+// ---- BEGIN EA/includes/Core/NewsFilter.mqh ----
+//+------------------------------------------------------------------+
+//|                                            Core/NewsFilter.mqh    |
+//+------------------------------------------------------------------+
+#ifndef NEWSFILTER_MQH
+#define NEWSFILTER_MQH
+
+// v2.9: soft-risk tier, in addition to the existing hard-block IsLocked()
+// gate. NEWS_NONE = no high-impact event within the warning window at
+// all. NEWS_WARNING = inside the (wider) warning window but outside the
+// (narrower) block window — CScoringEngine can use this to soft-discount
+// confidence rather than the EA hard-blocking every entry, matching the
+// review's "don't just block, let news context feed the probability
+// model" idea. NEWS_BLOCKED = inside the existing hard-block window;
+// IsLocked() already fully prevents new entries in this case at the EA
+// level, this enum value exists so a single call can report which tier
+// applied, for the dashboard/signal card.
+enum ENUM_NEWS_RISK { NEWS_NONE, NEWS_WARNING, NEWS_BLOCKED };
+
+// Blocks NEW trade entries in a window around high-impact economic
+// events, read from a CSV the operator maintains themselves — this does
+// NOT scrape ForexFactory or anything else at runtime (MT5's WebRequest
+// is allow-listed per-domain by the terminal and scraping a site that
+// doesn't offer a real feed is fragile and liable to break silently).
+// Expected file format, one event per line, in the terminal's
+// MQL5/Files directory (or Files/Common if opened with FILE_COMMON):
+//   2026.08.15,12:30,HIGH,US Nonfarm Payrolls
+//   2026.08.20,18:00,HIGH,FOMC Rate Decision
+// Only rows with impact == "HIGH" (case-sensitive, by design — don't
+// silently widen the block window by loosely matching "medium" too)
+// are loaded. Malformed rows are skipped, not fatal.
+//
+// FAILS OPEN: a missing or empty file disables the filter (logs once,
+// trading continues) rather than blocking every trade because a CSV
+// wasn't found — the same fail-safe posture SessionFilter and
+// PortfolioManager use elsewhere in this codebase for "gate not
+// configured".
+class CNewsFilter
+  {
+private:
+   datetime   m_times[];
+   string     m_labels[];
+   int        m_count;
+   int        m_minutesBefore;
+   int        m_minutesAfter;
+   bool       m_enabled;
+   // v2.9 — warning window, wider than the block window by definition
+   // (if it were narrower/equal, WARNING would never be reachable).
+   int        m_warnMinutesBefore;
+   int        m_warnMinutesAfter;
+
+public:
+              CNewsFilter() : m_count(0), m_minutesBefore(15), m_minutesAfter(5), m_enabled(false),
+                              m_warnMinutesBefore(60), m_warnMinutesAfter(30) {}
+   bool       Load(string filename, int minutesBefore, int minutesAfter, bool useCommonFolder = false);
+   bool       IsLocked(string &reasonOut);
+   int        Count() const { return m_count; }
+   // v2.9. Call after Load(). Values below the existing block window are
+   // clamped up to it, so WARNING is always a superset of BLOCKED, never
+   // a gap next to it.
+   void       ConfigureWarningWindow(int warnMinutesBefore, int warnMinutesAfter)
+     {
+      m_warnMinutesBefore = MathMax(warnMinutesBefore, m_minutesBefore);
+      m_warnMinutesAfter = MathMax(warnMinutesAfter, m_minutesAfter);
+     }
+   // v2.9. Returns the risk tier for "now", the label of the nearest
+   // event driving that tier (if any), and minutes until/since it
+   // (negative = already passed, still inside the after-window).
+   ENUM_NEWS_RISK GetRiskTier(string &labelOut, int &minutesToEventOut);
+  };
+//+------------------------------------------------------------------+
+bool CNewsFilter::Load(string filename, int minutesBefore, int minutesAfter, bool useCommonFolder)
+  {
+   m_count = 0;
+   m_enabled = false;
+   m_minutesBefore = MathMax(0, minutesBefore);
+   m_minutesAfter = MathMax(0, minutesAfter);
+
+   int flags = FILE_CSV | FILE_READ | FILE_SHARE_READ | FILE_ANSI;
+   if(useCommonFolder) flags |= FILE_COMMON;
+   int handle = FileOpen(filename, flags, ',');
+   if(handle == INVALID_HANDLE)
+     {
+      PrintFormat("MedisTouch NewsFilter: %s not found — news filter disabled (this is not an error; create the file to enable it).", filename);
+      return false;
+     }
+
+   ArrayResize(m_times, 0);
+   ArrayResize(m_labels, 0);
+   int loaded = 0, skipped = 0;
+
+   while(!FileIsEnding(handle))
+     {
+      string dateStr = FileReadString(handle);
+      if(FileIsEnding(handle)) break; // trailing blank line at EOF
+      string timeStr = FileReadString(handle);
+      string impact  = FileReadString(handle);
+      string label   = FileReadString(handle);
+
+      if(impact != "HIGH") { skipped++; continue; }
+      datetime dt = StringToTime(dateStr + " " + timeStr);
+      if(dt <= 0) { skipped++; continue; } // unparseable row — skip, don't crash the load
+
+      int n = ArraySize(m_times);
+      ArrayResize(m_times, n + 1);
+      ArrayResize(m_labels, n + 1);
+      m_times[n] = dt;
+      m_labels[n] = label;
+      loaded++;
+     }
+   FileClose(handle);
+
+   m_count = loaded;
+   m_enabled = (loaded > 0);
+   PrintFormat("MedisTouch NewsFilter: loaded %d high-impact event(s) from %s (%d row(s) skipped/malformed).",
+               loaded, filename, skipped);
+   return m_enabled;
+  }
+//+------------------------------------------------------------------+
+bool CNewsFilter::IsLocked(string &reasonOut)
+  {
+   reasonOut = "";
+   if(!m_enabled) return false;
+   datetime now = TimeCurrent();
+   for(int i = 0; i < m_count; i++)
+     {
+      datetime windowStart = m_times[i] - m_minutesBefore * 60;
+      datetime windowEnd   = m_times[i] + m_minutesAfter * 60;
+      if(now >= windowStart && now <= windowEnd)
+        {
+         reasonOut = StringFormat("news lock — \"%s\" at %s (blocking %d min before / %d min after)",
+                                   m_labels[i], TimeToString(m_times[i], TIME_DATE | TIME_MINUTES),
+                                   m_minutesBefore, m_minutesAfter);
+         return true;
+        }
+     }
+   return false;
+  }
+//+------------------------------------------------------------------+
+ENUM_NEWS_RISK CNewsFilter::GetRiskTier(string &labelOut, int &minutesToEventOut)
+  {
+   labelOut = "";
+   minutesToEventOut = 0;
+   if(!m_enabled) return NEWS_NONE;
+   datetime now = TimeCurrent();
+   ENUM_NEWS_RISK best = NEWS_NONE;
+   int bestAbsMinutes = INT_MAX;
+
+   for(int i = 0; i < m_count; i++)
+     {
+      datetime blockStart = m_times[i] - m_minutesBefore * 60;
+      datetime blockEnd   = m_times[i] + m_minutesAfter * 60;
+      datetime warnStart  = m_times[i] - m_warnMinutesBefore * 60;
+      datetime warnEnd    = m_times[i] + m_warnMinutesAfter * 60;
+
+      ENUM_NEWS_RISK tier = NEWS_NONE;
+      if(now >= blockStart && now <= blockEnd) tier = NEWS_BLOCKED;
+      else if(now >= warnStart && now <= warnEnd) tier = NEWS_WARNING;
+      if(tier == NEWS_NONE) continue;
+
+      int minutesToEvent = (int)((m_times[i] - now) / 60);
+      int absMinutes = (int)MathAbs(minutesToEvent);
+      // prefer BLOCKED over WARNING regardless of distance, then nearest event
+      if(tier > best || (tier == best && absMinutes < bestAbsMinutes))
+        {
+         best = tier;
+         bestAbsMinutes = absMinutes;
+         labelOut = m_labels[i];
+         minutesToEventOut = minutesToEvent;
+        }
+     }
+   return best;
+  }
+#endif
+//+------------------------------------------------------------------+
+
+
+// ---- END EA/includes/Core/NewsFilter.mqh ----
 
 // --- Enums ---
 enum ENUM_TREND_STATE
@@ -822,7 +997,6 @@ void CCandleData::Refresh()
 
 // ---- END EA/includes/Core/Config.mqh ----
 
-// Session labeling: v4 bucketed by raw server-clock hour, which drifts
 // wrong by however many hours the broker's server sits from GMT (and
 // worse across DST changes). This version computes the live server-to-GMT
 // offset via TimeTradeServer()/TimeGMT() and buckets by real GMT session
@@ -1674,7 +1848,6 @@ BOSEvent CBOS::GetBOS(int i) const
 
 // ---- END EA/includes/Structure/SwingDetector.mqh ----
 
-// NOTE: by design this engine tracks only the single most recent bullish
 // CHoCH and the single most recent bearish CHoCH (mirrors how CHoCH is
 // actually used — as a live structure-shift flag, not a historical log).
 // Count() will be 0, 1, or 2.
@@ -2562,7 +2735,6 @@ SRZone CSupportResistance::GetZone(int i) const { if(i<0||i>=m_zoneCount) { SRZo
 
 // ---- END EA/includes/Core/CandleData.mqh ----
 
-// Volume Engine — answers "is this move supported by participation?"
 // Per spec: volume is a FILTER/VALIDATOR, never a signal generator on its
 // own. Relative Volume (RVOL) compares a bar's volume against its own
 // recent average; a breakout with low RVOL is treated as unsupported and
@@ -2685,7 +2857,6 @@ double CVolumeEngine::Score(int shift, double rvolThreshold) const
 
 // ---- END EA/includes/Structure/SwingDetector.mqh ----
 
-// Fibonacci Engine — a LOCATION filter, never a signal generator. Anchors
 // come only from confirmed swing highs/lows produced by CSwingDetector;
 // manual anchor selection is deliberately not exposed anywhere in this
 // class. For an uptrend leg: 0% retracement = the confirmed swing high,
@@ -2912,7 +3083,6 @@ double CFibonacciEngine::Score(bool forBuy, double price, double zoneMinPct, dou
 
 // ---- END EA/includes/Core/CandleData.mqh ----
 
-// Value Area Engine — "is price cheap or expensive relative to where
 // most trading actually happened recently?" A location filter, same
 // discipline as Volume and Fibonacci: it never generates a signal, it
 // only says whether the price a setup wants to trade at sits inside,
@@ -3138,7 +3308,6 @@ double CValueAreaEngine::Score(bool forBuy, double price) const
 
 // ---- END EA/includes/Structure/BOS.mqh ----
 
-// v2.8 addition, closing the gap flagged in the pre-rewrite audit: the
 // codebase had Inducement/FVG/Liquidity/SR confluence but nothing reading
 // Order Blocks on a higher timeframe, even though the point-table spec's
 // "HTF Alignment" bucket implicitly assumes one. This engine is meant to
@@ -3449,7 +3618,6 @@ ENUM_TREND_STATE CTrendEngine::GetCurrentTrend()
 
 // ---- END EA/includes/Analysis/TrendEngine.mqh ----
 
-// One full SMC detection pipeline, scoped to a single timeframe. Building
 // this was the actual fix for "real per-timeframe BOS/liquidity/FVG" —
 // previously every concept ran on whatever timeframe the chart happened
 // to be on, so labeling a signal "H4 BOS" while running on M15 would have
@@ -3672,7 +3840,6 @@ void CTFContextPool::DetectAll(bool force)
 
 // ---- END EA/includes/Core/CandleData.mqh ----
 
-// Validates the sequence: Impulse -> Internal pullback structure ->
 // Internal liquidity sweep (inducement) -> minor BOS -> only then is a
 // setup "confirmed". This turns the indicator from a feature detector
 // (does an FVG exist near price?) into a decision engine (did price
@@ -4150,7 +4317,6 @@ InducementResult CInducement::Validate(bool forBuy)
 
 // ---- END EA/includes/Core/Config.mqh ----
 
-// Static helper — no state, so no Init()/instance needed. Equilibrium is
 // just the midpoint of a range; buys should only trigger below it
 // (discount), sells only above it (premium). Deliberately takes a plain
 // (high, low) pair rather than owning its own range source, so callers
@@ -4209,7 +4375,6 @@ public:
 
 // ---- END EA/includes/SmartMoney/Liquidity.mqh ----
 
-// HONEST CAVEAT: this is the least rigorously-defined concept in the
 // v2.1 upgrade — "accumulation / manipulation / distribution" is a
 // narrative description, not something with a single agreed-upon
 // technical definition the way BOS or an FVG is. What follows is a
@@ -4323,7 +4488,6 @@ ENUM_MARKET_PHASE CMarketPhase::Detect()
 
 // ---- END EA/includes/Core/CandleData.mqh ----
 
-// v2.8 addition. CMarketPhase already answers "is price compressed into a
 // range right now" (binary, range/ATR vs one threshold). This answers a
 // different question: "is the CURRENT bar's ATR itself unusually low or
 // high relative to its own recent history" — independent of whether price
@@ -4407,7 +4571,6 @@ ENUM_VOL_REGIME CVolatilityRegime::Classify(int shift)
 
 // ---- END EA/includes/Core/Config.mqh ----
 
-// v2.8 addition. Pre-v2.8 the only session-aware code was
 // CSignalLogger::SessionLabel() — a string used purely for CSV bucketing
 // after the fact. It was never read by anything that decides whether to
 // trade. This class is the actual gate: classifies the current GMT hour
@@ -4713,7 +4876,6 @@ public:
 
 // ---- END EA/includes/SmartMoney/MarketPhase.mqh ----
 
-// v2.12 addition. Everything downstream in the multi-strategy design
 // (Momentum/Breakout vs Mean Reversion vs Key-Level Price Action) is
 // supposed to branch off "what kind of market is this", so this is
 // built first, and deliberately reuses the three reads that already
@@ -4832,7 +4994,6 @@ ENUM_MARKET_REGIME CRegimeDetector::Classify()
 
 // ---- END EA/includes/Analysis/VolatilityRegime.mqh ----
 
-// v2.12 addition. Strategy module #1 of the multi-strategy architecture
 // (see docs/CHANGELOG.md v2.12 entry) — Mean Reversion and the Key-Level
 // Price Action engine are next, not built yet. Deliberately reuses
 // existing primitives instead of reimplementing them:
@@ -5092,7 +5253,6 @@ void CMomentumBreakoutEngine::Evaluate(bool forBuy, double &momentumScore, doubl
 
 // ---- END EA/includes/Analysis/VolatilityRegime.mqh ----
 
-// v2.13 addition. Strategy module #2 of the multi-strategy architecture
 // (see Strategies/MomentumBreakout.mqh for module #1 and the same
 // rationale for building one module at a time). Reuses existing
 // primitives rather than reimplementing them:
@@ -5396,7 +5556,6 @@ void CMeanReversionEngine::Evaluate(bool forBuy, double &reversionScore, ENUM_RE
 
 // ---- END EA/includes/Core/SessionFilter.mqh ----
 
-// v2.17 addition. The three level sources v2.14's Strategies/
 // KeyLevelReaction.mqh header explicitly flagged as unwired: "None of
 // the three exist anywhere in the codebase yet — building three new
 // level detectors in the same pass as everything above would be
@@ -5579,7 +5738,6 @@ bool CExtendedKeyLevels::NearestRoundLevel(bool forBuy, double price, double max
 
 // ---- END EA/includes/SmartMoney/ExtendedKeyLevels.mqh ----
 
-// v2.14 addition. Strategy module #3 of the multi-strategy architecture
 // (see MomentumBreakout.mqh for module #1 and MeanReversion.mqh for
 // module #2, and the shared "one module at a time" rationale). This is
 // the doc's "Key-Level Reaction Engine": identify a level, then
@@ -5927,7 +6085,6 @@ void CKeyLevelEngine::Evaluate(bool forBuy, ENUM_KEYLEVEL_SOURCE &source, ENUM_K
 
 // ---- END EA/includes/Core/Config.mqh ----
 
-// v2.15 addition. This is the FOURTH and LAST layer added in this
 // batch — per explicit agreement to stop here and compile/test v2.12
 // through v2.15 as one unit before adding anything further. Nothing
 // past this point (Price Action was the last strategy module; this is
@@ -6046,7 +6203,6 @@ void CStrategySelector::Select(const SetupReasons &r, double smcConfidence,
 
 // ---- END EA/includes/Strategies/StrategySelector.mqh ----
 
-// v2.1 SCORING MODEL — replaces the old flat weighted sum with the
 // point table from the inducement-engine spec:
 //   Strong Impulse             +15  \
 //   Internal Structure Formed  +10   |  from CInducement.Validate() —
@@ -7153,7 +7309,6 @@ IRuntimeConfigConsumer *GetRuntimeConfigConsumer()
 
 // ---- END EA/includes/Analysis/TFContext.mqh ----
 
-// Ranks resting liquidity by "how big a stop hunt would this be" and lays
 // TP1/TP2/TP3 out along that ladder instead of fixed ATR multiples:
 //   TP1 = nearest internal pool (equal highs/lows)      priority 75
 //   TP2 = nearest external D1 high/low                  priority 90
@@ -7798,7 +7953,6 @@ public:
 
 // ---- END EA/includes/Trading/CalibrationEngine.mqh ----
 
-// v2.11 — optional publisher hook so a resolved/no-fill setup can be
 // POSTed to the bridge (POST /outcome) right alongside the existing
 // local-CSV LogOutcome() call. Include-guarded, so it's harmless that
 // the main .mq5 also includes this later for g_publisher itself.
@@ -7829,7 +7983,6 @@ public:
 
 // ---- END EA/includes/Core/Config.mqh ----
 
-// What the router decided to DO with a validated setup. Execution and
 // signalling are independent switches, so the combined case is its own
 // value rather than a bitmask - every consumer compares against explicit
 // values and a bitmask would silently pass `& POLICY_EXECUTE_ONLY` tests
@@ -8049,7 +8202,6 @@ void CSubscriberPlatform::RecordDelivery(string subscriberId, long decisionId, b
 
 // ---- END EA/includes/Core/PipCalculator.mqh ----
 
-// Publish/format/dedup/transport side of the Signal Distribution Engine.
 //
 // TRANSPORT IS NOW REAL: TransmitOne() calls WebRequest() against each
 // active subscriber's endpoint from CSubscriberPlatform. Two things this
@@ -8484,7 +8636,6 @@ bool CSignalPublisher::PublishOutcome(string signalId, string symbol, string dir
 
 // ---- END EA/includes/Signals/SignalPublisher.mqh ----
 
-// SCOPE / HONEST LIMITATIONS — read before trusting the numbers this
 // produces:
 //  1. Tracking is fill-confirmed: a setup sits in a "pending" state from
 //     generation until price actually trades to entryRef (the near edge
@@ -9717,7 +9868,6 @@ bool CDecisionStore::FindById(long decisionId, TradeDecisionRecord &out)
 #define BROKERADAPTER_MQH
 #include <Trade/Trade.mqh>
 
-// Thin wrapper around the standard CTrade class. OrderManager and
 // PositionManager never touch the trade API directly — everything routes
 // through here, which centralizes retry/error logging and gives one seam
 // to swap execution backends later (e.g. a copier API) without touching
@@ -10549,7 +10699,6 @@ void CTradeStateMachine::ForceState(ENUM_TRADE_STATE to)
 
 // ---- END EA/includes/Execution/BrokerAdapter.mqh ----
 
-// One decision's full order lifecycle: the immutable decision it came
 // from, its state machine, and the volume actually sized for it.
 struct ManagedTrade
   {
@@ -10836,7 +10985,6 @@ bool COrderManager::RestoreTrade(const TradeDecisionRecord &decision, double vol
 
 // ---- END EA/includes/Execution/BrokerAdapter.mqh ----
 
-// Everything that happens to a trade AFTER OrderManager gets it to
 // FILLED: break-even, partial close at TP1, trailing the runner, and
 // detecting closure. State order matches the documented lifecycle:
 // Filled -> Protected -> Partial -> Runner -> Closed -> Archived.
@@ -10983,7 +11131,6 @@ void CPositionManager::OnTick(double currentAtr)
 
 // ---- END EA/includes/Execution/TradeStateMachine.mqh ----
 
-// Runs once, at OnInit, after every other manager is constructed. An MT5
 // restart (terminal crash, VPS reboot, manual restart, a broker server
 // bounce) does not touch open positions or pending orders at the broker
 // — only this EA's in-memory bookkeeping (COrderManager's array, each
@@ -11404,7 +11551,6 @@ bool CPortfolioRiskEngine::BuildSnapshot(string proposedSymbol, double proposedR
 
 // ---- END EA/includes/Portfolio/PortfolioRiskEngine.mqh ----
 
-// Account-wide pre-order portfolio gate. Simple hard limits remain here;
 // rolling correlation and factor exposure are delegated to the dedicated
 // risk engine. No HTTP, database or optimizer work is permitted here.
 class CPortfolioManager
@@ -11719,181 +11865,6 @@ void CRiskGuard::ManualReset()
 // ---- END EA/includes/Portfolio/RiskGuard.mqh ----
 
 // ---- BEGIN EA/includes/Core/NewsFilter.mqh ----
-//+------------------------------------------------------------------+
-//|                                            Core/NewsFilter.mqh    |
-//+------------------------------------------------------------------+
-#ifndef NEWSFILTER_MQH
-#define NEWSFILTER_MQH
-
-// v2.9: soft-risk tier, in addition to the existing hard-block IsLocked()
-// gate. NEWS_NONE = no high-impact event within the warning window at
-// all. NEWS_WARNING = inside the (wider) warning window but outside the
-// (narrower) block window — CScoringEngine can use this to soft-discount
-// confidence rather than the EA hard-blocking every entry, matching the
-// review's "don't just block, let news context feed the probability
-// model" idea. NEWS_BLOCKED = inside the existing hard-block window;
-// IsLocked() already fully prevents new entries in this case at the EA
-// level, this enum value exists so a single call can report which tier
-// applied, for the dashboard/signal card.
-enum ENUM_NEWS_RISK { NEWS_NONE, NEWS_WARNING, NEWS_BLOCKED };
-
-// Blocks NEW trade entries in a window around high-impact economic
-// events, read from a CSV the operator maintains themselves — this does
-// NOT scrape ForexFactory or anything else at runtime (MT5's WebRequest
-// is allow-listed per-domain by the terminal and scraping a site that
-// doesn't offer a real feed is fragile and liable to break silently).
-// Expected file format, one event per line, in the terminal's
-// MQL5/Files directory (or Files/Common if opened with FILE_COMMON):
-//   2026.08.15,12:30,HIGH,US Nonfarm Payrolls
-//   2026.08.20,18:00,HIGH,FOMC Rate Decision
-// Only rows with impact == "HIGH" (case-sensitive, by design — don't
-// silently widen the block window by loosely matching "medium" too)
-// are loaded. Malformed rows are skipped, not fatal.
-//
-// FAILS OPEN: a missing or empty file disables the filter (logs once,
-// trading continues) rather than blocking every trade because a CSV
-// wasn't found — the same fail-safe posture SessionFilter and
-// PortfolioManager use elsewhere in this codebase for "gate not
-// configured".
-class CNewsFilter
-  {
-private:
-   datetime   m_times[];
-   string     m_labels[];
-   int        m_count;
-   int        m_minutesBefore;
-   int        m_minutesAfter;
-   bool       m_enabled;
-   // v2.9 — warning window, wider than the block window by definition
-   // (if it were narrower/equal, WARNING would never be reachable).
-   int        m_warnMinutesBefore;
-   int        m_warnMinutesAfter;
-
-public:
-              CNewsFilter() : m_count(0), m_minutesBefore(15), m_minutesAfter(5), m_enabled(false),
-                              m_warnMinutesBefore(60), m_warnMinutesAfter(30) {}
-   bool       Load(string filename, int minutesBefore, int minutesAfter, bool useCommonFolder = false);
-   bool       IsLocked(string &reasonOut);
-   int        Count() const { return m_count; }
-   // v2.9. Call after Load(). Values below the existing block window are
-   // clamped up to it, so WARNING is always a superset of BLOCKED, never
-   // a gap next to it.
-   void       ConfigureWarningWindow(int warnMinutesBefore, int warnMinutesAfter)
-     {
-      m_warnMinutesBefore = MathMax(warnMinutesBefore, m_minutesBefore);
-      m_warnMinutesAfter = MathMax(warnMinutesAfter, m_minutesAfter);
-     }
-   // v2.9. Returns the risk tier for "now", the label of the nearest
-   // event driving that tier (if any), and minutes until/since it
-   // (negative = already passed, still inside the after-window).
-   ENUM_NEWS_RISK GetRiskTier(string &labelOut, int &minutesToEventOut);
-  };
-//+------------------------------------------------------------------+
-bool CNewsFilter::Load(string filename, int minutesBefore, int minutesAfter, bool useCommonFolder)
-  {
-   m_count = 0;
-   m_enabled = false;
-   m_minutesBefore = MathMax(0, minutesBefore);
-   m_minutesAfter = MathMax(0, minutesAfter);
-
-   int flags = FILE_CSV | FILE_READ | FILE_SHARE_READ | FILE_ANSI;
-   if(useCommonFolder) flags |= FILE_COMMON;
-   int handle = FileOpen(filename, flags, ',');
-   if(handle == INVALID_HANDLE)
-     {
-      PrintFormat("MedisTouch NewsFilter: %s not found — news filter disabled (this is not an error; create the file to enable it).", filename);
-      return false;
-     }
-
-   ArrayResize(m_times, 0);
-   ArrayResize(m_labels, 0);
-   int loaded = 0, skipped = 0;
-
-   while(!FileIsEnding(handle))
-     {
-      string dateStr = FileReadString(handle);
-      if(FileIsEnding(handle)) break; // trailing blank line at EOF
-      string timeStr = FileReadString(handle);
-      string impact  = FileReadString(handle);
-      string label   = FileReadString(handle);
-
-      if(impact != "HIGH") { skipped++; continue; }
-      datetime dt = StringToTime(dateStr + " " + timeStr);
-      if(dt <= 0) { skipped++; continue; } // unparseable row — skip, don't crash the load
-
-      int n = ArraySize(m_times);
-      ArrayResize(m_times, n + 1);
-      ArrayResize(m_labels, n + 1);
-      m_times[n] = dt;
-      m_labels[n] = label;
-      loaded++;
-     }
-   FileClose(handle);
-
-   m_count = loaded;
-   m_enabled = (loaded > 0);
-   PrintFormat("MedisTouch NewsFilter: loaded %d high-impact event(s) from %s (%d row(s) skipped/malformed).",
-               loaded, filename, skipped);
-   return m_enabled;
-  }
-//+------------------------------------------------------------------+
-bool CNewsFilter::IsLocked(string &reasonOut)
-  {
-   reasonOut = "";
-   if(!m_enabled) return false;
-   datetime now = TimeCurrent();
-   for(int i = 0; i < m_count; i++)
-     {
-      datetime windowStart = m_times[i] - m_minutesBefore * 60;
-      datetime windowEnd   = m_times[i] + m_minutesAfter * 60;
-      if(now >= windowStart && now <= windowEnd)
-        {
-         reasonOut = StringFormat("news lock — \"%s\" at %s (blocking %d min before / %d min after)",
-                                   m_labels[i], TimeToString(m_times[i], TIME_DATE | TIME_MINUTES),
-                                   m_minutesBefore, m_minutesAfter);
-         return true;
-        }
-     }
-   return false;
-  }
-//+------------------------------------------------------------------+
-ENUM_NEWS_RISK CNewsFilter::GetRiskTier(string &labelOut, int &minutesToEventOut)
-  {
-   labelOut = "";
-   minutesToEventOut = 0;
-   if(!m_enabled) return NEWS_NONE;
-   datetime now = TimeCurrent();
-   ENUM_NEWS_RISK best = NEWS_NONE;
-   int bestAbsMinutes = INT_MAX;
-
-   for(int i = 0; i < m_count; i++)
-     {
-      datetime blockStart = m_times[i] - m_minutesBefore * 60;
-      datetime blockEnd   = m_times[i] + m_minutesAfter * 60;
-      datetime warnStart  = m_times[i] - m_warnMinutesBefore * 60;
-      datetime warnEnd    = m_times[i] + m_warnMinutesAfter * 60;
-
-      ENUM_NEWS_RISK tier = NEWS_NONE;
-      if(now >= blockStart && now <= blockEnd) tier = NEWS_BLOCKED;
-      else if(now >= warnStart && now <= warnEnd) tier = NEWS_WARNING;
-      if(tier == NEWS_NONE) continue;
-
-      int minutesToEvent = (int)((m_times[i] - now) / 60);
-      int absMinutes = (int)MathAbs(minutesToEvent);
-      // prefer BLOCKED over WARNING regardless of distance, then nearest event
-      if(tier > best || (tier == best && absMinutes < bestAbsMinutes))
-        {
-         best = tier;
-         bestAbsMinutes = absMinutes;
-         labelOut = m_labels[i];
-         minutesToEventOut = minutesToEvent;
-        }
-     }
-   return best;
-  }
-#endif
-//+------------------------------------------------------------------+
-
 
 // ---- END EA/includes/Core/NewsFilter.mqh ----
 
@@ -12135,7 +12106,6 @@ void CConfigSync::Poll(void)
 // ---- END EA/includes/Monitoring/ProductionMonitor.mqh ----
 
 
-// --- Analysis inputs: kept identical to MedisTouch.mq5 so both files
 // analyze the same way if you point them at the same values. ---
 input group "General"
 input int    InpMaxHistoryBars = 500;
